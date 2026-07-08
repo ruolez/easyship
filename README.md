@@ -17,7 +17,7 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/ruolez/easyship/mai
 
 Interactive menu with three options:
 
-- **Install** — installs Docker if missing, clones the repo to `/opt/easyship`, asks for the app port (default 5557) and initial admin password, generates random secrets in `.env`, builds and starts everything.
+- **Install** — installs Docker if missing, clones the repo to `/opt/easyship`, asks for the app port (default **80**), autogenerates all secrets (Postgres password, Flask secret key, and the initial admin password, which is printed at the end and saved in `.env`), builds and starts everything.
 - **Update** — backs up the database to `/opt/easyship-backups/` (gzipped `pg_dump`), pulls the latest code from this repo, rebuilds containers. **Settings, users, shipment history and label PDFs are all preserved** (they live in Docker volumes, which updates never touch).
 - **Remove** — stops and removes the app; asks separately before deleting data volumes, and offers a final backup first.
 
