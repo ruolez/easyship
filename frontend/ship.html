@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyShip — New shipment</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header id="appbar"></header>
+  <div class="container narrow">
+    <div class="stepper">
+      <div class="step active" id="step-1"><span class="num">1</span> Destination</div>
+      <div class="step" id="step-2"><span class="num">2</span> Packages</div>
+      <div class="step" id="step-3"><span class="num">3</span> Rates</div>
+      <div class="step" id="step-4"><span class="num">4</span> Label</div>
+    </div>
+
+    <div class="card" id="order-summary" style="display:none"></div>
+
+    <div class="card" id="panel-destination">
+      <h2>📍 Destination</h2>
+      <div class="row">
+        <div class="field"><label>Company / Business</label><input id="d-company"></div>
+        <div class="field"><label>Contact name</label><input id="d-contact"></div>
+      </div>
+      <div class="row mt-16">
+        <div class="field"><label>Address 1 *</label><input id="d-address1"></div>
+        <div class="field"><label>Address 2</label><input id="d-address2"></div>
+      </div>
+      <div class="row mt-16">
+        <div class="field"><label>City *</label><input id="d-city"></div>
+        <div class="field fixed" style="min-width:90px"><label>State *</label><input id="d-state" maxlength="2" style="text-transform:uppercase"></div>
+        <div class="field fixed" style="min-width:130px"><label>ZIP *</label><input id="d-zip"></div>
+      </div>
+      <div class="row mt-16">
+        <div class="field"><label>Phone</label><input id="d-phone"></div>
+        <div class="field"><label>Email</label><input id="d-email" type="email"></div>
+      </div>
+    </div>
+
+    <div class="card" id="panel-parcels">
+      <h2>📦 Packages <span class="text-secondary" style="font-weight:400">(inches / pounds)</span></h2>
+      <div id="parcel-list"></div>
+      <button class="btn btn-text" id="add-parcel">+ Add box</button>
+    </div>
+
+    <div class="row mb-16" id="rates-actions">
+      <div class="fixed">
+        <button class="btn btn-primary" id="get-rates">Get rates</button>
+      </div>
+      <div class="fixed" id="rates-spinner" style="display:none"><span class="spinner"></span> Getting rates…</div>
+    </div>
+
+    <div class="card" id="panel-rates" style="display:none">
+      <h2>💰 Choose a rate</h2>
+      <div class="rate-list" id="rate-list"></div>
+      <div class="row mt-16">
+        <div class="fixed">
+          <button class="btn btn-primary" id="buy-label" disabled>Buy label</button>
+        </div>
+        <div class="fixed" id="buy-spinner" style="display:none"><span class="spinner"></span> Buying label…</div>
+      </div>
+    </div>
+
+    <div class="card" id="panel-result" style="display:none">
+      <h2>✅ Label created</h2>
+      <div class="row mb-16">
+        <div class="field fixed"><label>Tracking number</label><div class="mono" id="r-tracking" style="font-size:16px"></div></div>
+        <div class="field fixed"><label>Courier</label><div id="r-courier"></div></div>
+        <div class="field fixed"><label>Cost</label><div id="r-cost"></div></div>
+      </div>
+      <div id="r-writebacks" class="mb-16"></div>
+      <div class="row mb-16">
+        <div class="fixed"><a class="btn btn-primary" id="r-download" target="_blank">Open / print label</a></div>
+        <div class="fixed"><button class="btn btn-outlined" onclick="location.href='/index.html'">Back to orders</button></div>
+        <div class="fixed"><button class="btn btn-outlined" onclick="location.href='/shipments.html'">View shipments</button></div>
+      </div>
+      <iframe id="r-preview" style="width:100%;height:520px;border:1px solid var(--outline);border-radius:8px;display:none"></iframe>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/ship.js"></script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+import pymssql
+
+import db
+
+
+class BackofficeError(Exception):
+    pass
+
+
+def _connect():
+    host = db.get_setting("backoffice_host")
+    port = db.get_setting("backoffice_port") or "1433"
+    database = db.get_setting("backoffice_db")
+    user = db.get_setting("backoffice_user")
+    password = db.get_setting("backoffice_password")
+    if not all([host, database, user, password]):
+        raise BackofficeError("BackOffice connection is not configured — set it in Settings")
+    try:
+        return pymssql.connect(
+            server=host, port=int(port), database=database, user=user,
+            password=password, timeout=15, login_timeout=10,
+        )
+    except Exception as e:
+        raise BackofficeError(f"BackOffice connection failed: {e}")
+
+
+def _to_float(value):
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def list_open_invoices(days=14, q=""):
+    sql = """
+        SELECT TOP 200 InvoiceID, InvoiceNumber, InvoiceDate, ShipDate, BusinessName,
+               Shipto, ShipCity, ShipState, ShipZipCode,
+               NoBoxes, TotalWeight, InvoiceTotal
+        FROM Invoices_tbl
+        WHERE (Void IS NULL OR Void = 0)
+          AND (TrackingNo IS NULL OR LTRIM(RTRIM(TrackingNo)) = '')
+          AND InvoiceDate >= DATEADD(day, -%s, GETDATE())
+    """
+    params = [int(days)]
+    if q:
+        sql += " AND (InvoiceNumber LIKE %s OR BusinessName LIKE %s)"
+        like = f"%{q}%"
+        params += [like, like]
+    sql += " ORDER BY InvoiceDate DESC"
+
+    conn = _connect()
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "invoice_id": r["InvoiceID"],
+            "invoice_number": r["InvoiceNumber"],
+            "ship_date": r["ShipDate"].strftime("%m/%d/%Y") if r["ShipDate"] else
+                         (r["InvoiceDate"].strftime("%m/%d/%Y") if r["InvoiceDate"] else ""),
+            "business_name": r["BusinessName"],
+            "ship_to": ", ".join(filter(None, [
+                r["Shipto"], r["ShipCity"], r["ShipState"], r["ShipZipCode"],
+            ])),
+            "no_boxes": r["NoBoxes"],
+            "total_weight": _to_float(r["TotalWeight"]),
+            "invoice_total": float(r["InvoiceTotal"]) if r["InvoiceTotal"] is not None else None,
+        }
+        for r in rows
+    ]
+
+
+def get_invoice(invoice_id):
+    conn = _connect()
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            cur.execute(
+                """SELECT InvoiceID, InvoiceNumber, BusinessName, Shipto, ShipAddress1,
+                          ShipAddress2, ShipContact, ShipCity, ShipState, ShipZipCode,
+                          ShipPhoneNo, NoBoxes, TotalWeight, InvoiceTotal, TrackingNo
+                   FROM Invoices_tbl WHERE InvoiceID = %s""",
+                (invoice_id,),
+            )
+            inv = cur.fetchone()
+            if not inv:
+                raise BackofficeError("Invoice not found")
+            cur.execute(
+                """SELECT ProductSKU, ProductDescription, QtyShipped, QtyOrdered,
+                          UnitPrice, ItemWeight
+                   FROM InvoicesDetails_tbl
+                   WHERE InvoiceID = %s AND (Void IS NULL OR Void = 0)""",
+                (invoice_id,),
+            )
+            lines = cur.fetchall()
+    finally:
+        conn.close()
+
+    items = []
+    for line in lines:
+        qty = line["QtyShipped"] if line["QtyShipped"] else line["QtyOrdered"]
+        qty = int(qty) if qty else 0
+        if qty <= 0:
+            continue
+        items.append({
+            "description": line["ProductDescription"],
+            "sku": line["ProductSKU"],
+            "quantity": qty,
+            "value": float(line["UnitPrice"]) if line["UnitPrice"] is not None else 0,
+            "weight": _to_float(line["ItemWeight"]) or 0,
+        })
+
+    return {
+        "invoice_id": inv["InvoiceID"],
+        "invoice_number": inv["InvoiceNumber"],
+        "business_name": inv["BusinessName"],
+        "tracking_no": inv["TrackingNo"],
+        "no_boxes": inv["NoBoxes"],
+        "total_weight": _to_float(inv["TotalWeight"]),
+        "invoice_total": float(inv["InvoiceTotal"]) if inv["InvoiceTotal"] is not None else None,
+        "destination": {
+            "company": inv["Shipto"] or inv["BusinessName"],
+            "contact": inv["ShipContact"],
+            "address1": inv["ShipAddress1"],
+            "address2": inv["ShipAddress2"],
+            "city": inv["ShipCity"],
+            "state": inv["ShipState"],
+            "zip": inv["ShipZipCode"],
+            "phone": inv["ShipPhoneNo"],
+            "country": "US",
+        },
+        "items": items,
+    }
+
+
+def write_tracking(invoice_id, tracking_number, shipping_cost):
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            if shipping_cost is not None:
+                cur.execute(
+                    "UPDATE Invoices_tbl SET TrackingNo = %s, ShippingCost = %s WHERE InvoiceID = %s",
+                    (tracking_number, float(shipping_cost), invoice_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE Invoices_tbl SET TrackingNo = %s WHERE InvoiceID = %s",
+                    (tracking_number, invoice_id),
+                )
+            if cur.rowcount == 0:
+                raise BackofficeError(f"Invoice {invoice_id} not found for tracking update")
+        conn.commit()
+    finally:
+        conn.close()

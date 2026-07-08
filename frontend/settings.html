@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyShip — Settings</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header id="appbar"></header>
+  <div class="container narrow">
+
+    <div class="card" id="card-easyship">
+      <h2>🚚 Easyship API</h2>
+      <div class="row mb-16">
+        <div class="field fixed" style="min-width:220px">
+          <label>Mode</label>
+          <select id="easyship_mode">
+            <option value="sandbox">Sandbox (test)</option>
+            <option value="production">Production (live — labels cost money)</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Sandbox access token</label>
+          <input type="password" id="easyship_sandbox_token" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Production access token</label>
+          <input type="password" id="easyship_production_token" autocomplete="off">
+        </div>
+      </div>
+      <div class="row mt-16">
+        <div class="fixed"><button class="btn btn-outlined" id="test-easyship">Test connection</button></div>
+        <div class="fixed" id="easyship-test-result"></div>
+      </div>
+    </div>
+
+    <div class="card" id="card-origin">
+      <h2>📍 Origin address (ship from)</h2>
+      <div class="row">
+        <div class="field"><label>Company</label><input id="origin_company"></div>
+        <div class="field"><label>Contact name</label><input id="origin_contact"></div>
+      </div>
+      <div class="row mt-16">
+        <div class="field"><label>Address 1</label><input id="origin_address1"></div>
+        <div class="field"><label>Address 2</label><input id="origin_address2"></div>
+      </div>
+      <div class="row mt-16">
+        <div class="field"><label>City</label><input id="origin_city"></div>
+        <div class="field fixed" style="min-width:90px"><label>State</label><input id="origin_state" maxlength="2" style="text-transform:uppercase"></div>
+        <div class="field fixed" style="min-width:120px"><label>ZIP</label><input id="origin_zip"></div>
+      </div>
+      <div class="row mt-16">
+        <div class="field"><label>Phone</label><input id="origin_phone"></div>
+        <div class="field"><label>Email</label><input id="origin_email" type="email"></div>
+      </div>
+    </div>
+
+    <div class="card" id="card-backoffice">
+      <h2>🗄️ BackOffice SQL Server</h2>
+      <div class="row">
+        <div class="field"><label>Host / IP</label><input id="backoffice_host"></div>
+        <div class="field fixed" style="min-width:100px"><label>Port</label><input id="backoffice_port" placeholder="1433"></div>
+        <div class="field"><label>Database</label><input id="backoffice_db"></div>
+      </div>
+      <div class="row mt-16">
+        <div class="field"><label>Username</label><input id="backoffice_user" autocomplete="off"></div>
+        <div class="field"><label>Password</label><input type="password" id="backoffice_password" autocomplete="off"></div>
+      </div>
+      <div class="row mt-16">
+        <div class="fixed"><button class="btn btn-outlined" id="test-backoffice">Test connection</button></div>
+        <div class="fixed" id="backoffice-test-result"></div>
+      </div>
+    </div>
+
+    <div class="row mb-16">
+      <button class="btn btn-primary" id="save-settings">Save all settings</button>
+    </div>
+
+    <div class="card" id="card-stores">
+      <h2>🛍️ Shopify stores</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Domain</th><th>Status</th><th></th></tr></thead>
+          <tbody id="stores-body"></tbody>
+        </table>
+      </div>
+      <button class="btn btn-text mt-16" id="add-store">+ Add store</button>
+    </div>
+
+    <div class="card" id="card-users">
+      <h2>👥 Users</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead>
+          <tbody id="users-body"></tbody>
+        </table>
+      </div>
+      <button class="btn btn-text mt-16" id="add-user">+ Add user</button>
+    </div>
+
+    <div class="card" id="card-password">
+      <h2>🔑 Change my password</h2>
+      <div class="row">
+        <div class="field"><label>New password</label><input type="password" id="my-new-password" autocomplete="new-password"></div>
+        <div class="fixed"><button class="btn btn-outlined" id="change-my-password">Change password</button></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/settings.js"></script>
+</body>
+</html>

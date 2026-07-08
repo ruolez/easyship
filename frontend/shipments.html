@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyShip — Shipments</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header id="appbar"></header>
+  <div class="container">
+    <div class="card">
+      <div class="row mb-16">
+        <div class="field">
+          <label>Search (tracking, order, invoice, customer)</label>
+          <input type="text" id="search" placeholder="Search…">
+        </div>
+        <div class="field fixed" style="min-width:160px">
+          <label>Status</label>
+          <select id="status-filter">
+            <option value="">All</option>
+            <option value="fulfilled">Fulfilled</option>
+            <option value="label_created">Label created</option>
+            <option value="rated">Rated (no label)</option>
+            <option value="draft">Draft</option>
+            <option value="voided">Voided</option>
+            <option value="error">Error</option>
+          </select>
+        </div>
+        <div class="fixed"><button class="btn btn-outlined btn-small" id="refresh">Refresh</button></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date (CT)</th><th>Source</th><th>Order / Invoice</th><th>Ship to</th>
+              <th>Courier</th><th>Tracking</th><th>Cost</th><th>User</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="shipments-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="empty" style="display:none"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/shipments.js"></script>
+</body>
+</html>

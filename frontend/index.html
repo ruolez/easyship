@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyShip — Orders</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header id="appbar"></header>
+  <div class="container">
+    <div class="tabs">
+      <button class="tab active" data-tab="shopify">Shopify</button>
+      <button class="tab" data-tab="backoffice">BackOffice</button>
+    </div>
+
+    <div id="tab-shopify">
+      <div class="card">
+        <div class="row mb-16">
+          <div class="fixed" id="store-chips"></div>
+          <div class="fixed" style="margin-left:auto">
+            <button class="btn btn-outlined btn-small" id="refresh-shopify">Refresh</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Order</th><th>Date</th><th>Customer</th><th>Ship to</th>
+                <th>Items</th><th>Total</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="shopify-orders"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="shopify-empty" style="display:none"></div>
+      </div>
+    </div>
+
+    <div id="tab-backoffice" style="display:none">
+      <div class="card">
+        <div class="row mb-16">
+          <div class="field">
+            <label>Search (invoice #, business name)</label>
+            <input type="text" id="bo-search" placeholder="Search...">
+          </div>
+          <div class="field fixed">
+            <label>Days back</label>
+            <select id="bo-days">
+              <option value="7">7</option>
+              <option value="14" selected>14</option>
+              <option value="30">30</option>
+              <option value="90">90</option>
+            </select>
+          </div>
+          <div class="fixed">
+            <button class="btn btn-outlined btn-small" id="refresh-bo">Refresh</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Invoice</th><th>Ship date</th><th>Business</th><th>Ship to</th>
+                <th>Boxes</th><th>Weight</th><th>Total</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="bo-invoices"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="bo-empty" style="display:none"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <button class="btn btn-text" onclick="location.href='/ship.html?source=manual'">
+        + Manual shipment (enter address yourself)
+      </button>
+    </div>
+  </div>
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/orders.js"></script>
+</body>
+</html>
