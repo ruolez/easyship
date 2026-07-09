@@ -204,11 +204,21 @@ def cancel_shipment(easyship_shipment_id):
     return _request("POST", f"/shipments/{easyship_shipment_id}/cancel")
 
 
-def extract_tracking_number(shipment):
+def extract_tracking_numbers(shipment):
+    """All tracking numbers, one per parcel on multi-box shipments."""
+    numbers = []
     for tracking in shipment.get("trackings") or []:
-        if tracking.get("tracking_number"):
-            return tracking["tracking_number"]
-    return shipment.get("tracking_number")
+        n = tracking.get("tracking_number")
+        if n and n not in numbers:
+            numbers.append(n)
+    if not numbers and shipment.get("tracking_number"):
+        numbers.append(shipment["tracking_number"])
+    return numbers
+
+
+def extract_tracking_number(shipment):
+    numbers = extract_tracking_numbers(shipment)
+    return numbers[0] if numbers else None
 
 
 def extract_label_document(shipment):

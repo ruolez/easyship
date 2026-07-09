@@ -42,6 +42,7 @@ def _row_to_json(row):
         "courier_name": row["courier_name"],
         "shipping_cost": float(row["shipping_cost"]) if row["shipping_cost"] is not None else None,
         "tracking_number": row["tracking_number"],
+        "tracking_numbers": row.get("tracking_numbers") or ([row["tracking_number"]] if row["tracking_number"] else []),
         "has_label": bool(row["label_path"]),
         "status": row["status"],
         "error_message": row["error_message"],
@@ -177,7 +178,8 @@ def buy(shipment_id):
         )
         return api_error("Label generation failed at Easyship", 502)
 
-    tracking_number = easyship.extract_tracking_number(es)
+    tracking_numbers = easyship.extract_tracking_numbers(es)
+    tracking_number = tracking_numbers[0] if tracking_numbers else None
     courier = es.get("courier_service") or {}
     rate = data.get("rate") or {}
     total_charge = rate.get("total_charge")
@@ -202,7 +204,7 @@ def buy(shipment_id):
         """UPDATE shipments SET
              courier_name=%s, courier_service_id=%s, courier_umbrella_name=%s,
              rate=%s, shipping_cost=%s, total_weight_lb=%s,
-             tracking_number=%s, label_path=%s, label_format=%s,
+             tracking_number=%s, tracking_numbers=%s, label_path=%s, label_format=%s,
              label_created_at=now(),
              status='label_created', error_message=NULL, updated_at=now()
            WHERE id=%s""",
@@ -214,6 +216,7 @@ def buy(shipment_id):
             total_charge,
             round(total_weight_lb, 2),
             tracking_number,
+            json.dumps(tracking_numbers) if tracking_numbers else None,
             label_path,
             label_format or "pdf",
             shipment_id,
@@ -261,6 +264,7 @@ def run_writebacks(shipment_id):
             fulfillment = shopify_client.fulfill_order(
                 row["shopify_store_id"], row["shopify_order_id"],
                 row["tracking_number"], row["courier_name"],
+                all_numbers=row["tracking_numbers"] or None,
             )
             db.execute(
                 """UPDATE shipments SET writeback_shopify_at=now(),
@@ -278,6 +282,7 @@ def run_writebacks(shipment_id):
             backoffice.write_tracking(
                 row["backoffice_db_id"], row["backoffice_invoice_id"],
                 row["tracking_number"], row["shipping_cost"],
+                extra_numbers=(row["tracking_numbers"] or [])[1:],
             )
             db.execute(
                 "UPDATE shipments SET writeback_backoffice_at=now(), updated_at=now() WHERE id=%s",
@@ -460,7 +465,8 @@ def void(shipment_id):
         try:
             import backoffice
             backoffice.clear_tracking(
-                row["backoffice_db_id"], row["backoffice_invoice_id"], row["tracking_number"]
+                row["backoffice_db_id"], row["backoffice_invoice_id"], row["tracking_number"],
+                extra_numbers=(row["tracking_numbers"] or [])[1:],
             )
             db.execute(
                 "UPDATE shipments SET writeback_backoffice_at=NULL, updated_at=now() WHERE id=%s",

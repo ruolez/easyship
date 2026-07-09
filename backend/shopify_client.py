@@ -221,7 +221,7 @@ def get_order(store_id, order_gid):
     }
 
 
-def fulfill_order(store_id, order_gid, tracking_number, courier_name):
+def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_numbers=None):
     data = _graphql(store_id, FULFILLMENT_ORDERS_QUERY, {"id": order_gid})
     order = data.get("order")
     if not order:
@@ -232,12 +232,14 @@ def fulfill_order(store_id, order_gid, tracking_number, courier_name):
     ]
     if not open_fos:
         raise ShopifyError("No open fulfillment orders — order may already be fulfilled")
+    tracking_info = {"company": courier_name or "Other"}
+    if all_numbers and len(all_numbers) > 1:
+        tracking_info["numbers"] = all_numbers
+    else:
+        tracking_info["number"] = tracking_number
     fulfillment = {
         "lineItemsByFulfillmentOrder": [{"fulfillmentOrderId": fo["id"]} for fo in open_fos],
-        "trackingInfo": {
-            "company": courier_name or "Other",
-            "number": tracking_number,
-        },
+        "trackingInfo": tracking_info,
         "notifyCustomer": True,
     }
     data = _graphql(store_id, FULFILLMENT_CREATE_MUTATION, {"fulfillment": fulfillment})

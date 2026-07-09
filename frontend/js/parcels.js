@@ -53,7 +53,7 @@ async function load() {
         <td class="wrap" style="max-width:180px">${esc(s.courier_name || '')}</td>
         <td>${esc(s.courier_umbrella_name || '')}</td>
         <td>${money(s.shipping_cost)}</td>
-        <td class="mono">${esc(s.tracking_number || '')}</td>
+        <td class="mono" title="${esc((s.tracking_numbers || []).join(', '))}">${esc(s.tracking_number || '')}${(s.tracking_numbers || []).length > 1 ? ` <span class="chip static warn">+${s.tracking_numbers.length - 1}</span>` : ''}</td>
         <td><span class="status status-${esc(s.status)}" title="${esc(s.error_message || '')}">${esc(s.status.replace('_', ' '))}</span></td>
         <td>${esc((s.label_created_at || '').split(' ')[0] || '')}</td>
         <td>${esc(s.created_at)}</td>

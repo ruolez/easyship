@@ -163,9 +163,10 @@ def get_invoice(db_id, invoice_id):
     }
 
 
-def clear_tracking(db_id, invoice_id, tracking_number):
+def clear_tracking(db_id, invoice_id, tracking_number, extra_numbers=None):
     """Remove the tracking number we wrote, but only if it still matches —
-    never wipe a tracking number someone entered by hand afterwards."""
+    never wipe a tracking number someone entered by hand afterwards.
+    Extra multi-box numbers we appended to Notes are removed as well."""
     conn = _connect(db_id)
     try:
         with conn.cursor() as cur:
@@ -174,7 +175,20 @@ def clear_tracking(db_id, invoice_id, tracking_number):
                    WHERE InvoiceID = %s AND LTRIM(RTRIM(TrackingNo)) = %s""",
                 (invoice_id, (tracking_number or "").strip()),
             )
-            if cur.rowcount == 0:
+            cleared = cur.rowcount > 0
+            if cleared and extra_numbers:
+                cur.execute(
+                    "SELECT Notes FROM Invoices_tbl WHERE InvoiceID = %s", (invoice_id,)
+                )
+                notes = ((cur.fetchone() or [None])[0] or "")
+                if notes:
+                    parts = [p.strip() for p in notes.split(",")]
+                    kept = [p for p in parts if p and p not in extra_numbers]
+                    cur.execute(
+                        "UPDATE Invoices_tbl SET Notes = %s WHERE InvoiceID = %s",
+                        (",".join(kept) or None, invoice_id),
+                    )
+            if not cleared:
                 cur.execute(
                     "SELECT TrackingNo FROM Invoices_tbl WHERE InvoiceID = %s", (invoice_id,)
                 )
@@ -192,7 +206,9 @@ def clear_tracking(db_id, invoice_id, tracking_number):
         conn.close()
 
 
-def write_tracking(db_id, invoice_id, tracking_number, shipping_cost):
+def write_tracking(db_id, invoice_id, tracking_number, shipping_cost, extra_numbers=None):
+    """First box's tracking number goes to TrackingNo; on multi-box shipments the
+    remaining numbers are appended to Notes, comma-separated (nvarchar 255)."""
     conn = _connect(db_id)
     try:
         with conn.cursor() as cur:
@@ -208,6 +224,19 @@ def write_tracking(db_id, invoice_id, tracking_number, shipping_cost):
                 )
             if cur.rowcount == 0:
                 raise BackofficeError(f"Invoice {invoice_id} not found for tracking update")
+            if extra_numbers:
+                cur.execute(
+                    "SELECT Notes FROM Invoices_tbl WHERE InvoiceID = %s", (invoice_id,)
+                )
+                notes = ((cur.fetchone() or [None])[0] or "").strip()
+                missing = [n for n in extra_numbers if n not in notes]
+                if missing:
+                    extra = ",".join(missing)
+                    new_notes = f"{notes},{extra}" if notes else extra
+                    cur.execute(
+                        "UPDATE Invoices_tbl SET Notes = %s WHERE InvoiceID = %s",
+                        (new_notes[:255], invoice_id),
+                    )
         conn.commit()
     finally:
         conn.close()
