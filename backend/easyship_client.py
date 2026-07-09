@@ -57,8 +57,13 @@ def _extract_error(resp):
         return f"Easyship error ({resp.status_code}): {resp.text[:300]}"
 
 
+def _clean(d):
+    """Easyship's OpenAPI validation rejects explicit nulls — omit empty fields."""
+    return {k: v for k, v in d.items() if v not in (None, "")}
+
+
 def origin_address():
-    return {
+    return _clean({
         "company_name": db.get_setting("origin_company") or None,
         "contact_name": db.get_setting("origin_contact") or db.get_setting("origin_company") or "Shipping",
         "contact_phone": db.get_setting("origin_phone") or None,
@@ -69,11 +74,11 @@ def origin_address():
         "state": db.get_setting("origin_state"),
         "postal_code": db.get_setting("origin_zip"),
         "country_alpha2": "US",
-    }
+    })
 
 
 def build_destination(dest):
-    return {
+    return _clean({
         "company_name": dest.get("company") or None,
         "contact_name": dest.get("contact") or dest.get("company") or "Recipient",
         "contact_phone": dest.get("phone") or None,
@@ -84,7 +89,7 @@ def build_destination(dest):
         "state": (dest.get("state") or "").strip().upper(),
         "postal_code": (dest.get("zip") or "").strip(),
         "country_alpha2": dest.get("country") or "US",
-    }
+    })
 
 
 def build_parcels(parcels, items):
@@ -95,7 +100,7 @@ def build_parcels(parcels, items):
         parcel_items = []
         if i == 0:
             for item in items or []:
-                parcel_items.append({
+                parcel_items.append(_clean({
                     "description": (item.get("description") or "Merchandise")[:100],
                     "sku": item.get("sku") or None,
                     "quantity": int(item.get("quantity") or 1),
@@ -103,7 +108,7 @@ def build_parcels(parcels, items):
                     "declared_customs_value": float(item.get("value") or 1),
                     "actual_weight": round(float(item.get("weight") or 0) * LB_TO_KG, 4) or None,
                     "origin_country_alpha2": "US",
-                })
+                }))
         if not parcel_items:
             parcel_items = [{
                 "description": "Merchandise",
