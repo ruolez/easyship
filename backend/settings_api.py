@@ -45,6 +45,8 @@ def get_settings():
             out[key] = MASK if value else ""
         else:
             out[key] = value or ""
+    if not out["easyship_mode"]:
+        out["easyship_mode"] = "sandbox"
     return jsonify(out)
 
 

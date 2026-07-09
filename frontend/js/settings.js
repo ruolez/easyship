@@ -56,13 +56,14 @@ function testResult(elId, promise) {
 }
 
 document.getElementById('test-easyship').addEventListener('click', () => {
+  const modeEl = document.getElementById('easyship_mode');
+  const mode = modeEl.value || 'sandbox';
+  modeEl.value = mode;
   testResult('easyship-test-result', api('/api/settings/test/easyship', {
     method: 'POST',
     body: {
-      mode: document.getElementById('easyship_mode').value,
-      token: document.getElementById(
-        `easyship_${document.getElementById('easyship_mode').value}_token`
-      ).value,
+      mode,
+      token: document.getElementById(`easyship_${mode}_token`).value,
     },
   }));
 });
