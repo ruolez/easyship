@@ -23,6 +23,7 @@ def _row_to_json(row):
         "shopify_store_id": row["shopify_store_id"],
         "shopify_order_id": row["shopify_order_id"],
         "shopify_order_name": row["shopify_order_name"],
+        "backoffice_db_id": row["backoffice_db_id"],
         "backoffice_invoice_id": row["backoffice_invoice_id"],
         "backoffice_invoice_number": row["backoffice_invoice_number"],
         "destination": row["destination"],
@@ -63,15 +64,16 @@ def get_rates():
     row = db.execute(
         """INSERT INTO shipments
              (source, shopify_store_id, shopify_order_id, shopify_order_name,
-              backoffice_invoice_id, backoffice_invoice_number,
+              backoffice_db_id, backoffice_invoice_id, backoffice_invoice_number,
               destination, parcels, items, status, created_by)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s)
            RETURNING id""",
         (
             source,
             data.get("store_id"),
             data.get("order_id"),
             data.get("order_name"),
+            data.get("db_id"),
             data.get("invoice_id"),
             data.get("invoice_number"),
             json.dumps(destination),
@@ -211,8 +213,23 @@ def buy(shipment_id):
     })
 
     writebacks = run_writebacks(shipment_id)
+    printed = _auto_print(shipment_id)
     updated = _get_with_username(shipment_id)
-    return jsonify({**_row_to_json(updated), "writebacks": writebacks})
+    return jsonify({**_row_to_json(updated), "writebacks": writebacks, "printed": printed})
+
+
+def _auto_print(shipment_id):
+    """Network-print the label right after purchase when print_mode is 'network'.
+    Returns 'ok', an error string, or None when browser printing is configured."""
+    if (db.get_setting("print_mode") or "browser") != "network":
+        return None
+    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
+    try:
+        import printer
+        printer.print_shipment_label(row)
+        return "ok"
+    except Exception as e:
+        return f"error: {e}"
 
 
 def run_writebacks(shipment_id):
@@ -245,7 +262,8 @@ def run_writebacks(shipment_id):
         try:
             import backoffice
             backoffice.write_tracking(
-                row["backoffice_invoice_id"], row["tracking_number"], row["shipping_cost"],
+                row["backoffice_db_id"], row["backoffice_invoice_id"],
+                row["tracking_number"], row["shipping_cost"],
             )
             db.execute(
                 "UPDATE shipments SET writeback_backoffice_at=now(), updated_at=now() WHERE id=%s",
@@ -342,6 +360,21 @@ def get_label(shipment_id):
     return send_file(row["label_path"], mimetype=mimetype, download_name=f"label-{shipment_id}.{row['label_format']}")
 
 
+@bp.post("/<int:shipment_id>/print")
+@login_required
+def print_label(shipment_id):
+    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
+    if not row:
+        return api_error("Shipment not found", 404)
+    try:
+        import printer
+        printer.print_shipment_label(row)
+    except Exception as e:
+        return api_error(str(e))
+    audit("label.print", {"shipment_id": shipment_id})
+    return jsonify({"ok": True})
+
+
 @bp.post("/<int:shipment_id>/void")
 @login_required
 def void(shipment_id):
@@ -386,7 +419,9 @@ def void(shipment_id):
     if row["writeback_backoffice_at"]:
         try:
             import backoffice
-            backoffice.clear_tracking(row["backoffice_invoice_id"], row["tracking_number"])
+            backoffice.clear_tracking(
+                row["backoffice_db_id"], row["backoffice_invoice_id"], row["tracking_number"]
+            )
             db.execute(
                 "UPDATE shipments SET writeback_backoffice_at=NULL, updated_at=now() WHERE id=%s",
                 (shipment_id,),

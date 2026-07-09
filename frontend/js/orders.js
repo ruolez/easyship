@@ -84,14 +84,44 @@ async function loadShopifyOrders() {
 }
 
 /* ----- BackOffice ----- */
+let boDbs = [];
+let activeDbId = null;
+
+async function loadDbs() {
+  const chipsEl = document.getElementById('db-chips');
+  try {
+    boDbs = (await api('/api/backoffice-dbs')).filter((d) => d.is_active);
+  } catch {
+    boDbs = [];
+  }
+  if (!boDbs.length) {
+    chipsEl.innerHTML =
+      '<span class="text-secondary">No BackOffice databases configured — add one in <a href="/settings.html">Settings</a>.</span>';
+    return;
+  }
+  activeDbId = activeDbId || boDbs[0].id;
+  chipsEl.innerHTML = boDbs
+    .map((d) => `<button class="chip ${d.id === activeDbId ? 'active' : ''}" data-db="${d.id}">${esc(d.name)}</button>`)
+    .join(' ');
+  chipsEl.querySelectorAll('.chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      activeDbId = Number(chip.dataset.db);
+      loadDbs();
+      loadInvoices();
+    });
+  });
+  loadInvoices();
+}
+
 async function loadInvoices() {
+  if (!activeDbId) return;
   const tbody = document.getElementById('bo-invoices');
   document.getElementById('bo-empty').style.display = 'none';
   tbody.innerHTML = '<tr><td colspan="8"><span class="spinner"></span> Loading…</td></tr>';
   const q = encodeURIComponent(document.getElementById('bo-search').value.trim());
   const days = document.getElementById('bo-days').value;
   try {
-    const invoices = await api(`/api/backoffice/invoices?days=${days}&q=${q}`);
+    const invoices = await api(`/api/backoffice/${activeDbId}/invoices?days=${days}&q=${q}`);
     if (!invoices.length) {
       tbody.innerHTML = '';
       const el = document.getElementById('bo-empty');
@@ -110,7 +140,7 @@ async function loadInvoices() {
           <td>${inv.total_weight ?? ''}</td>
           <td>${money(inv.invoice_total)}</td>
           <td><button class="btn btn-primary btn-small"
-            onclick="location.href='/ship.html?source=backoffice&invoice_id=${inv.invoice_id}'">
+            onclick="location.href='/ship.html?source=backoffice&db_id=${activeDbId}&invoice_id=${inv.invoice_id}'">
             Ship</button></td>
         </tr>`
       )
@@ -131,4 +161,4 @@ document.getElementById('bo-search').addEventListener('keydown', (e) => {
 document.getElementById('bo-days').addEventListener('change', loadInvoices);
 
 loadStores();
-loadInvoices();
+loadDbs();

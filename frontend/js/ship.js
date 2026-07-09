@@ -5,10 +5,39 @@ let localShipmentId = null;
 let rates = [];
 let selectedRate = null;
 let orderItems = [];
+let clientSettings = { placeholder_email: '', print_mode: 'browser' };
 
-initNav('orders');
+initNav('scan');
 addParcelRow();
-prefill();
+init();
+
+async function init() {
+  try {
+    clientSettings = await api('/api/settings/client');
+  } catch { /* defaults stand */ }
+  await prefill();
+  applyPlaceholderEmail();
+  focusNextField();
+}
+
+function applyPlaceholderEmail() {
+  const el = document.getElementById('d-email');
+  if (!el.value.trim() && clientSettings.placeholder_email) {
+    el.value = clientSettings.placeholder_email;
+  }
+}
+
+function focusNextField() {
+  // Land the cursor where the user must type next to get a label out.
+  const required = ['d-address1', 'd-city', 'd-state', 'd-zip'];
+  for (const id of required) {
+    const el = document.getElementById(id);
+    if (!el.value.trim()) { el.focus(); return; }
+  }
+  const emptyWeight = [...document.querySelectorAll('.p-weight')].find((w) => !w.value);
+  if (emptyWeight) { emptyWeight.focus(); return; }
+  document.getElementById('get-rates').focus();
+}
 
 function setStep(n) {
   for (let i = 1; i <= 4; i++) {
@@ -36,9 +65,10 @@ async function prefill() {
       }
     } else if (source === 'backoffice') {
       const invoiceId = params.get('invoice_id');
-      const inv = await api(`/api/backoffice/invoices/${invoiceId}`);
+      const dbId = Number(params.get('db_id'));
+      const inv = await api(`/api/backoffice/${dbId}/invoices/${invoiceId}`);
       orderContext = {
-        source, invoice_id: inv.invoice_id, invoice_number: inv.invoice_number,
+        source, db_id: dbId, invoice_id: inv.invoice_id, invoice_number: inv.invoice_number,
       };
       fillDestination(inv.destination);
       orderItems = inv.items || [];
@@ -85,13 +115,19 @@ function addParcelRow(weight = '', length = '', width = '', height = '') {
   const div = document.createElement('div');
   div.className = 'row mb-16 parcel-row';
   div.innerHTML = `
-    <div class="field fixed" style="min-width:130px"><label>Weight (lb) *</label><input class="p-weight" type="number" step="0.1" min="0.1" value="${weight}"></div>
+    <div class="field fixed" style="min-width:130px"><label>Weight (lb) * <span class="hint">(Enter = rates)</span></label><input class="p-weight" type="number" step="0.1" min="0.1" value="${weight}"></div>
     <div class="field fixed" style="min-width:110px"><label>Length (in)</label><input class="p-length" type="number" step="0.1" value="${length}"></div>
     <div class="field fixed" style="min-width:110px"><label>Width (in)</label><input class="p-width" type="number" step="0.1" value="${width}"></div>
     <div class="field fixed" style="min-width:110px"><label>Height (in)</label><input class="p-height" type="number" step="0.1" value="${height}"></div>
     <div class="fixed"><button class="btn btn-danger btn-small remove-parcel">Remove</button></div>`;
   div.querySelector('.remove-parcel').addEventListener('click', () => {
     if (document.querySelectorAll('.parcel-row').length > 1) div.remove();
+  });
+  div.querySelector('.p-weight').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('get-rates').click();
+    }
   });
   document.getElementById('parcel-list').appendChild(div);
 }
@@ -160,20 +196,28 @@ function renderRates() {
   selectedRate = null;
   document.getElementById('buy-label').disabled = true;
   list.innerHTML = rates.map((r, i) => `
-    <div class="rate-card" data-idx="${i}">
+    <div class="rate-card" data-idx="${i}" tabindex="0">
       <div class="courier">${esc(r.courier_name)}</div>
       <div class="price">${money(r.total_charge)} <span class="text-secondary" style="font-size:13px">${esc(r.currency || 'USD')}</span></div>
       <div class="meta">${r.min_delivery_time ?? '?'}–${r.max_delivery_time ?? '?'} business days</div>
       ${r.value_for_money_rank === 1 ? '<div class="chip static ok mt-16" style="margin-top:8px">Best value</div>' : ''}
     </div>`).join('');
+  const select = (card) => {
+    list.querySelectorAll('.rate-card').forEach((c) => c.classList.remove('selected'));
+    card.classList.add('selected');
+    selectedRate = rates[Number(card.dataset.idx)];
+    const buyBtn = document.getElementById('buy-label');
+    buyBtn.disabled = false;
+    buyBtn.focus();
+  };
   list.querySelectorAll('.rate-card').forEach((card) => {
-    card.addEventListener('click', () => {
-      list.querySelectorAll('.rate-card').forEach((c) => c.classList.remove('selected'));
-      card.classList.add('selected');
-      selectedRate = rates[Number(card.dataset.idx)];
-      document.getElementById('buy-label').disabled = false;
+    card.addEventListener('click', () => select(card));
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(card); }
     });
   });
+  const first = list.querySelector('.rate-card');
+  if (first) first.focus();
 }
 
 /* ---------- Buy ---------- */
@@ -220,6 +264,11 @@ function showResult(s) {
       ? '<span class="chip static ok">✓ BackOffice updated</span>'
       : `<span class="chip static err">✕ BackOffice update failed</span> <button class="btn btn-text btn-small" onclick="retryWriteback()">Retry</button>`);
   }
+  if (s.printed === 'ok') {
+    chips.push('<span class="chip static ok">🖨 Sent to printer</span>');
+  } else if (s.printed && s.printed.startsWith('error')) {
+    chips.push(`<span class="chip static err">🖨 ${esc(s.printed)}</span> <button class="btn btn-text btn-small" onclick="printAgain(${s.id})">Print again</button>`);
+  }
   if (s.error_message) chips.push(`<div class="text-secondary mt-16">${esc(s.error_message)}</div>`);
   wb.innerHTML = chips.join(' ');
 
@@ -229,11 +278,31 @@ function showResult(s) {
     const preview = document.getElementById('r-preview');
     preview.src = url;
     preview.style.display = '';
+    if (s.printed == null && clientSettings.print_mode === 'browser') {
+      // Local printer: pop the browser print dialog as soon as the PDF loads
+      preview.addEventListener('load', () => {
+        try {
+          preview.contentWindow.focus();
+          preview.contentWindow.print();
+        } catch { window.open(url, '_blank'); }
+      }, { once: true });
+    }
   } else {
     document.getElementById('r-download').style.display = 'none';
   }
+  const nextBtn = document.getElementById('r-next');
+  if (nextBtn) nextBtn.focus();
   panel.scrollIntoView({ behavior: 'smooth' });
 }
+
+window.printAgain = async (id) => {
+  try {
+    await api(`/api/shipments/${id}/print`, { method: 'POST' });
+    snackbar('Sent to printer', 'success');
+  } catch (err) {
+    snackbar(err.message, 'error');
+  }
+};
 
 window.retryWriteback = async () => {
   try {

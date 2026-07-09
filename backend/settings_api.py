@@ -1,4 +1,3 @@
-import pymssql
 import requests
 from flask import Blueprint, jsonify, request, session
 from werkzeug.security import generate_password_hash
@@ -26,14 +25,13 @@ SETTING_KEYS = [
     "origin_zip",
     "origin_phone",
     "origin_email",
-    "backoffice_host",
-    "backoffice_port",
-    "backoffice_db",
-    "backoffice_user",
-    "backoffice_password",
+    "placeholder_email",
+    "print_mode",
+    "printer_host",
+    "printer_port",
 ]
 
-SECRET_KEYS = {"easyship_sandbox_token", "easyship_production_token", "backoffice_password"}
+SECRET_KEYS = {"easyship_sandbox_token", "easyship_production_token"}
 
 
 @bp.get("/settings")
@@ -48,6 +46,8 @@ def get_settings():
             out[key] = value or ""
     if not out["easyship_mode"]:
         out["easyship_mode"] = "sandbox"
+    if not out["print_mode"]:
+        out["print_mode"] = "browser"
     return jsonify(out)
 
 
@@ -68,7 +68,34 @@ def put_settings():
 @bp.get("/settings/easyship-mode")
 @login_required
 def easyship_mode():
-    return jsonify({"mode": db.get_setting("easyship_mode", "sandbox")})
+    return jsonify({"mode": db.get_setting("easyship_mode") or "sandbox"})
+
+
+@bp.get("/settings/client")
+@login_required
+def client_settings():
+    """Non-secret settings any logged-in user's UI needs."""
+    return jsonify({
+        "mode": db.get_setting("easyship_mode") or "sandbox",
+        "placeholder_email": db.get_setting("placeholder_email") or "",
+        "print_mode": db.get_setting("print_mode") or "browser",
+    })
+
+
+@bp.post("/settings/test/printer")
+@admin_required
+def test_printer():
+    import printer
+    data = request.get_json(silent=True) or {}
+    try:
+        printer.network_print(
+            printer.TEST_ZPL,
+            host=(data.get("host") or "").strip() or None,
+            port=(data.get("port") or "").strip() or None,
+        )
+    except printer.PrinterError as e:
+        return api_error(str(e))
+    return jsonify({"ok": True})
 
 
 FALLBACK_CATEGORIES = [
@@ -116,38 +143,6 @@ def test_easyship():
         account = resp.json().get("account", {})
         return jsonify({"ok": True, "mode": mode, "account": account.get("name") or "connected"})
     return api_error(f"Easyship returned {resp.status_code}: {resp.text[:300]}")
-
-
-@bp.post("/settings/test/backoffice")
-@admin_required
-def test_backoffice():
-    data = request.get_json(silent=True) or {}
-
-    def val(key):
-        v = data.get(key.replace("backoffice_", ""))
-        if not v or v == MASK:
-            v = db.get_setting(key)
-        return v
-
-    host = val("backoffice_host")
-    port = val("backoffice_port") or "1433"
-    database = val("backoffice_db")
-    user = val("backoffice_user")
-    password = val("backoffice_password")
-    if not all([host, database, user, password]):
-        return api_error("Host, database, user and password are required")
-    try:
-        conn = pymssql.connect(
-            server=host, port=int(port), database=database, user=user,
-            password=password, timeout=10, login_timeout=10,
-        )
-        with conn.cursor() as cur:
-            cur.execute("SELECT TOP 1 InvoiceID FROM Invoices_tbl ORDER BY InvoiceID DESC")
-            cur.fetchone()
-        conn.close()
-    except Exception as e:
-        return api_error(f"Connection failed: {e}")
-    return jsonify({"ok": True})
 
 
 # ---------- Shopify stores ----------

@@ -66,20 +66,38 @@
     </div>
 
     <div class="card" id="card-backoffice">
-      <h2>🗄️ BackOffice SQL Server</h2>
+      <h2>🗄️ BackOffice databases</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Host</th><th>Database</th><th>Status</th><th></th></tr></thead>
+          <tbody id="dbs-body"></tbody>
+        </table>
+      </div>
+      <button class="btn btn-text mt-16" id="add-db">+ Add database</button>
+    </div>
+
+    <div class="card" id="card-workflow">
+      <h2>🖨️ Workflow &amp; printing</h2>
+      <div class="row mb-16">
+        <div class="field">
+          <label>Placeholder email (used when an order has no email)</label>
+          <input id="placeholder_email" type="email" placeholder="shipping@yourcompany.com">
+        </div>
+      </div>
       <div class="row">
-        <div class="field"><label>Host / IP</label><input id="backoffice_host"></div>
-        <div class="field fixed" style="min-width:100px"><label>Port</label><input id="backoffice_port" placeholder="1433"></div>
-        <div class="field"><label>Database</label><input id="backoffice_db"></div>
+        <div class="field fixed" style="min-width:240px">
+          <label>Label printing</label>
+          <select id="print_mode">
+            <option value="browser">Local printer (browser print dialog)</option>
+            <option value="network">Network thermal printer (direct)</option>
+          </select>
+        </div>
+        <div class="field"><label>Printer IP / host</label><input id="printer_host" placeholder="192.168.1.50"></div>
+        <div class="field fixed" style="min-width:100px"><label>Port</label><input id="printer_port" placeholder="9100"></div>
+        <div class="fixed"><button class="btn btn-outlined" id="test-printer">Test print</button></div>
+        <div class="fixed" id="printer-test-result"></div>
       </div>
-      <div class="row mt-16">
-        <div class="field"><label>Username</label><input id="backoffice_user" autocomplete="off"></div>
-        <div class="field"><label>Password</label><input type="password" id="backoffice_password" autocomplete="off"></div>
-      </div>
-      <div class="row mt-16">
-        <div class="fixed"><button class="btn btn-outlined" id="test-backoffice">Test connection</button></div>
-        <div class="fixed" id="backoffice-test-result"></div>
-      </div>
+      <div class="hint mt-16">Direct printing sends the label exactly as Easyship generates it. For thermal printers set your Easyship dashboard → Printing Options to ZPL, 4x6.</div>
     </div>
 
     <div class="row mb-16">

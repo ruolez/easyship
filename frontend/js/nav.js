@@ -4,7 +4,8 @@ async function initNav(activePage) {
   el.innerHTML = `
     <div class="brand">📦 EasyShip</div>
     <nav>
-      <a href="/index.html" data-page="orders">Orders</a>
+      <a href="/index.html" data-page="scan">Scan</a>
+      <a href="/orders.html" data-page="orders">Orders</a>
       <a href="/shipments.html" data-page="shipments">Shipments</a>
       <a href="/settings.html" data-page="settings">Settings</a>
     </nav>

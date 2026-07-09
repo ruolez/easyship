@@ -153,6 +153,27 @@ def list_open_orders(store_id):
     return orders
 
 
+ORDER_ID_BY_NAME_QUERY = """
+query orderByName($query: String!) {
+  orders(first: 1, query: $query) {
+    nodes { id name }
+  }
+}
+"""
+
+
+def find_order_by_number(store_id, number):
+    """Look up an order by its number (with or without the # prefix).
+    Returns the order gid or None."""
+    number = (number or "").strip().lstrip("#")
+    data = _graphql(store_id, ORDER_ID_BY_NAME_QUERY, {"query": f"name:#{number}"})
+    nodes = data["orders"]["nodes"]
+    if not nodes:
+        data = _graphql(store_id, ORDER_ID_BY_NAME_QUERY, {"query": f"name:{number}"})
+        nodes = data["orders"]["nodes"]
+    return nodes[0]["id"] if nodes else None
+
+
 def get_order(store_id, order_gid):
     data = _graphql(store_id, ORDER_DETAIL_QUERY, {"id": order_gid})
     order = data.get("order")

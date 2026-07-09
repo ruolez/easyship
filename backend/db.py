@@ -80,8 +80,34 @@ def run_migrations():
                 cur.execute("INSERT INTO schema_migrations (filename) VALUES (%s)", (fname,))
         conn.commit()
         _seed_admin(conn)
+        _migrate_legacy_backoffice(conn)
     finally:
         conn.close()
+
+
+def _migrate_legacy_backoffice(conn):
+    """Move the old single-connection backoffice_* settings into backoffice_dbs."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM backoffice_dbs")
+        if cur.fetchone()[0] > 0:
+            return
+        cur.execute("SELECT key, value FROM settings WHERE key LIKE 'backoffice_%'")
+        legacy = dict(cur.fetchall())
+        if not (legacy.get("backoffice_host") and legacy.get("backoffice_db")):
+            return
+        cur.execute(
+            """INSERT INTO backoffice_dbs (name, host, port, db_name, username, password)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (
+                "BackOffice",
+                legacy["backoffice_host"],
+                legacy.get("backoffice_port") or "1433",
+                legacy["backoffice_db"],
+                legacy.get("backoffice_user") or "",
+                legacy.get("backoffice_password") or "",
+            ),
+        )
+    conn.commit()
 
 
 def _seed_admin(conn):

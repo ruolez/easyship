@@ -3,13 +3,12 @@ const SETTING_IDS = [
   'default_item_category',
   'origin_company', 'origin_contact', 'origin_address1', 'origin_address2',
   'origin_city', 'origin_state', 'origin_zip', 'origin_phone', 'origin_email',
-  'backoffice_host', 'backoffice_port', 'backoffice_db', 'backoffice_user',
-  'backoffice_password',
+  'placeholder_email', 'print_mode', 'printer_host', 'printer_port',
 ];
 
 initNav('settings').then(async () => {
   if (window.currentUser && window.currentUser.role !== 'admin') {
-    ['card-easyship', 'card-origin', 'card-backoffice', 'card-stores', 'card-users']
+    ['card-easyship', 'card-origin', 'card-backoffice', 'card-workflow', 'card-stores', 'card-users']
       .forEach((id) => document.getElementById(id).style.display = 'none');
     document.getElementById('save-settings').style.display = 'none';
     return;
@@ -17,6 +16,7 @@ initNav('settings').then(async () => {
   await loadCategories();
   await loadSettings();
   await loadStores();
+  await loadDbs();
   await loadUsers();
 });
 
@@ -86,18 +86,109 @@ document.getElementById('test-easyship').addEventListener('click', () => {
   }));
 });
 
-document.getElementById('test-backoffice').addEventListener('click', () => {
-  testResult('backoffice-test-result', api('/api/settings/test/backoffice', {
+document.getElementById('test-printer').addEventListener('click', () => {
+  testResult('printer-test-result', api('/api/settings/test/printer', {
     method: 'POST',
     body: {
-      host: document.getElementById('backoffice_host').value,
-      port: document.getElementById('backoffice_port').value,
-      db: document.getElementById('backoffice_db').value,
-      user: document.getElementById('backoffice_user').value,
-      password: document.getElementById('backoffice_password').value,
+      host: document.getElementById('printer_host').value,
+      port: document.getElementById('printer_port').value,
     },
-  }));
+  }).then((r) => ({ ...r, account: 'test label sent' })));
 });
+
+/* ---------- BackOffice databases ---------- */
+async function loadDbs() {
+  const dbs = await api('/api/backoffice-dbs');
+  const tbody = document.getElementById('dbs-body');
+  if (!dbs.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-secondary">No databases configured.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = dbs.map((d) => `<tr>
+    <td><strong>${esc(d.name)}</strong></td>
+    <td class="mono">${esc(d.host)}:${esc(d.port)}</td>
+    <td class="mono">${esc(d.db_name)}</td>
+    <td>${d.is_active ? '<span class="chip static ok">active</span>' : '<span class="chip static">inactive</span>'}</td>
+    <td>
+      <button class="btn btn-text btn-small" onclick="testDb(${d.id}, this)">Test</button>
+      <button class="btn btn-text btn-small" onclick="editDb(${d.id})">Edit</button>
+      <button class="btn btn-danger btn-small" onclick="deleteDb(${d.id}, '${esc(d.name)}')">Delete</button>
+    </td>
+  </tr>`).join('');
+  window._dbs = dbs;
+}
+
+window.testDb = async (id, btn) => {
+  btn.disabled = true;
+  try {
+    await api(`/api/backoffice-dbs/${id}/test`, { method: 'POST' });
+    snackbar('Connected', 'success');
+  } catch (err) {
+    snackbar(err.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+function dbForm(dbRow) {
+  openModal(`
+    <h3>${dbRow ? 'Edit database' : 'Add BackOffice database'}</h3>
+    <div class="field mb-16"><label>Name (shown in dropdowns)</label><input id="m-db-name" value="${dbRow ? esc(dbRow.name) : ''}"></div>
+    <div class="field mb-16"><label>Host / IP</label><input id="m-db-host" value="${dbRow ? esc(dbRow.host) : ''}"></div>
+    <div class="field mb-16"><label>Port</label><input id="m-db-port" value="${dbRow ? esc(dbRow.port) : '1433'}"></div>
+    <div class="field mb-16"><label>Database name</label><input id="m-db-dbname" value="${dbRow ? esc(dbRow.db_name) : ''}"></div>
+    <div class="field mb-16"><label>Username</label><input id="m-db-user" autocomplete="off" value="${dbRow ? esc(dbRow.username) : ''}"></div>
+    <div class="field mb-16"><label>Password${dbRow ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-db-pass" autocomplete="off"></div>
+    ${dbRow ? `<div class="field mb-16"><label>Status</label><select id="m-db-active"><option value="true" ${dbRow.is_active ? 'selected' : ''}>Active</option><option value="false" ${!dbRow.is_active ? 'selected' : ''}>Inactive</option></select></div>` : ''}
+    <div class="actions">
+      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="m-db-save">Save</button>
+    </div>`);
+  document.getElementById('m-db-save').addEventListener('click', async () => {
+    const body = {
+      name: document.getElementById('m-db-name').value,
+      host: document.getElementById('m-db-host').value,
+      port: document.getElementById('m-db-port').value,
+      db_name: document.getElementById('m-db-dbname').value,
+      username: document.getElementById('m-db-user').value,
+      password: document.getElementById('m-db-pass').value,
+    };
+    if (dbRow) body.is_active = document.getElementById('m-db-active').value === 'true';
+    try {
+      if (dbRow) {
+        await api(`/api/backoffice-dbs/${dbRow.id}`, { method: 'PUT', body });
+      } else {
+        await api('/api/backoffice-dbs', { method: 'POST', body });
+      }
+      closeModal();
+      snackbar('Database saved', 'success');
+      loadDbs();
+    } catch (err) {
+      snackbar(err.message, 'error');
+    }
+  });
+}
+
+document.getElementById('add-db').addEventListener('click', () => dbForm(null));
+window.editDb = (id) => dbForm(window._dbs.find((d) => d.id === id));
+window.deleteDb = (id, name) => {
+  openModal(`
+    <h3>Delete database</h3>
+    <p>Delete "<strong>${name}</strong>"? Connections with existing shipments are deactivated instead.</p>
+    <div class="actions">
+      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" id="m-db-delete">Delete</button>
+    </div>`);
+  document.getElementById('m-db-delete').addEventListener('click', async () => {
+    try {
+      await api(`/api/backoffice-dbs/${id}`, { method: 'DELETE' });
+      closeModal();
+      loadDbs();
+    } catch (err) {
+      snackbar(err.message, 'error');
+    }
+  });
+};
 
 /* ---------- Modal helpers ---------- */
 function openModal(html) {

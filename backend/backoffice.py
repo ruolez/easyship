@@ -7,21 +7,22 @@ class BackofficeError(Exception):
     pass
 
 
-def _connect():
-    host = db.get_setting("backoffice_host")
-    port = db.get_setting("backoffice_port") or "1433"
-    database = db.get_setting("backoffice_db")
-    user = db.get_setting("backoffice_user")
-    password = db.get_setting("backoffice_password")
-    if not all([host, database, user, password]):
-        raise BackofficeError("BackOffice connection is not configured — set it in Settings")
+def get_db_config(db_id):
+    row = db.query("SELECT * FROM backoffice_dbs WHERE id = %s", (db_id,), one=True)
+    if not row:
+        raise BackofficeError("BackOffice database not found — configure it in Settings")
+    return row
+
+
+def _connect(db_id):
+    cfg = get_db_config(db_id)
     try:
         return pymssql.connect(
-            server=host, port=int(port), database=database, user=user,
-            password=password, timeout=15, login_timeout=10,
+            server=cfg["host"], port=int(cfg["port"] or 1433), database=cfg["db_name"],
+            user=cfg["username"], password=cfg["password"], timeout=15, login_timeout=10,
         )
     except Exception as e:
-        raise BackofficeError(f"BackOffice connection failed: {e}")
+        raise BackofficeError(f"BackOffice connection failed ({cfg['name']}): {e}")
 
 
 def _to_float(value):
@@ -31,7 +32,7 @@ def _to_float(value):
         return None
 
 
-def list_open_invoices(days=14, q=""):
+def list_open_invoices(db_id, days=14, q=""):
     select = """
         SELECT TOP 200 InvoiceID, InvoiceNumber, InvoiceDate, ShipDate, BusinessName,
                Shipto, ShipCity, ShipState, ShipZipCode,
@@ -57,7 +58,7 @@ def list_open_invoices(days=14, q=""):
         """
         params = [int(days)]
 
-    conn = _connect()
+    conn = _connect(db_id)
     try:
         with conn.cursor(as_dict=True) as cur:
             cur.execute(sql, tuple(params))
@@ -83,8 +84,25 @@ def list_open_invoices(days=14, q=""):
     ]
 
 
-def get_invoice(invoice_id):
-    conn = _connect()
+def find_invoice_id_by_number(db_id, number):
+    """Exact InvoiceNumber match (scan/type-in lookup). Returns InvoiceID or None."""
+    conn = _connect(db_id)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT TOP 1 InvoiceID FROM Invoices_tbl
+                   WHERE LTRIM(RTRIM(InvoiceNumber)) = %s
+                   ORDER BY InvoiceDate DESC""",
+                ((number or "").strip(),),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+def get_invoice(db_id, invoice_id):
+    conn = _connect(db_id)
     try:
         with conn.cursor(as_dict=True) as cur:
             cur.execute(
@@ -145,10 +163,10 @@ def get_invoice(invoice_id):
     }
 
 
-def clear_tracking(invoice_id, tracking_number):
+def clear_tracking(db_id, invoice_id, tracking_number):
     """Remove the tracking number we wrote, but only if it still matches —
     never wipe a tracking number someone entered by hand afterwards."""
-    conn = _connect()
+    conn = _connect(db_id)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -174,8 +192,8 @@ def clear_tracking(invoice_id, tracking_number):
         conn.close()
 
 
-def write_tracking(invoice_id, tracking_number, shipping_cost):
-    conn = _connect()
+def write_tracking(db_id, invoice_id, tracking_number, shipping_cost):
+    conn = _connect(db_id)
     try:
         with conn.cursor() as cur:
             if shipping_cost is not None:
