@@ -36,8 +36,16 @@ function focusNextField() {
     const el = document.getElementById(id);
     if (!el.value.trim()) { el.focus(); return; }
   }
-  const emptyWeight = [...document.querySelectorAll('.p-weight')].find((w) => !w.value);
-  if (emptyWeight) { emptyWeight.focus(); return; }
+  // Always land in the weight field — even when a weight was auto-calculated
+  // (e.g. from Shopify items), the packer confirms the real total on the scale.
+  // The prefilled value is selected so typing replaces it, Enter accepts it.
+  const weights = [...document.querySelectorAll('.p-weight')];
+  const target = weights.find((w) => !w.value) || weights[0];
+  if (target) {
+    target.focus();
+    if (target.value) target.select();
+    return;
+  }
   document.getElementById('get-rates').focus();
 }
 
