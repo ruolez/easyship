@@ -345,6 +345,61 @@ td.wrap { white-space: normal; }
 .step.active .num { background: var(--primary); }
 .step.done .num { background: var(--success); }
 
+/* ---------- Parcel rows ---------- */
+.parcel-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  background: var(--background);
+  border: 1px solid var(--outline);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.parcel-row .parcel-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  flex: 0 0 auto;
+}
+.parcel-row .field { flex: 1 1 auto; min-width: 0; }
+.parcel-row .field.parcel-weight { flex: 0 0 120px; }
+.parcel-row select.p-box { min-width: 160px; }
+.parcel-row .field input { background: var(--surface); }
+.parcel-weight input { font-size: 16px; font-weight: 600; text-align: center; }
+.dims-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+.dims-group input { width: 68px; text-align: center; }
+.parcel-row .remove-parcel {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 15px;
+  cursor: pointer;
+  line-height: 1;
+}
+.parcel-row .remove-parcel:hover { background: var(--error-light); color: var(--error); }
+@media (max-width: 768px) {
+  .parcel-row { flex-wrap: wrap; }
+  .parcel-row .field.parcel-weight { flex: 1 1 120px; }
+}
+
 /* ---------- Rate cards ---------- */
 .rate-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .rate-card {

@@ -115,18 +115,27 @@ function showOrderSummary(html, items) {
 /* ---------- Parcels ---------- */
 function addParcelRow(weight = '', length = '', width = '', height = '') {
   const div = document.createElement('div');
-  div.className = 'row mb-16 parcel-row';
+  div.className = 'parcel-row';
+  const n = document.querySelectorAll('.parcel-row').length + 1;
   const boxOptions = ['<option value="">Custom size</option>']
     .concat(savedBoxes.map((b) =>
-      `<option value="${b.id}">${esc(b.name)} (${b.length}×${b.width}×${b.height})</option>`))
+      `<option value="${b.id}">${esc(b.name)} — ${b.length}×${b.width}×${b.height}</option>`))
     .join('');
   div.innerHTML = `
-    <div class="field fixed" style="min-width:180px"><label>Box</label><select class="p-box">${boxOptions}</select></div>
-    <div class="field fixed" style="min-width:130px"><label>Weight (lb) * <span class="hint">(Enter = rates)</span></label><input class="p-weight" type="number" step="0.1" min="0.1" value="${weight}"></div>
-    <div class="field fixed" style="min-width:110px"><label>Length (in)</label><input class="p-length" type="number" step="0.1" value="${length}"></div>
-    <div class="field fixed" style="min-width:110px"><label>Width (in)</label><input class="p-width" type="number" step="0.1" value="${width}"></div>
-    <div class="field fixed" style="min-width:110px"><label>Height (in)</label><input class="p-height" type="number" step="0.1" value="${height}"></div>
-    <div class="fixed"><button class="btn btn-danger btn-small remove-parcel">Remove</button></div>`;
+    <div class="parcel-num">${n}</div>
+    <div class="field"><label>Box</label><select class="p-box">${boxOptions}</select></div>
+    <div class="field parcel-weight"><label>Weight (lb)</label><input class="p-weight" type="number" step="0.1" min="0.1" value="${weight}" placeholder="0.0"></div>
+    <div class="field">
+      <label>Dimensions — L × W × H (in)</label>
+      <div class="dims-group">
+        <input class="p-length" type="number" step="0.1" value="${length}" placeholder="L">
+        <span>×</span>
+        <input class="p-width" type="number" step="0.1" value="${width}" placeholder="W">
+        <span>×</span>
+        <input class="p-height" type="number" step="0.1" value="${height}" placeholder="H">
+      </div>
+    </div>
+    <button class="remove-parcel" title="Remove this box">✕</button>`;
   const boxSelect = div.querySelector('.p-box');
   const applyBox = () => {
     const box = savedBoxes.find((b) => b.id === Number(boxSelect.value));
@@ -152,7 +161,11 @@ function addParcelRow(weight = '', length = '', width = '', height = '') {
     div.querySelector(sel).addEventListener('input', () => { boxSelect.value = ''; });
   });
   div.querySelector('.remove-parcel').addEventListener('click', () => {
-    if (document.querySelectorAll('.parcel-row').length > 1) div.remove();
+    if (document.querySelectorAll('.parcel-row').length > 1) {
+      div.remove();
+      document.querySelectorAll('.parcel-row .parcel-num')
+        .forEach((el, i) => { el.textContent = i + 1; });
+    }
   });
   div.querySelector('.p-weight').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
