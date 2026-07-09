@@ -157,7 +157,9 @@ def build_parcels(parcels, items):
             "items": parcel_items,
         }
         if box_dims:
-            es_parcel["box"] = {"outer_dimensions": box_dims, "weight": 0}
+            # ParcelCreate.box takes flat dimensions (unlike box objects in
+            # responses, which nest them under outer_dimensions)
+            es_parcel["box"] = box_dims
         es_parcels.append(es_parcel)
     return es_parcels
 
