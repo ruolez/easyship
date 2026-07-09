@@ -3,19 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EasyShip — Shipments</title>
+  <title>EasyShip — Parcels</title>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
   <header id="appbar"></header>
-  <div class="container">
+  <div class="container" style="max-width:1600px">
     <div class="card">
       <div class="row mb-16">
         <div class="field">
-          <label>Search (tracking, order, invoice, customer)</label>
+          <label>Search (order #, tracking, customer, city)</label>
           <input type="text" id="search" placeholder="Search…">
         </div>
-        <div class="field fixed" style="min-width:160px">
+        <div class="field fixed" style="min-width:140px">
+          <label>User</label>
+          <select id="user-filter"><option value="">All</option></select>
+        </div>
+        <div class="field fixed" style="min-width:150px">
           <label>Status</label>
           <select id="status-filter">
             <option value="">All</option>
@@ -27,17 +31,26 @@
             <option value="error">Error</option>
           </select>
         </div>
+        <div class="field fixed" style="min-width:150px">
+          <label>From</label>
+          <input type="date" id="date-from">
+        </div>
+        <div class="field fixed" style="min-width:150px">
+          <label>To</label>
+          <input type="date" id="date-to">
+        </div>
         <div class="fixed"><button class="btn btn-outlined btn-small" id="refresh">Refresh</button></div>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Date (CT)</th><th>Source</th><th>Order / Invoice</th><th>Ship to</th>
-              <th>Courier</th><th>Tracking</th><th>Cost</th><th>User</th><th>Status</th><th></th>
+              <th>Order #</th><th>User</th><th>Service</th><th>Address</th><th>Weight</th>
+              <th>Shipping Service</th><th>Carrier</th><th>Cost</th><th>Tracking Number</th>
+              <th>Status</th><th>Shipping Date</th><th>Created (CT)</th><th></th>
             </tr>
           </thead>
-          <tbody id="shipments-body"></tbody>
+          <tbody id="parcels-body"></tbody>
         </table>
       </div>
       <div class="empty" id="empty" style="display:none"></div>
@@ -50,6 +63,6 @@
 
   <script src="/js/api.js"></script>
   <script src="/js/nav.js"></script>
-  <script src="/js/shipments.js"></script>
+  <script src="/js/parcels.js"></script>
 </body>
 </html>

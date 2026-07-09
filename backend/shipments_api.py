@@ -17,9 +17,18 @@ LABEL_READY_STATES = {"generated", "printed", "shipping_document_generated"}
 
 
 def _row_to_json(row):
+    total_weight = row.get("total_weight_lb")
+    if total_weight is None:
+        total_weight = sum(float(p.get("weight") or 0) for p in row["parcels"] or [])
     return {
         "id": row["id"],
         "source": row["source"],
+        "service_name": row.get("store_name") or row.get("db_name")
+                        or ("Manual" if row["source"] == "manual" else row["source"]),
+        "courier_umbrella_name": row.get("courier_umbrella_name")
+                                 or (row["rate"] or {}).get("umbrella_name"),
+        "total_weight_lb": round(float(total_weight), 2) if total_weight else None,
+        "label_created_at": central_time(row.get("label_created_at")),
         "shopify_store_id": row["shopify_store_id"],
         "shopify_order_id": row["shopify_order_id"],
         "shopify_order_name": row["shopify_order_name"],
@@ -188,17 +197,22 @@ def buy(shipment_id):
         with open(label_path, "wb") as f:
             f.write(label_bytes)
 
+    total_weight_lb = sum(float(p.get("weight") or 0) for p in row["parcels"] or [])
     db.execute(
         """UPDATE shipments SET
-             courier_name=%s, courier_service_id=%s, rate=%s, shipping_cost=%s,
+             courier_name=%s, courier_service_id=%s, courier_umbrella_name=%s,
+             rate=%s, shipping_cost=%s, total_weight_lb=%s,
              tracking_number=%s, label_path=%s, label_format=%s,
+             label_created_at=now(),
              status='label_created', error_message=NULL, updated_at=now()
            WHERE id=%s""",
         (
             courier.get("name") or rate.get("courier_name"),
             courier_service_id,
+            courier.get("umbrella_name") or rate.get("umbrella_name"),
             json.dumps(rate) if rate else None,
             total_charge,
+            round(total_weight_lb, 2),
             tracking_number,
             label_path,
             label_format or "pdf",
@@ -306,37 +320,63 @@ def retry_writeback(shipment_id):
     return jsonify({**_row_to_json(updated), "writebacks": results})
 
 
+LIST_SELECT = """
+    SELECT s.*, u.username AS created_by_username,
+           ss.name AS store_name, bd.name AS db_name
+    FROM shipments s
+    JOIN users u ON u.id = s.created_by
+    LEFT JOIN shopify_stores ss ON ss.id = s.shopify_store_id
+    LEFT JOIN backoffice_dbs bd ON bd.id = s.backoffice_db_id
+"""
+
+
 @bp.get("")
 @login_required
 def list_shipments():
     q = (request.args.get("q") or "").strip()
     status = (request.args.get("status") or "").strip()
-    limit = min(int(request.args.get("limit") or 100), 500)
-    sql = """SELECT s.*, u.username AS created_by_username
-             FROM shipments s JOIN users u ON u.id = s.created_by WHERE TRUE"""
+    user = (request.args.get("user") or "").strip()
+    date_from = (request.args.get("from") or "").strip()
+    date_to = (request.args.get("to") or "").strip()
+    limit = min(int(request.args.get("limit") or 200), 1000)
+    sql = LIST_SELECT + " WHERE TRUE"
     params = []
     if q:
         sql += """ AND (s.tracking_number ILIKE %s OR s.shopify_order_name ILIKE %s
                    OR s.backoffice_invoice_number ILIKE %s OR s.destination->>'company' ILIKE %s
-                   OR s.destination->>'contact' ILIKE %s)"""
+                   OR s.destination->>'contact' ILIKE %s OR s.destination->>'city' ILIKE %s)"""
         like = f"%{q}%"
-        params += [like, like, like, like, like]
+        params += [like] * 6
     if status:
         sql += " AND s.status = %s"
         params.append(status)
+    if user:
+        sql += " AND u.username = %s"
+        params.append(user)
+    if date_from:
+        sql += " AND (s.created_at AT TIME ZONE 'America/Chicago')::date >= %s"
+        params.append(date_from)
+    if date_to:
+        sql += " AND (s.created_at AT TIME ZONE 'America/Chicago')::date <= %s"
+        params.append(date_to)
     sql += " ORDER BY s.created_at DESC LIMIT %s"
     params.append(limit)
     rows = db.query(sql, params)
     return jsonify([_row_to_json(r) for r in rows])
 
 
-def _get_with_username(shipment_id):
-    return db.query(
-        """SELECT s.*, u.username AS created_by_username
-           FROM shipments s JOIN users u ON u.id = s.created_by WHERE s.id = %s""",
-        (shipment_id,),
-        one=True,
+@bp.get("/creators")
+@login_required
+def creators():
+    rows = db.query(
+        """SELECT DISTINCT u.username FROM shipments s
+           JOIN users u ON u.id = s.created_by ORDER BY u.username"""
     )
+    return jsonify([r["username"] for r in rows])
+
+
+def _get_with_username(shipment_id):
+    return db.query(LIST_SELECT + " WHERE s.id = %s", (shipment_id,), one=True)
 
 
 @bp.get("/<int:shipment_id>")

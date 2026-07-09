@@ -6,7 +6,7 @@ async function initNav(activePage) {
     <nav>
       <a href="/index.html" data-page="scan">Scan</a>
       <a href="/orders.html" data-page="orders">Orders</a>
-      <a href="/shipments.html" data-page="shipments">Shipments</a>
+      <a href="/parcels.html" data-page="parcels">Parcels</a>
       <a href="/settings.html" data-page="settings">Settings</a>
     </nav>
     <div class="user-area">
