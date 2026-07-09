@@ -76,6 +76,23 @@
       <button class="btn btn-text mt-16" id="add-db">+ Add database</button>
     </div>
 
+    <div class="card" id="card-boxes">
+      <h2>📐 Box sizes</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>L × W × H (in)</th><th></th></tr></thead>
+          <tbody id="boxes-body"></tbody>
+        </table>
+      </div>
+      <div class="row mt-16">
+        <div class="field"><label>Name</label><input id="box-name" placeholder="Medium box"></div>
+        <div class="field fixed" style="min-width:100px"><label>Length</label><input id="box-length" type="number" step="0.1"></div>
+        <div class="field fixed" style="min-width:100px"><label>Width</label><input id="box-width" type="number" step="0.1"></div>
+        <div class="field fixed" style="min-width:100px"><label>Height</label><input id="box-height" type="number" step="0.1"></div>
+        <div class="fixed"><button class="btn btn-outlined" id="add-box">Add box</button></div>
+      </div>
+    </div>
+
     <div class="card" id="card-workflow">
       <h2>🖨️ Workflow &amp; printing</h2>
       <div class="row mb-16">

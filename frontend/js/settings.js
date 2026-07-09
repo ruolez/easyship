@@ -8,7 +8,7 @@ const SETTING_IDS = [
 
 initNav('settings').then(async () => {
   if (window.currentUser && window.currentUser.role !== 'admin') {
-    ['card-easyship', 'card-origin', 'card-backoffice', 'card-workflow', 'card-stores', 'card-users']
+    ['card-easyship', 'card-origin', 'card-backoffice', 'card-boxes', 'card-workflow', 'card-stores', 'card-users']
       .forEach((id) => document.getElementById(id).style.display = 'none');
     document.getElementById('save-settings').style.display = 'none';
     return;
@@ -17,8 +17,48 @@ initNav('settings').then(async () => {
   await loadSettings();
   await loadStores();
   await loadDbs();
+  await loadBoxes();
   await loadUsers();
 });
+
+/* ---------- Box sizes ---------- */
+async function loadBoxes() {
+  const boxes = await api('/api/boxes');
+  const tbody = document.getElementById('boxes-body');
+  tbody.innerHTML = boxes.length
+    ? boxes.map((b) => `<tr>
+        <td><strong>${esc(b.name)}</strong></td>
+        <td class="mono">${b.length} × ${b.width} × ${b.height}</td>
+        <td><button class="btn btn-danger btn-small" onclick="deleteBox(${b.id})">Delete</button></td>
+      </tr>`).join('')
+    : '<tr><td colspan="3" class="text-secondary">No box sizes yet.</td></tr>';
+}
+
+document.getElementById('add-box').addEventListener('click', async () => {
+  try {
+    await api('/api/boxes', {
+      method: 'POST',
+      body: {
+        name: document.getElementById('box-name').value,
+        length: document.getElementById('box-length').value,
+        width: document.getElementById('box-width').value,
+        height: document.getElementById('box-height').value,
+      },
+    });
+    ['box-name', 'box-length', 'box-width', 'box-height'].forEach((id) => {
+      document.getElementById(id).value = '';
+    });
+    snackbar('Box added', 'success');
+    loadBoxes();
+  } catch (err) {
+    snackbar(err.message, 'error');
+  }
+});
+
+window.deleteBox = async (id) => {
+  await api(`/api/boxes/${id}`, { method: 'DELETE' });
+  loadBoxes();
+};
 
 async function loadCategories() {
   const select = document.getElementById('default_item_category');

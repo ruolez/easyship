@@ -1,0 +1,9 @@
+CREATE TABLE boxes (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  length NUMERIC(6,2) NOT NULL,
+  width NUMERIC(6,2) NOT NULL,
+  height NUMERIC(6,2) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

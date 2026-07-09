@@ -6,15 +6,17 @@ let rates = [];
 let selectedRate = null;
 let orderItems = [];
 let clientSettings = { placeholder_email: '', print_mode: 'browser' };
+let savedBoxes = [];
 
 initNav('scan');
-addParcelRow();
 init();
 
 async function init() {
-  try {
-    clientSettings = await api('/api/settings/client');
-  } catch { /* defaults stand */ }
+  [clientSettings, savedBoxes] = await Promise.all([
+    api('/api/settings/client').catch(() => clientSettings),
+    api('/api/boxes').catch(() => []),
+  ]);
+  addParcelRow();
   await prefill();
   applyPlaceholderEmail();
   focusNextField();
@@ -114,12 +116,41 @@ function showOrderSummary(html, items) {
 function addParcelRow(weight = '', length = '', width = '', height = '') {
   const div = document.createElement('div');
   div.className = 'row mb-16 parcel-row';
+  const boxOptions = ['<option value="">Custom size</option>']
+    .concat(savedBoxes.map((b) =>
+      `<option value="${b.id}">${esc(b.name)} (${b.length}×${b.width}×${b.height})</option>`))
+    .join('');
   div.innerHTML = `
+    <div class="field fixed" style="min-width:180px"><label>Box</label><select class="p-box">${boxOptions}</select></div>
     <div class="field fixed" style="min-width:130px"><label>Weight (lb) * <span class="hint">(Enter = rates)</span></label><input class="p-weight" type="number" step="0.1" min="0.1" value="${weight}"></div>
     <div class="field fixed" style="min-width:110px"><label>Length (in)</label><input class="p-length" type="number" step="0.1" value="${length}"></div>
     <div class="field fixed" style="min-width:110px"><label>Width (in)</label><input class="p-width" type="number" step="0.1" value="${width}"></div>
     <div class="field fixed" style="min-width:110px"><label>Height (in)</label><input class="p-height" type="number" step="0.1" value="${height}"></div>
     <div class="fixed"><button class="btn btn-danger btn-small remove-parcel">Remove</button></div>`;
+  const boxSelect = div.querySelector('.p-box');
+  const applyBox = () => {
+    const box = savedBoxes.find((b) => b.id === Number(boxSelect.value));
+    if (!box) return;
+    div.querySelector('.p-length').value = box.length;
+    div.querySelector('.p-width').value = box.width;
+    div.querySelector('.p-height').value = box.height;
+    localStorage.setItem('easyship.lastBox', box.id);
+  };
+  boxSelect.addEventListener('change', () => {
+    applyBox();
+    div.querySelector('.p-weight').focus();
+  });
+  // Preselect the last-used box so scan flow only needs a weight
+  if (!length && !width && !height) {
+    const lastBox = Number(localStorage.getItem('easyship.lastBox'));
+    if (lastBox && savedBoxes.some((b) => b.id === lastBox)) {
+      boxSelect.value = lastBox;
+      applyBox();
+    }
+  }
+  ['.p-length', '.p-width', '.p-height'].forEach((sel) => {
+    div.querySelector(sel).addEventListener('input', () => { boxSelect.value = ''; });
+  });
   div.querySelector('.remove-parcel').addEventListener('click', () => {
     if (document.querySelectorAll('.parcel-row').length > 1) div.remove();
   });

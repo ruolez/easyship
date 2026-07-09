@@ -145,6 +145,48 @@ def test_easyship():
     return api_error(f"Easyship returned {resp.status_code}: {resp.text[:300]}")
 
 
+# ---------- Box sizes ----------
+
+@bp.get("/boxes")
+@login_required
+def list_boxes():
+    rows = db.query(
+        "SELECT id, name, length, width, height, is_active FROM boxes WHERE is_active ORDER BY name"
+    )
+    return jsonify([
+        {**r, "length": float(r["length"]), "width": float(r["width"]), "height": float(r["height"])}
+        for r in rows
+    ])
+
+
+@bp.post("/boxes")
+@admin_required
+def create_box():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    try:
+        dims = [float(data.get(k)) for k in ("length", "width", "height")]
+        if not name or any(d <= 0 for d in dims):
+            raise ValueError
+    except (TypeError, ValueError):
+        return api_error("Name and positive length/width/height (inches) are required")
+    row = db.execute(
+        "INSERT INTO boxes (name, length, width, height) VALUES (%s, %s, %s, %s) RETURNING id",
+        (name, *dims),
+        returning=True,
+    )
+    audit("box.create", {"name": name})
+    return jsonify({"id": row["id"]})
+
+
+@bp.delete("/boxes/<int:box_id>")
+@admin_required
+def delete_box(box_id):
+    db.execute("DELETE FROM boxes WHERE id = %s", (box_id,))
+    audit("box.delete", {"id": box_id})
+    return jsonify({"ok": True})
+
+
 # ---------- Shopify stores ----------
 
 @bp.get("/shopify-stores")
