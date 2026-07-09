@@ -62,7 +62,23 @@ def _clean(d):
     return {k: v for k, v in d.items() if v not in (None, "")}
 
 
+ORIGIN_REQUIRED = {
+    "origin_company": "Company",
+    "origin_address1": "Address 1",
+    "origin_city": "City",
+    "origin_state": "State",
+    "origin_zip": "ZIP",
+    "origin_phone": "Phone",
+    "origin_email": "Email",
+}
+
+
 def origin_address():
+    missing = [label for key, label in ORIGIN_REQUIRED.items() if not (db.get_setting(key) or "").strip()]
+    if missing:
+        raise EasyshipError(
+            "Origin address is incomplete — fill in on the Settings page: " + ", ".join(missing)
+        )
     return _clean({
         "company_name": db.get_setting("origin_company") or None,
         "contact_name": db.get_setting("origin_contact") or db.get_setting("origin_company") or "Shipping",
@@ -78,11 +94,14 @@ def origin_address():
 
 
 def build_destination(dest):
+    # Easyship requires a destination email; fall back to the origin email
+    # (shipment notifications then go to us instead of the customer).
+    email = (dest.get("email") or "").strip() or (db.get_setting("origin_email") or "").strip()
     return _clean({
         "company_name": dest.get("company") or None,
         "contact_name": dest.get("contact") or dest.get("company") or "Recipient",
         "contact_phone": dest.get("phone") or None,
-        "contact_email": dest.get("email") or None,
+        "contact_email": email or None,
         "line_1": dest.get("address1"),
         "line_2": dest.get("address2") or None,
         "city": dest.get("city"),
@@ -94,9 +113,20 @@ def build_destination(dest):
 
 def build_parcels(parcels, items):
     """parcels: [{length,width,height (in), weight (lb)}]; items: [{description, quantity, value, sku?, weight?}]"""
+    category = (db.get_setting("default_item_category") or "dry_food_supplements").strip()
     es_parcels = []
-    n = max(len(parcels), 1)
     for i, p in enumerate(parcels):
+        box_dims = None
+        if p.get("length") and p.get("width") and p.get("height"):
+            box_dims = {
+                "length": round(float(p["length"]) * IN_TO_CM, 2),
+                "width": round(float(p["width"]) * IN_TO_CM, 2),
+                "height": round(float(p["height"]) * IN_TO_CM, 2),
+            }
+        # Easyship requires per-item dimensions and a category even for domestic
+        # shipments; the box (or a 1-inch cube) stands in for item size.
+        item_dims = box_dims or {"length": 2.54, "width": 2.54, "height": 2.54}
+
         parcel_items = []
         if i == 0:
             for item in items or []:
@@ -108,6 +138,8 @@ def build_parcels(parcels, items):
                     "declared_customs_value": float(item.get("value") or 1),
                     "actual_weight": round(float(item.get("weight") or 0) * LB_TO_KG, 4) or None,
                     "origin_country_alpha2": "US",
+                    "category": category,
+                    "dimensions": item_dims,
                 }))
         if not parcel_items:
             parcel_items = [{
@@ -115,23 +147,28 @@ def build_parcels(parcels, items):
                 "quantity": 1,
                 "declared_currency": "USD",
                 "declared_customs_value": 1.0,
+                "origin_country_alpha2": "US",
+                "category": category,
+                "dimensions": item_dims,
             }]
         weight_lb = float(p.get("weight") or 0)
         es_parcel = {
             "total_actual_weight": round(weight_lb * LB_TO_KG, 4),
             "items": parcel_items,
         }
-        if p.get("length") and p.get("width") and p.get("height"):
-            es_parcel["box"] = {
-                "outer_dimensions": {
-                    "length": round(float(p["length"]) * IN_TO_CM, 2),
-                    "width": round(float(p["width"]) * IN_TO_CM, 2),
-                    "height": round(float(p["height"]) * IN_TO_CM, 2),
-                },
-                "weight": 0,
-            }
+        if box_dims:
+            es_parcel["box"] = {"outer_dimensions": box_dims, "weight": 0}
         es_parcels.append(es_parcel)
     return es_parcels
+
+
+def list_item_categories():
+    data = _request("GET", "/item_categories", params={"perPage": 50})
+    return [
+        {"slug": c.get("slug"), "name": c.get("name") or c.get("slug")}
+        for c in data.get("item_categories") or []
+        if c.get("slug")
+    ]
 
 
 def create_shipment(destination, parcels, items):

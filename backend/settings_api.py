@@ -16,6 +16,7 @@ SETTING_KEYS = [
     "easyship_mode",
     "easyship_sandbox_token",
     "easyship_production_token",
+    "default_item_category",
     "origin_company",
     "origin_contact",
     "origin_address1",
@@ -68,6 +69,28 @@ def put_settings():
 @login_required
 def easyship_mode():
     return jsonify({"mode": db.get_setting("easyship_mode", "sandbox")})
+
+
+FALLBACK_CATEGORIES = [
+    "accessory_no_battery", "accessory_with_battery", "audio_video", "bags_luggages",
+    "books_collectibles", "cameras", "computers_laptops", "documents",
+    "dry_food_supplements", "fashion", "health_beauty", "home_appliances",
+    "home_decor", "jewelry", "mobile_phones", "pet_accessory", "sport_leisure",
+    "tablets", "toys", "watches",
+]
+
+
+@bp.get("/settings/easyship-categories")
+@login_required
+def easyship_categories():
+    try:
+        import easyship_client
+        categories = easyship_client.list_item_categories()
+        if categories:
+            return jsonify(categories)
+    except Exception:
+        pass
+    return jsonify([{"slug": s, "name": s.replace("_", " ").title()} for s in FALLBACK_CATEGORIES])
 
 
 @bp.post("/settings/test/easyship")

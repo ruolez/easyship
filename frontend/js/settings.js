@@ -1,5 +1,6 @@
 const SETTING_IDS = [
   'easyship_mode', 'easyship_sandbox_token', 'easyship_production_token',
+  'default_item_category',
   'origin_company', 'origin_contact', 'origin_address1', 'origin_address2',
   'origin_city', 'origin_state', 'origin_zip', 'origin_phone', 'origin_email',
   'backoffice_host', 'backoffice_port', 'backoffice_db', 'backoffice_user',
@@ -13,10 +14,23 @@ initNav('settings').then(async () => {
     document.getElementById('save-settings').style.display = 'none';
     return;
   }
+  await loadCategories();
   await loadSettings();
   await loadStores();
   await loadUsers();
 });
+
+async function loadCategories() {
+  const select = document.getElementById('default_item_category');
+  try {
+    const categories = await api('/api/settings/easyship-categories');
+    select.innerHTML = categories
+      .map((c) => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`)
+      .join('');
+  } catch {
+    select.innerHTML = '<option value="dry_food_supplements">Dry Food Supplements</option>';
+  }
+}
 
 async function loadSettings() {
   const settings = await api('/api/settings');
@@ -24,6 +38,10 @@ async function loadSettings() {
     const el = document.getElementById(id);
     if (el) el.value = settings[id] || '';
   });
+  const catEl = document.getElementById('default_item_category');
+  if (!settings.default_item_category) catEl.value = 'dry_food_supplements';
+  else catEl.value = settings.default_item_category;
+  if (!catEl.value) catEl.selectedIndex = 0;
 }
 
 document.getElementById('save-settings').addEventListener('click', async () => {
