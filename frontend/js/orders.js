@@ -102,7 +102,7 @@ async function loadInvoices() {
     tbody.innerHTML = invoices
       .map(
         (inv) => `<tr>
-          <td><strong>${esc(inv.invoice_number)}</strong></td>
+          <td><strong>${esc(inv.invoice_number)}</strong>${inv.tracking_no ? `<br><span class="chip static warn" title="Already has tracking number">✓ ${esc(inv.tracking_no)}</span>` : ''}</td>
           <td>${esc(inv.ship_date)}</td>
           <td>${esc(inv.business_name)}</td>
           <td class="wrap">${esc(inv.ship_to)}</td>

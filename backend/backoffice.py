@@ -32,21 +32,30 @@ def _to_float(value):
 
 
 def list_open_invoices(days=14, q=""):
-    sql = """
+    select = """
         SELECT TOP 200 InvoiceID, InvoiceNumber, InvoiceDate, ShipDate, BusinessName,
                Shipto, ShipCity, ShipState, ShipZipCode,
-               NoBoxes, TotalWeight, InvoiceTotal
+               NoBoxes, TotalWeight, InvoiceTotal, TrackingNo
         FROM Invoices_tbl
-        WHERE (Void IS NULL OR Void = 0)
-          AND (TrackingNo IS NULL OR LTRIM(RTRIM(TrackingNo)) = '')
-          AND InvoiceDate >= DATEADD(day, -%s, GETDATE())
     """
-    params = [int(days)]
     if q:
-        sql += " AND (InvoiceNumber LIKE %s OR BusinessName LIKE %s)"
+        # Explicit search: look up by invoice number (or business name) across the
+        # whole table — no date window, no open-only filter.
+        sql = select + """
+            WHERE (LTRIM(RTRIM(InvoiceNumber)) = %s
+                   OR InvoiceNumber LIKE %s OR BusinessName LIKE %s)
+            ORDER BY InvoiceDate DESC
+        """
         like = f"%{q}%"
-        params += [like, like]
-    sql += " ORDER BY InvoiceDate DESC"
+        params = [q.strip(), like, like]
+    else:
+        sql = select + """
+            WHERE (Void IS NULL OR Void = 0)
+              AND (TrackingNo IS NULL OR LTRIM(RTRIM(TrackingNo)) = '')
+              AND InvoiceDate >= DATEADD(day, -%s, GETDATE())
+            ORDER BY InvoiceDate DESC
+        """
+        params = [int(days)]
 
     conn = _connect()
     try:
@@ -59,6 +68,7 @@ def list_open_invoices(days=14, q=""):
         {
             "invoice_id": r["InvoiceID"],
             "invoice_number": r["InvoiceNumber"],
+            "tracking_no": (r["TrackingNo"] or "").strip() or None,
             "ship_date": r["ShipDate"].strftime("%m/%d/%Y") if r["ShipDate"] else
                          (r["InvoiceDate"].strftime("%m/%d/%Y") if r["InvoiceDate"] else ""),
             "business_name": r["BusinessName"],
