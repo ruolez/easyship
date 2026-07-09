@@ -135,6 +135,35 @@ def get_invoice(invoice_id):
     }
 
 
+def clear_tracking(invoice_id, tracking_number):
+    """Remove the tracking number we wrote, but only if it still matches —
+    never wipe a tracking number someone entered by hand afterwards."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE Invoices_tbl SET TrackingNo = NULL, ShippingCost = NULL
+                   WHERE InvoiceID = %s AND LTRIM(RTRIM(TrackingNo)) = %s""",
+                (invoice_id, (tracking_number or "").strip()),
+            )
+            if cur.rowcount == 0:
+                cur.execute(
+                    "SELECT TrackingNo FROM Invoices_tbl WHERE InvoiceID = %s", (invoice_id,)
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise BackofficeError(f"Invoice {invoice_id} not found")
+                current = (row[0] or "").strip()
+                if current and current != (tracking_number or "").strip():
+                    raise BackofficeError(
+                        f"Invoice {invoice_id} now has a different tracking number "
+                        f"({current}) — not cleared"
+                    )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def write_tracking(invoice_id, tracking_number, shipping_cost):
     conn = _connect()
     try:

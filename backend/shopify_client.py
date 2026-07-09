@@ -108,6 +108,27 @@ mutation fulfill($fulfillment: FulfillmentInput!) {
 }
 """
 
+FULFILLMENT_CANCEL_MUTATION = """
+mutation cancelFulfillment($id: ID!) {
+  fulfillmentCancel(id: $id) {
+    fulfillment { id status }
+    userErrors { field message }
+  }
+}
+"""
+
+ORDER_FULFILLMENTS_QUERY = """
+query orderFulfillments($id: ID!) {
+  order(id: $id) {
+    fulfillments(first: 25) {
+      id
+      status
+      trackingInfo { number }
+    }
+  }
+}
+"""
+
 WEIGHT_TO_LB = {"POUNDS": 1.0, "OUNCES": 1.0 / 16, "KILOGRAMS": 2.20462, "GRAMS": 0.00220462}
 
 
@@ -203,3 +224,26 @@ def fulfill_order(store_id, order_gid, tracking_number, courier_name):
     if result.get("userErrors"):
         raise ShopifyError("; ".join(e["message"] for e in result["userErrors"]))
     return result["fulfillment"]
+
+
+def cancel_fulfillment(store_id, fulfillment_gid):
+    data = _graphql(store_id, FULFILLMENT_CANCEL_MUTATION, {"id": fulfillment_gid})
+    result = data["fulfillmentCancel"]
+    if result.get("userErrors"):
+        raise ShopifyError("; ".join(e["message"] for e in result["userErrors"]))
+    return result["fulfillment"]
+
+
+def find_fulfillment_by_tracking(store_id, order_gid, tracking_number):
+    """Fallback for shipments created before the fulfillment id was stored."""
+    data = _graphql(store_id, ORDER_FULFILLMENTS_QUERY, {"id": order_gid})
+    order = data.get("order")
+    if not order:
+        raise ShopifyError("Order not found")
+    for f in order.get("fulfillments") or []:
+        if f.get("status") == "CANCELLED":
+            continue
+        numbers = [t.get("number") for t in f.get("trackingInfo") or []]
+        if tracking_number in numbers:
+            return f["id"]
+    return None

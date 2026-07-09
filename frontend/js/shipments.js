@@ -35,7 +35,8 @@ async function load() {
         <td>
           ${s.has_label ? `<a class="btn btn-text btn-small" href="/api/shipments/${s.id}/label" target="_blank">Label</a>` : ''}
           ${needsRetry ? `<button class="btn btn-text btn-small" onclick="retryWb(${s.id})">Retry writeback</button>` : ''}
-          ${['label_created', 'fulfilled'].includes(s.status) ? `<button class="btn btn-danger btn-small" onclick="voidShipment(${s.id}, '${esc(ref)}')">Void</button>` : ''}
+          ${['label_created', 'fulfilled'].includes(s.status) ? `<button class="btn btn-danger btn-small" onclick="voidShipment(${s.id}, '${esc(ref)}', '${esc(s.source)}')">Undo / Void</button>` : ''}
+          ${s.status === 'voided' && s.error_message ? `<button class="btn btn-danger btn-small" onclick="retryUndo(${s.id})">Retry undo</button>` : ''}
         </td>
       </tr>`;
     }).join('');
@@ -58,27 +59,52 @@ window.retryWb = async (id) => {
   }
 };
 
-window.voidShipment = (id, ref) => {
+async function callVoid(id) {
+  const res = await api(`/api/shipments/${id}/void`, { method: 'POST' });
+  if (res.ok) {
+    const details = Object.entries(res.undo || {}).map(([k, v]) => `${k}: ${v}`).join('; ');
+    snackbar(details ? `Label voided — ${details}` : 'Label voided', 'success');
+  } else {
+    snackbar(`Label voided at Easyship, but: ${(res.errors || []).join('; ')} — use Retry undo`, 'error');
+  }
+  load();
+}
+
+window.voidShipment = (id, ref, source) => {
+  const undoNote = source === 'shopify'
+    ? 'the Shopify fulfillment is cancelled (tracking removed from the order)'
+    : source === 'backoffice'
+      ? 'the tracking number and shipping cost are cleared from the BackOffice invoice'
+      : 'no order updates to undo';
   const backdrop = document.getElementById('modal-backdrop');
   document.getElementById('modal').innerHTML = `
-    <h3>Void label</h3>
-    <p>Void the label for <strong>${ref}</strong>? This cancels the shipment at Easyship.</p>
+    <h3>Undo shipment</h3>
+    <p>Undo <strong>${ref}</strong>?</p>
+    <p class="text-secondary" style="margin-top:8px">The label is cancelled at Easyship (UPS/USPS), and ${undoNote}.</p>
     <div class="actions">
       <button class="btn btn-text" id="m-cancel">Cancel</button>
-      <button class="btn btn-danger" id="m-void">Void label</button>
+      <button class="btn btn-danger" id="m-void">Undo shipment</button>
     </div>`;
   backdrop.classList.add('show');
   document.getElementById('m-cancel').addEventListener('click', () => backdrop.classList.remove('show'));
   document.getElementById('m-void').addEventListener('click', async () => {
+    document.getElementById('m-void').disabled = true;
     try {
-      await api(`/api/shipments/${id}/void`, { method: 'POST' });
       backdrop.classList.remove('show');
-      snackbar('Label voided', 'success');
-      load();
+      await callVoid(id);
     } catch (err) {
+      backdrop.classList.remove('show');
       snackbar(err.message, 'error');
     }
   });
+};
+
+window.retryUndo = async (id) => {
+  try {
+    await callVoid(id);
+  } catch (err) {
+    snackbar(err.message, 'error');
+  }
 };
 
 document.getElementById('refresh').addEventListener('click', load);

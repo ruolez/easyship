@@ -227,13 +227,14 @@ def run_writebacks(shipment_id):
     if row["source"] == "shopify" and not row["writeback_shopify_at"]:
         try:
             import shopify_client
-            shopify_client.fulfill_order(
+            fulfillment = shopify_client.fulfill_order(
                 row["shopify_store_id"], row["shopify_order_id"],
                 row["tracking_number"], row["courier_name"],
             )
             db.execute(
-                "UPDATE shipments SET writeback_shopify_at=now(), updated_at=now() WHERE id=%s",
-                (shipment_id,),
+                """UPDATE shipments SET writeback_shopify_at=now(),
+                   shopify_fulfillment_id=%s, updated_at=now() WHERE id=%s""",
+                ((fulfillment or {}).get("id"), shipment_id),
             )
             results["shopify"] = "ok"
         except Exception as e:
@@ -344,18 +345,64 @@ def get_label(shipment_id):
 @bp.post("/<int:shipment_id>/void")
 @login_required
 def void(shipment_id):
+    """Undo a shipment: cancel the label at Easyship, remove the tracking number
+    from Shopify (cancel fulfillment) / BackOffice (clear TrackingNo, ShippingCost).
+    Calling it again on a voided shipment retries any undo step that failed."""
     row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
     if not row:
         return api_error("Shipment not found", 404)
-    if row["status"] not in ("label_created", "fulfilled", "rated", "error"):
+    if row["status"] not in ("label_created", "fulfilled", "rated", "error", "voided"):
         return api_error(f"Shipment is {row['status']} — cannot void")
-    if row["easyship_shipment_id"]:
+
+    if row["status"] != "voided" and row["easyship_shipment_id"]:
         try:
             easyship.cancel_shipment(row["easyship_shipment_id"])
         except EasyshipError as e:
             return api_error(str(e), 502)
+
+    undo = {}
+    errors = []
+
+    if row["writeback_shopify_at"]:
+        try:
+            import shopify_client
+            fulfillment_gid = row["shopify_fulfillment_id"]
+            if not fulfillment_gid and row["tracking_number"]:
+                fulfillment_gid = shopify_client.find_fulfillment_by_tracking(
+                    row["shopify_store_id"], row["shopify_order_id"], row["tracking_number"]
+                )
+            if fulfillment_gid:
+                shopify_client.cancel_fulfillment(row["shopify_store_id"], fulfillment_gid)
+            db.execute(
+                """UPDATE shipments SET writeback_shopify_at=NULL,
+                   shopify_fulfillment_id=NULL, updated_at=now() WHERE id=%s""",
+                (shipment_id,),
+            )
+            undo["shopify"] = "fulfillment cancelled" if fulfillment_gid else "no matching fulfillment found"
+        except Exception as e:
+            undo["shopify"] = f"error: {e}"
+            errors.append(f"Shopify undo: {e}")
+
+    if row["writeback_backoffice_at"]:
+        try:
+            import backoffice
+            backoffice.clear_tracking(row["backoffice_invoice_id"], row["tracking_number"])
+            db.execute(
+                "UPDATE shipments SET writeback_backoffice_at=NULL, updated_at=now() WHERE id=%s",
+                (shipment_id,),
+            )
+            undo["backoffice"] = "tracking number cleared"
+        except Exception as e:
+            undo["backoffice"] = f"error: {e}"
+            errors.append(f"BackOffice undo: {e}")
+
     db.execute(
-        "UPDATE shipments SET status='voided', updated_at=now() WHERE id=%s", (shipment_id,)
+        "UPDATE shipments SET status='voided', error_message=%s, updated_at=now() WHERE id=%s",
+        ("; ".join(errors) if errors else None, shipment_id),
     )
-    audit("label.void", {"shipment_id": shipment_id, "easyship_shipment_id": row["easyship_shipment_id"]})
-    return jsonify({"ok": True})
+    audit("label.void", {
+        "shipment_id": shipment_id,
+        "easyship_shipment_id": row["easyship_shipment_id"],
+        "undo": undo,
+    })
+    return jsonify({"ok": not errors, "undo": undo, "errors": errors})
