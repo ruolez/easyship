@@ -1,4 +1,6 @@
 import base64
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 
@@ -6,6 +8,23 @@ import requests
 
 import config
 import db
+
+# Easyship limits requests per second; parallel per-box calls must be spaced
+# out. Processing still overlaps — only the launches are staggered.
+_throttle_lock = threading.Lock()
+_next_slot = 0.0
+MIN_REQUEST_INTERVAL = 0.6
+
+
+def _throttle():
+    global _next_slot
+    with _throttle_lock:
+        now = time.monotonic()
+        slot = max(now, _next_slot)
+        _next_slot = slot + MIN_REQUEST_INTERVAL
+    wait = slot - now
+    if wait > 0:
+        time.sleep(wait)
 
 LB_TO_KG = 0.45359237
 IN_TO_CM = 2.54
@@ -45,17 +64,28 @@ def _auth():
 def _request(method, path, json_body=None, params=None, timeout=45, auth=None):
     base_url, token = auth or _auth()
     url = f"{base_url}{path}"
-    try:
-        resp = requests.request(
-            method,
-            url,
-            json=json_body,
-            params=params,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            timeout=timeout,
-        )
-    except requests.RequestException as e:
-        raise EasyshipError(f"Easyship request failed: {e}", status=None)
+    resp = None
+    for attempt in range(4):
+        _throttle()
+        try:
+            resp = requests.request(
+                method,
+                url,
+                json=json_body,
+                params=params,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                timeout=timeout,
+            )
+        except requests.RequestException as e:
+            raise EasyshipError(f"Easyship request failed: {e}", status=None)
+        if resp.status_code == 429:
+            try:
+                retry_after = float(resp.headers.get("Retry-After") or 0)
+            except ValueError:
+                retry_after = 0
+            time.sleep(min(retry_after or 1.5 * (attempt + 1), 15))
+            continue
+        break
     if resp.status_code >= 400:
         raise EasyshipError(_extract_error(resp), status=resp.status_code)
     return resp.json()
