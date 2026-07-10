@@ -246,19 +246,47 @@ def sniff_label_format(data, declared="pdf"):
     return declared if declared in ("pdf", "png", "zpl") else "pdf"
 
 
-def extract_label_document(shipment):
-    """Returns (bytes, format) of the label document, or (None, None)."""
+def extract_label_documents(shipment):
+    """ALL label documents as [(bytes, format)] — multi-box shipments return
+    one label per parcel (multiple base64 strings and/or documents)."""
+    docs = []
     for doc in shipment.get("shipping_documents") or []:
         if doc.get("category") != "label":
             continue
         fmt = (doc.get("format") or "pdf").lower()
-        data = None
-        if doc.get("base64_encoded_strings"):
-            data = base64.b64decode(doc["base64_encoded_strings"][0])
-        elif doc.get("url"):
+        for encoded in doc.get("base64_encoded_strings") or []:
+            data = base64.b64decode(encoded)
+            docs.append((data, sniff_label_format(data, fmt)))
+        if not doc.get("base64_encoded_strings") and doc.get("url"):
             resp = requests.get(doc["url"], timeout=30)
             if resp.ok:
-                data = resp.content
-        if data:
-            return data, sniff_label_format(data, fmt)
-    return None, None
+                docs.append((resp.content, sniff_label_format(resp.content, fmt)))
+    return docs
+
+
+def merge_label_documents(docs):
+    """Combine per-box labels into one printable file: multi-page PDF or
+    concatenated ZPL. Returns (bytes, format) or (None, None)."""
+    if not docs:
+        return None, None
+    if len(docs) == 1:
+        return docs[0]
+    formats = {fmt for _, fmt in docs}
+    if formats == {"pdf"}:
+        import io
+        from pypdf import PdfReader, PdfWriter
+        writer = PdfWriter()
+        for data, _ in docs:
+            for page in PdfReader(io.BytesIO(data)).pages:
+                writer.add_page(page)
+        buf = io.BytesIO()
+        writer.write(buf)
+        return buf.getvalue(), "pdf"
+    if formats == {"zpl"}:
+        return b"\n".join(data for data, _ in docs), "zpl"
+    return docs[0]
+
+
+def extract_label_document(shipment):
+    """Returns (bytes, format) of the combined label document, or (None, None)."""
+    return merge_label_documents(extract_label_documents(shipment))
