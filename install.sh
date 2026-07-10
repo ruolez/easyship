@@ -150,6 +150,10 @@ do_update() {
     info "Rebuilding and restarting containers (database and labels are kept)..."
     compose up -d --build
 
+    info "Cleaning up unused Docker images..."
+    docker image prune -f | tail -1
+    docker builder prune -f --filter "until=24h" >/dev/null 2>&1 || true
+
     local port; port="$(get_env APP_PORT)"
     wait_for_health "${port:-$DEFAULT_PORT}" || true
 
