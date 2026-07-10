@@ -221,16 +221,30 @@ def extract_tracking_number(shipment):
     return numbers[0] if numbers else None
 
 
+def sniff_label_format(data, declared="pdf"):
+    """The declared document format can be 'url' or wrong — trust the bytes."""
+    if data.startswith(b"%PDF"):
+        return "pdf"
+    if data.startswith(b"\x89PNG"):
+        return "png"
+    if data[:3] == b"^XA" or data[:16].lstrip()[:3] == b"^XA":
+        return "zpl"
+    return declared if declared in ("pdf", "png", "zpl") else "pdf"
+
+
 def extract_label_document(shipment):
     """Returns (bytes, format) of the label document, or (None, None)."""
     for doc in shipment.get("shipping_documents") or []:
         if doc.get("category") != "label":
             continue
         fmt = (doc.get("format") or "pdf").lower()
+        data = None
         if doc.get("base64_encoded_strings"):
-            return base64.b64decode(doc["base64_encoded_strings"][0]), fmt
-        if doc.get("url"):
+            data = base64.b64decode(doc["base64_encoded_strings"][0])
+        elif doc.get("url"):
             resp = requests.get(doc["url"], timeout=30)
             if resp.ok:
-                return resp.content, fmt
+                data = resp.content
+        if data:
+            return data, sniff_label_format(data, fmt)
     return None, None

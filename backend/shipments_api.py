@@ -393,6 +393,9 @@ def get_shipment(shipment_id):
     return jsonify(_row_to_json(row))
 
 
+LABEL_MIMETYPES = {"pdf": "application/pdf", "png": "image/png", "zpl": "text/plain"}
+
+
 @bp.get("/<int:shipment_id>/label")
 @login_required
 def get_label(shipment_id):
@@ -401,8 +404,26 @@ def get_label(shipment_id):
         return api_error("No label stored for this shipment", 404)
     if not os.path.exists(row["label_path"]):
         return api_error("Label file missing from storage", 410)
-    mimetype = "application/pdf" if row["label_format"] == "pdf" else "application/octet-stream"
-    return send_file(row["label_path"], mimetype=mimetype, download_name=f"label-{shipment_id}.{row['label_format']}")
+    # Sniff the real type — older rows may have been stored with a wrong
+    # extension (e.g. 'url'), which made browsers download instead of display.
+    with open(row["label_path"], "rb") as f:
+        head = f.read(16)
+    if head.startswith(b"%PDF"):
+        fmt = "pdf"
+    elif head.startswith(b"\x89PNG"):
+        fmt = "png"
+    elif head[:3] == b"^XA":
+        fmt = "zpl"
+    else:
+        fmt = row["label_format"] if row["label_format"] in LABEL_MIMETYPES else "pdf"
+    response = send_file(
+        row["label_path"],
+        mimetype=LABEL_MIMETYPES.get(fmt, "application/pdf"),
+        download_name=f"label-{shipment_id}.{fmt}",
+        as_attachment=False,
+    )
+    response.headers["Content-Disposition"] = f'inline; filename="label-{shipment_id}.{fmt}"'
+    return response
 
 
 @bp.post("/<int:shipment_id>/print")
