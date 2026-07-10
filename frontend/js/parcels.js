@@ -41,17 +41,14 @@ async function load() {
     }
     tbody.innerHTML = rows.map((s) => {
       const ref = s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
-      const needsRetry = s.status === 'label_created' &&
+      const needsRetry = s.status === 'label_created' && s.box_number === 1 &&
         ((s.source === 'shopify' && !s.writeback_shopify_at) ||
          (s.source === 'backoffice' && !s.writeback_backoffice_at));
-      const boxDetail = ((s.progress || {}).boxes || [])
-        .map((b) => `Box ${b.box}: ${b.status}${b.tracking ? ' ' + b.tracking : ''}${b.error ? ' — ' + b.error : ''}`)
-        .join('\n');
-      const partial = s.boxes_ready < s.box_count;
-      const boxesCell = s.box_count > 1 || partial
-        ? `<span class="chip static ${partial ? 'err' : 'ok'}" title="${esc(boxDetail)}">${s.boxes_ready}/${s.box_count}</span>`
-        : s.box_count;
-      const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id && s.easyship_shipment_id;
+      const boxesCell = s.box_total > 1
+        ? `<span class="chip static ${['label_created', 'fulfilled'].includes(s.status) ? 'ok' : 'warn'}">${s.box_number}/${s.box_total}</span>`
+        : '1';
+      const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id
+        && s.easyship_shipment_id && s.group_id;
       return `<tr>
         <td><strong>${esc(ref)}</strong></td>
         <td>${esc(s.created_by)}</td>
@@ -67,11 +64,11 @@ async function load() {
         <td>${esc((s.label_created_at || '').split(' ')[0] || '')}</td>
         <td>${esc(s.created_at)}</td>
         <td style="white-space:nowrap">
-          ${canResume ? `<button class="btn btn-text btn-small" onclick="resumeBuy(${s.id})">Resume labels</button>` : ''}
+          ${canResume ? `<button class="btn btn-text btn-small" onclick="resumeBuy('${esc(s.group_id)}')">Resume labels</button>` : ''}
           ${s.has_label ? `<a class="btn btn-text btn-small" href="/api/shipments/${s.id}/label" target="_blank">Label</a>` : ''}
           ${s.has_label ? `<button class="btn btn-text btn-small" onclick="reprint(${s.id})" title="Send to printer">🖨</button>` : ''}
           ${needsRetry ? `<button class="btn btn-text btn-small" onclick="retryWb(${s.id})">Retry writeback</button>` : ''}
-          ${['label_created', 'fulfilled'].includes(s.status) ? `<button class="btn btn-danger btn-small" onclick="voidShipment(${s.id}, '${esc(ref)}', '${esc(s.source)}')">Undo</button>` : ''}
+          ${['label_created', 'fulfilled'].includes(s.status) ? `<button class="btn btn-danger btn-small" onclick="voidShipment(${s.id}, '${esc(ref)}', '${esc(s.source)}', ${s.box_total})">Undo</button>` : ''}
           ${s.status === 'voided' && s.error_message ? `<button class="btn btn-danger btn-small" onclick="retryUndo(${s.id})">Retry undo</button>` : ''}
         </td>
       </tr>`;
@@ -83,23 +80,19 @@ async function load() {
   }
 }
 
-window.resumeBuy = async (id) => {
-  const row = (await api(`/api/shipments/${id}`));
+window.resumeBuy = async (gid) => {
   try {
-    await api(`/api/shipments/${id}/buy`, {
-      method: 'POST',
-      body: { courier_service_id: row.courier_service_id, rate: row.rate || {} },
-    });
+    await api(`/api/shipments/group/${gid}/buy`, { method: 'POST', body: {} });
   } catch (err) {
     snackbar(err.message, 'error');
     return;
   }
   snackbar('Resuming label purchase…');
   const timer = setInterval(async () => {
-    let s;
-    try { s = await api(`/api/shipments/${id}`); } catch { return; }
-    const st = (s.progress || {}).state;
-    const boxes = (s.progress || {}).boxes || [];
+    let g;
+    try { g = await api(`/api/shipments/group/${gid}`); } catch { return; }
+    const st = (g.progress || {}).state;
+    const boxes = (g.progress || {}).boxes || [];
     const ready = boxes.filter((b) => b.status === 'ready').length;
     if (st === 'buying') snackbar(`Purchasing labels… ${ready}/${boxes.length} ready`);
     if (st === 'done') {
@@ -108,7 +101,7 @@ window.resumeBuy = async (id) => {
       load();
     } else if (st === 'retry' || st === 'error') {
       clearInterval(timer);
-      snackbar((s.progress || {}).message || 'Purchase did not complete — see the Boxes column', 'error');
+      snackbar((g.progress || {}).message || 'Purchase did not complete', 'error');
       load();
     }
   }, 2000);
@@ -146,17 +139,20 @@ async function callVoid(id) {
   load();
 }
 
-window.voidShipment = (id, ref, source) => {
+window.voidShipment = (id, ref, source, boxTotal) => {
   const undoNote = source === 'shopify'
     ? 'the Shopify fulfillment is cancelled (tracking removed from the order)'
     : source === 'backoffice'
       ? 'the tracking number and shipping cost are cleared from the BackOffice invoice'
       : 'no order updates to undo';
+  const boxNote = boxTotal > 1
+    ? ` All ${boxTotal} boxes of this order are undone together.`
+    : '';
   const backdrop = document.getElementById('modal-backdrop');
   document.getElementById('modal').innerHTML = `
     <h3>Undo shipment</h3>
     <p>Undo <strong>${ref}</strong>?</p>
-    <p class="text-secondary" style="margin-top:8px">The label is cancelled at Easyship (UPS/USPS), and ${undoNote}.</p>
+    <p class="text-secondary" style="margin-top:8px">The label is cancelled at Easyship (UPS/USPS), and ${undoNote}.${boxNote}</p>
     <div class="actions">
       <button class="btn btn-text" id="m-cancel">Cancel</button>
       <button class="btn btn-danger" id="m-void">Undo shipment</button>

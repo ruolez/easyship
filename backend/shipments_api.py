@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+import uuid
 
 from flask import Blueprint, current_app, jsonify, request, send_file, session
 
@@ -15,25 +16,29 @@ from util import api_error, audit, central_time
 bp = Blueprint("shipments", __name__, url_prefix="/api/shipments")
 
 LABEL_READY_STATES = {"generated", "printed", "shipping_document_generated"}
+LABEL_MIMETYPES = {"pdf": "application/pdf", "png": "image/png", "zpl": "text/plain"}
+
+LIST_SELECT = """
+    SELECT s.*, u.username AS created_by_username,
+           ss.name AS store_name, bd.name AS db_name
+    FROM shipments s
+    JOIN users u ON u.id = s.created_by
+    LEFT JOIN shopify_stores ss ON ss.id = s.shopify_store_id
+    LEFT JOIN backoffice_dbs bd ON bd.id = s.backoffice_db_id
+"""
 
 
 def _row_to_json(row):
     total_weight = row.get("total_weight_lb")
     if total_weight is None:
         total_weight = sum(float(p.get("weight") or 0) for p in row["parcels"] or [])
-    box_count = len(row["parcels"] or []) or 1
-    progress = row.get("progress") or {}
-    progress_boxes = progress.get("boxes") or []
-    if progress_boxes:
-        boxes_ready = len([b for b in progress_boxes if b.get("status") == "ready"])
-    else:
-        boxes_ready = len(row.get("tracking_numbers") or ([1] if row["tracking_number"] else []))
     return {
-        "box_count": box_count,
-        "boxes_ready": min(boxes_ready, box_count),
+        "id": row["id"],
+        "group_id": row.get("group_id"),
+        "box_number": row.get("box_number") or 1,
+        "box_total": row.get("box_total") or 1,
         "courier_service_id": row["courier_service_id"],
         "rate": row["rate"],
-        "id": row["id"],
         "source": row["source"],
         "service_name": row.get("store_name") or row.get("db_name")
                         or ("Manual" if row["source"] == "manual" else row["source"]),
@@ -66,6 +71,16 @@ def _row_to_json(row):
     }
 
 
+def _get_with_username(shipment_id):
+    return db.query(LIST_SELECT + " WHERE s.id = %s", (shipment_id,), one=True)
+
+
+def _group_rows(group_id):
+    return db.query(LIST_SELECT + " WHERE s.group_id = %s ORDER BY s.box_number", (group_id,))
+
+
+# ============================================================ rates
+
 @bp.post("/rates")
 @login_required
 def get_rates():
@@ -82,47 +97,58 @@ def get_rates():
         return api_error("At least one parcel is required")
     for i, p in enumerate(parcels):
         if not p.get("weight") or float(p["weight"]) <= 0:
-            return api_error(f"Parcel {i + 1} needs a weight greater than 0")
+            return api_error(f"Box {i + 1} needs a weight greater than 0")
 
-    row = db.execute(
-        """INSERT INTO shipments
-             (source, shopify_store_id, shopify_order_id, shopify_order_name,
-              backoffice_db_id, backoffice_invoice_id, backoffice_invoice_number,
-              destination, parcels, items, status, created_by)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s)
-           RETURNING id""",
-        (
-            source,
-            data.get("store_id"),
-            data.get("order_id"),
-            data.get("order_name"),
-            data.get("db_id"),
-            data.get("invoice_id"),
-            data.get("invoice_number"),
-            json.dumps(destination),
-            json.dumps(parcels),
-            json.dumps(items),
-            session["user_id"],
-        ),
-        returning=True,
-    )
-    shipment_id = row["id"]
+    # One local row PER BOX — each box is its own parcel with its own label
+    # and tracking number, linked by a group id.
+    group_id = uuid.uuid4().hex
+    box_total = len(parcels)
+    row_ids = []
+    for i, parcel in enumerate(parcels):
+        row = db.execute(
+            """INSERT INTO shipments
+                 (group_id, box_number, box_total,
+                  source, shopify_store_id, shopify_order_id, shopify_order_name,
+                  backoffice_db_id, backoffice_invoice_id, backoffice_invoice_number,
+                  destination, parcels, items, status, created_by)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s)
+               RETURNING id""",
+            (
+                group_id, i + 1, box_total,
+                source,
+                data.get("store_id"),
+                data.get("order_id"),
+                data.get("order_name"),
+                data.get("db_id"),
+                data.get("invoice_id"),
+                data.get("invoice_number"),
+                json.dumps(destination),
+                json.dumps([parcel]),
+                json.dumps(items if i == 0 else []),
+                session["user_id"],
+            ),
+            returning=True,
+        )
+        row_ids.append(row["id"])
 
     try:
         es_list = easyship.create_shipments(destination, parcels, items)
     except EasyshipError as e:
-        db.execute(
-            "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
-            (str(e), shipment_id),
-        )
+        for rid in row_ids:
+            db.execute(
+                "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
+                (str(e), rid),
+            )
         return api_error(str(e), 502)
 
-    ids = [s["easyship_shipment_id"] for s in es_list]
-    db.execute(
-        """UPDATE shipments SET easyship_shipment_id=%s, easyship_shipment_ids=%s,
-           status='rated', error_message=NULL, updated_at=now() WHERE id=%s""",
-        (ids[0], json.dumps(ids), shipment_id),
-    )
+    for rid, es in zip(row_ids, es_list):
+        sid = es["easyship_shipment_id"]
+        db.execute(
+            """UPDATE shipments SET easyship_shipment_id=%s, easyship_shipment_ids=%s,
+               status='rated', error_message=NULL, updated_at=now() WHERE id=%s""",
+            (sid, json.dumps([sid]), rid),
+        )
+
     rates = combine_rates(es_list)
     if not rates:
         message = "No rates available for this shipment. Check the address and parcel details."
@@ -131,9 +157,10 @@ def get_rates():
                        "Check each box's weight and dimensions.")
         return api_error(message, 422)
     return jsonify({
-        "shipment_id": shipment_id,
-        "easyship_shipment_id": ids[0],
-        "box_count": len(ids),
+        "group_id": group_id,
+        "shipment_id": row_ids[0],
+        "shipment_ids": row_ids,
+        "box_count": box_total,
         "rates": rates,
     })
 
@@ -164,7 +191,9 @@ def combine_rates(es_list):
     return sorted(combined, key=lambda r: r["total_charge"])
 
 
-def _set_progress(shipment_id, state, boxes=None, message=None, extra=None):
+# ============================================================ group buy
+
+def _set_group_progress(primary_id, state, boxes=None, message=None, extra=None):
     progress = {"state": state}
     if boxes is not None:
         progress["boxes"] = boxes
@@ -174,103 +203,158 @@ def _set_progress(shipment_id, state, boxes=None, message=None, extra=None):
         progress.update(extra)
     db.execute(
         "UPDATE shipments SET progress=%s, updated_at=now() WHERE id=%s",
-        (json.dumps(progress), shipment_id),
+        (json.dumps(progress), primary_id),
     )
 
 
-def _box_progress(ids, state, errors=None):
+def _group_boxes_snapshot(rows, live_state=None, errors=None):
+    """Per-box status list built from DB rows plus in-flight Easyship state."""
+    live_state = live_state or {}
     errors = errors or {}
     boxes = []
-    for i, sid in enumerate(ids):
-        s = state.get(sid)
-        box = {"box": i + 1}
-        if not s or s.get("label_state") in (None, "not_created"):
-            box["status"] = "purchasing"
-        elif s.get("label_state") in LABEL_READY_STATES:
-            numbers = easyship.extract_tracking_numbers(s)
-            box.update(status="ready", tracking=numbers[0] if numbers else None)
-        elif s.get("label_state") == "failed":
-            box["status"] = "failed"
+    for row in rows:
+        box = {"box": row["box_number"], "shipment_id": row["id"]}
+        sid = row["easyship_shipment_id"]
+        if row["status"] in ("label_created", "fulfilled"):
+            box.update(status="ready", tracking=row["tracking_number"])
+        elif sid in live_state and live_state[sid]:
+            ls = live_state[sid].get("label_state")
+            if ls in LABEL_READY_STATES:
+                numbers = easyship.extract_tracking_numbers(live_state[sid])
+                box.update(status="ready", tracking=numbers[0] if numbers else None)
+            elif ls == "failed":
+                box["status"] = "failed"
+            elif ls in (None, "not_created"):
+                box["status"] = "purchasing"
+            else:
+                box["status"] = "generating"
         else:
-            box["status"] = "generating"
+            box["status"] = "purchasing" if row["status"] in ("rated", "error") else row["status"]
         if sid in errors and box["status"] in ("purchasing", "failed"):
             box["error"] = errors[sid][:200]
         boxes.append(box)
     return boxes
 
 
-@bp.post("/<int:shipment_id>/buy")
+@bp.post("/group/<group_id>/buy")
 @login_required
-def buy(shipment_id):
+def group_buy(group_id):
     data = request.get_json(silent=True) or {}
     courier_service_id = data.get("courier_service_id")
+    rows = _group_rows(group_id)
+    if not rows:
+        return api_error("Shipment group not found", 404)
+    primary = rows[0]
+    courier_service_id = courier_service_id or primary["courier_service_id"]
     if not courier_service_id:
         return api_error("courier_service_id is required")
+    rate = data.get("rate") or primary["rate"] or {}
 
-    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
-    if not row:
-        return api_error("Shipment not found", 404)
-    if row["status"] not in ("rated", "error"):
-        return api_error(f"Shipment is {row['status']} — cannot buy a label")
-    if not row["easyship_shipment_id"]:
-        return api_error("Shipment has no Easyship shipment id — get rates first")
-    progress = row["progress"] or {}
+    progress = primary["progress"] or {}
     if progress.get("state") == "buying":
-        # the worker updates the row every few seconds; a long-stale 'buying'
-        # means the process died mid-purchase — allow a retry then
         from datetime import datetime, timedelta, timezone
-        if datetime.now(timezone.utc) - row["updated_at"] < timedelta(minutes=5):
+        if datetime.now(timezone.utc) - primary["updated_at"] < timedelta(minutes=5):
             return api_error("Label purchase already in progress", 409)
 
-    ids = row["easyship_shipment_ids"] or [row["easyship_shipment_id"]]
-    # persist the chosen courier so an interrupted purchase can be resumed
-    # from the Parcels page with the same selection
-    db.execute(
-        "UPDATE shipments SET courier_service_id=%s, rate=%s, updated_at=now() WHERE id=%s",
-        (courier_service_id, json.dumps(data.get("rate") or {}), shipment_id),
-    )
-    _set_progress(shipment_id, "buying", boxes=[
-        {"box": i + 1, "status": "purchasing"} for i in range(len(ids))
-    ])
+    targets = [r for r in rows if r["status"] in ("rated", "error") and r["easyship_shipment_id"]]
+    if not targets:
+        return api_error("Nothing to purchase — all boxes already have labels or were voided")
+
+    for r in rows:
+        db.execute(
+            "UPDATE shipments SET courier_service_id=%s, rate=%s, updated_at=now() WHERE id=%s",
+            (courier_service_id, json.dumps(rate), r["id"]),
+        )
+    _set_group_progress(primary["id"], "buying", boxes=_group_boxes_snapshot(rows))
 
     app = current_app._get_current_object()
-    worker = threading.Thread(
-        target=_buy_worker,
-        args=(app, shipment_id, courier_service_id, data.get("rate") or {}, session["user_id"]),
+    threading.Thread(
+        target=_group_buy_worker,
+        args=(app, group_id, courier_service_id, rate, session["user_id"]),
         daemon=True,
-    )
-    worker.start()
-    return jsonify({"started": True, "box_count": len(ids)})
+    ).start()
+    return jsonify({"started": True, "box_count": len(rows)})
 
 
-def _buy_worker(app, shipment_id, courier_service_id, rate, user_id):
+def _group_buy_worker(app, group_id, courier_service_id, rate, user_id):
     with app.app_context():
+        primary_id = None
         try:
-            _buy_impl(shipment_id, courier_service_id, rate, user_id)
-        except Exception as e:  # never leave the row stuck in 'buying'
-            db.execute(
-                "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
-                (str(e), shipment_id),
+            rows = _group_rows(group_id)
+            primary_id = rows[0]["id"]
+            _group_buy_impl(group_id, courier_service_id, rate, user_id)
+        except Exception as e:  # never leave the group stuck in 'buying'
+            if primary_id:
+                _set_group_progress(primary_id, "error", message=str(e))
+
+
+def _per_box_cost(es, courier_service_id, rate, box_total):
+    for r in es.get("rates") or []:
+        if (r.get("courier_service") or {}).get("id") == courier_service_id:
+            return r.get("total_charge")
+    total = rate.get("total_charge")
+    if total and box_total:
+        return round(float(total) / box_total, 2)
+    return None
+
+
+def _finalize_row(row, es, courier_service_id, rate, box_total):
+    """A box's label is ready: save its label file and complete its row."""
+    numbers = easyship.extract_tracking_numbers(es)
+    tracking = numbers[0] if numbers else None
+    docs = easyship.extract_label_documents(es)
+    if not docs:
+        try:
+            docs = easyship.extract_label_documents(
+                easyship.get_shipment(row["easyship_shipment_id"], pdf_4x6=True)
             )
-            _set_progress(shipment_id, "error", message=str(e))
+        except EasyshipError:
+            pass
+    label_bytes, label_format = easyship.merge_label_documents(docs)
+    label_path = None
+    if label_bytes:
+        os.makedirs(config.LABELS_DIR, exist_ok=True)
+        label_path = os.path.join(config.LABELS_DIR, f"{row['id']}.{label_format or 'pdf'}")
+        with open(label_path, "wb") as f:
+            f.write(label_bytes)
+
+    courier = es.get("courier_service") or {}
+    weight = sum(float(p.get("weight") or 0) for p in row["parcels"] or [])
+    db.execute(
+        """UPDATE shipments SET
+             courier_name=%s, courier_umbrella_name=%s,
+             shipping_cost=%s, total_weight_lb=%s,
+             tracking_number=%s, tracking_numbers=%s, label_path=%s, label_format=%s,
+             label_created_at=now(),
+             status='label_created', error_message=NULL, updated_at=now()
+           WHERE id=%s""",
+        (
+            courier.get("name") or rate.get("courier_name"),
+            courier.get("umbrella_name") or rate.get("umbrella_name"),
+            _per_box_cost(es, courier_service_id, rate, box_total),
+            round(weight, 2),
+            tracking,
+            json.dumps(numbers) if numbers else None,
+            label_path,
+            label_format or "pdf",
+            row["id"],
+        ),
+    )
 
 
-def _buy_impl(shipment_id, courier_service_id, rate, user_id):
-    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
-    ids = row["easyship_shipment_ids"] or [row["easyship_shipment_id"]]
+def _group_buy_impl(group_id, courier_service_id, rate, user_id):
+    rows = _group_rows(group_id)
+    primary_id = rows[0]["id"]
+    box_total = len(rows)
+    targets = {r["easyship_shipment_id"]: r for r in rows
+               if r["status"] in ("rated", "error") and r["easyship_shipment_id"]}
+    sids = list(targets.keys())
 
-    # Buy every box's label in parallel (one Easyship shipment per box).
-    results = easyship.buy_labels(ids, courier_service_id)
-
-    # Unified polling: a buy error may mean "already purchased" (retry after an
-    # earlier timeout) or a gateway timeout while the label still generates —
-    # keep refreshing every shipment until each is ready, failed, or we run out
-    # of time. Retrying later can never double-charge: the same Easyship
-    # shipments are reused and each can carry only one label.
     state = {}
     box_errors = {}
     last_error = None
-    for sid in ids:
+    results = easyship.buy_labels(sids, courier_service_id)
+    for sid in sids:
         res = results.get(sid)
         if isinstance(res, EasyshipError):
             last_error = res
@@ -279,12 +363,24 @@ def _buy_impl(shipment_id, courier_service_id, rate, user_id):
         else:
             state[sid] = res
 
+    finalized = set()
+
+    def maybe_finalize():
+        """Complete rows for boxes whose labels are ready — but the group
+        result (writebacks, printing, done state) waits for ALL boxes."""
+        for sid, row in targets.items():
+            if sid in finalized:
+                continue
+            s = state.get(sid)
+            if s and s.get("label_state") in LABEL_READY_STATES:
+                _finalize_row(row, s, courier_service_id, rate, box_total)
+                finalized.add(sid)
+
     def pending():
         return [
-            sid for sid in ids
-            if not state[sid] or (
-                state[sid].get("label_state") not in LABEL_READY_STATES
-                and state[sid].get("label_state") != "failed"
+            sid for sid in sids
+            if sid not in finalized and not (
+                state.get(sid) and state[sid].get("label_state") == "failed"
             )
         ]
 
@@ -292,9 +388,13 @@ def _buy_impl(shipment_id, courier_service_id, rate, user_id):
         timeout_s = int(db.get_setting("label_timeout_seconds") or 120)
     except ValueError:
         timeout_s = 120
-    _set_progress(shipment_id, "buying", boxes=_box_progress(ids, state, box_errors))
     deadline = time.monotonic() + max(timeout_s, 30)
     rebuy_next = {}
+
+    maybe_finalize()
+    _set_group_progress(primary_id, "buying",
+                        boxes=_group_boxes_snapshot(_group_rows(group_id), state, box_errors))
+
     while pending() and time.monotonic() < deadline:
         time.sleep(3)
         refreshed = easyship.get_shipments(pending())
@@ -304,14 +404,13 @@ def _buy_impl(shipment_id, courier_service_id, rate, user_id):
             else:
                 state[sid] = res
 
-        # A box still at not_created means its purchase request was LOST
-        # (rate limit / gateway) — polling alone would wait forever. Re-issue
-        # the purchase; a shipment can only carry one label, so this can
-        # never double-charge.
+        # A purchase request that was lost (rate limit / gateway) leaves the
+        # shipment at not_created — polling alone would wait forever, so
+        # re-issue it. One label max per shipment: can never double-charge.
         now = time.monotonic()
         rebuy_ids = [
             sid for sid in pending()
-            if (not state[sid] or state[sid].get("label_state") in (None, "not_created"))
+            if (not state.get(sid) or state[sid].get("label_state") in (None, "not_created"))
             and now >= rebuy_next.get(sid, 0)
         ]
         if rebuy_ids:
@@ -324,173 +423,194 @@ def _buy_impl(shipment_id, courier_service_id, rate, user_id):
                     state[sid] = res
                     box_errors.pop(sid, None)
 
-        _set_progress(shipment_id, "buying", boxes=_box_progress(ids, state, box_errors))
+        maybe_finalize()
+        _set_group_progress(primary_id, "buying",
+                            boxes=_group_boxes_snapshot(_group_rows(group_id), state, box_errors))
 
-    failed = [sid for sid in ids if state[sid] and state[sid].get("label_state") == "failed"]
-    if failed:
-        message = f"Label generation failed at Easyship for {len(failed)} of {len(ids)} box(es)"
-        db.execute(
-            "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
-            (message, shipment_id),
-        )
-        _set_progress(shipment_id, "error", boxes=_box_progress(ids, state, box_errors), message=message)
+    rows = _group_rows(group_id)
+    incomplete = [r for r in rows if r["status"] not in ("label_created", "fulfilled")]
+    if incomplete:
+        failed = [sid for sid in sids
+                  if state.get(sid) and state[sid].get("label_state") == "failed"]
+        if failed:
+            message = f"Label generation failed at Easyship for {len(failed)} of {box_total} box(es)"
+            progress_state = "error"
+        else:
+            message = (
+                f"{last_error or 'Easyship did not finish in time.'} "
+                f"{len(incomplete)} of {box_total} label(s) not confirmed — click Resume/Print "
+                "label again to finish; completed boxes are never re-charged."
+            )
+            progress_state = "retry"
+        for r in incomplete:
+            db.execute(
+                "UPDATE shipments SET status=%s, error_message=%s, updated_at=now() WHERE id=%s",
+                ("error" if progress_state == "error" else "rated", message, r["id"]),
+            )
+        _set_group_progress(primary_id, progress_state,
+                            boxes=_group_boxes_snapshot(_group_rows(group_id), state, box_errors),
+                            message=message)
         return
 
-    if pending():
-        message = (
-            f"{last_error or 'Easyship did not finish in time.'} "
-            f"{len(pending())} of {len(ids)} label(s) not confirmed yet — click Print label "
-            "again to retry; the same shipments are reused so you cannot be charged twice."
-        )
-        db.execute(
-            "UPDATE shipments SET status='rated', error_message=%s, updated_at=now() WHERE id=%s",
-            (message, shipment_id),
-        )
-        _set_progress(shipment_id, "retry", boxes=_box_progress(ids, state, box_errors), message=message)
-        return
-
-    # All boxes ready: collect tracking numbers and label documents in box order
-    tracking_numbers = []
-    docs = []
-    for sid in ids:
-        for n in easyship.extract_tracking_numbers(state[sid]):
-            if n not in tracking_numbers:
-                tracking_numbers.append(n)
-        sid_docs = easyship.extract_label_documents(state[sid])
-        if not sid_docs:
-            try:
-                sid_docs = easyship.extract_label_documents(
-                    easyship.get_shipment(sid, pdf_4x6=True)
-                )
-            except EasyshipError:
-                pass
-        docs.extend(sid_docs)
-
-    tracking_number = tracking_numbers[0] if tracking_numbers else None
-    es = state[ids[0]]
-    courier = es.get("courier_service") or {}
-    total_charge = rate.get("total_charge")
-    _set_progress(shipment_id, "finalizing", boxes=_box_progress(ids, state),
-                  message="Saving label and updating order…")
-    label_bytes, label_format = easyship.merge_label_documents(docs)
-
-    label_path = None
-    if label_bytes:
-        os.makedirs(config.LABELS_DIR, exist_ok=True)
-        label_path = os.path.join(config.LABELS_DIR, f"{shipment_id}.{label_format or 'pdf'}")
-        with open(label_path, "wb") as f:
-            f.write(label_bytes)
-
-    total_weight_lb = sum(float(p.get("weight") or 0) for p in row["parcels"] or [])
-    db.execute(
-        """UPDATE shipments SET
-             courier_name=%s, courier_service_id=%s, courier_umbrella_name=%s,
-             rate=%s, shipping_cost=%s, total_weight_lb=%s,
-             tracking_number=%s, tracking_numbers=%s, label_path=%s, label_format=%s,
-             label_created_at=now(),
-             status='label_created', error_message=NULL, updated_at=now()
-           WHERE id=%s""",
-        (
-            courier.get("name") or rate.get("courier_name"),
-            courier_service_id,
-            courier.get("umbrella_name") or rate.get("umbrella_name"),
-            json.dumps(rate) if rate else None,
-            total_charge,
-            round(total_weight_lb, 2),
-            tracking_number,
-            json.dumps(tracking_numbers) if tracking_numbers else None,
-            label_path,
-            label_format or "pdf",
-            shipment_id,
-        ),
-    )
+    # Every box has its label — now (and only now) update the order and print.
     audit("label.buy", {
-        "shipment_id": shipment_id,
-        "easyship_shipment_ids": ids,
-        "courier": courier.get("name"),
-        "cost": total_charge,
+        "group_id": group_id,
+        "boxes": box_total,
+        "shipment_ids": [r["id"] for r in rows],
     }, user_id=user_id)
+    _set_group_progress(primary_id, "finalizing",
+                        boxes=_group_boxes_snapshot(rows, state),
+                        message="All labels ready — updating order and printing…")
+    writebacks = run_group_writebacks(group_id)
+    printed = _print_group(group_id)
+    _set_group_progress(primary_id, "done",
+                        boxes=_group_boxes_snapshot(_group_rows(group_id), state),
+                        extra={"printed": printed, "writebacks": writebacks})
 
-    writebacks = run_writebacks(shipment_id)
-    printed = _auto_print(shipment_id)
-    _set_progress(shipment_id, "done", boxes=_box_progress(ids, state),
-                  extra={"printed": printed, "writebacks": writebacks})
+
+# ============================================================ group status / label / print
+
+@bp.get("/group/<group_id>")
+@login_required
+def group_status(group_id):
+    rows = _group_rows(group_id)
+    if not rows:
+        return api_error("Shipment group not found", 404)
+    return jsonify({
+        "group_id": group_id,
+        "shipments": [_row_to_json(r) for r in rows],
+        "progress": rows[0]["progress"],
+    })
 
 
-def _auto_print(shipment_id):
-    """Network-print the label right after purchase when print_mode is 'network'.
-    Returns 'ok', an error string, or None when browser printing is configured."""
+def _group_label_bytes(group_id):
+    rows = _group_rows(group_id)
+    docs = []
+    for row in rows:
+        if row["label_path"] and os.path.exists(row["label_path"]):
+            with open(row["label_path"], "rb") as f:
+                data = f.read()
+            docs.append((data, easyship.sniff_label_format(data, row["label_format"] or "pdf")))
+    return easyship.merge_label_documents(docs)
+
+
+@bp.get("/group/<group_id>/label")
+@login_required
+def group_label(group_id):
+    data, fmt = _group_label_bytes(group_id)
+    if not data:
+        return api_error("No labels stored for this shipment", 404)
+    import io
+    response = send_file(
+        io.BytesIO(data),
+        mimetype=LABEL_MIMETYPES.get(fmt, "application/pdf"),
+        download_name=f"labels-{group_id[:8]}.{fmt}",
+        as_attachment=False,
+    )
+    response.headers["Content-Disposition"] = f'inline; filename="labels-{group_id[:8]}.{fmt}"'
+    return response
+
+
+def _print_group(group_id):
+    """Network-print all labels of the group as one job when configured.
+    Returns 'ok', an error string, or None in browser mode."""
     if (db.get_setting("print_mode") or "browser") != "network":
         return None
-    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
     try:
         import printer
-        printer.print_shipment_label(row)
+        data, _fmt = _group_label_bytes(group_id)
+        if not data:
+            return "error: no label files stored"
+        printer.network_print(data)
         return "ok"
     except Exception as e:
         return f"error: {e}"
 
 
-def run_writebacks(shipment_id):
-    """Push tracking to Shopify / BackOffice. Never raises — records errors on the row."""
-    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
+@bp.post("/group/<group_id>/print")
+@login_required
+def group_print(group_id):
+    try:
+        import printer
+        data, _fmt = _group_label_bytes(group_id)
+        if not data:
+            return api_error("No labels stored for this shipment", 404)
+        printer.network_print(data)
+    except Exception as e:
+        return api_error(str(e))
+    audit("label.print", {"group_id": group_id})
+    return jsonify({"ok": True})
+
+
+# ============================================================ writebacks
+
+def run_group_writebacks(group_id):
+    """Write tracking for the WHOLE group once: box 1's number to the order's
+    tracking field, the rest appended (BackOffice Notes / Shopify numbers)."""
+    rows = _group_rows(group_id)
+    ready = [r for r in rows if r["tracking_number"]]
+    if not ready:
+        return {"skipped": "no tracking numbers yet"}
+    primary = rows[0]
+    numbers = [r["tracking_number"] for r in rows if r["tracking_number"]]
     results = {}
     errors = []
 
-    if not row["tracking_number"]:
-        return {"skipped": "no tracking number yet"}
-
-    if row["source"] == "shopify" and not row["writeback_shopify_at"]:
+    if primary["source"] == "shopify" and not primary["writeback_shopify_at"]:
         try:
             import shopify_client
             fulfillment = shopify_client.fulfill_order(
-                row["shopify_store_id"], row["shopify_order_id"],
-                row["tracking_number"], row["courier_name"],
-                all_numbers=row["tracking_numbers"] or None,
+                primary["shopify_store_id"], primary["shopify_order_id"],
+                numbers[0], primary["courier_name"],
+                all_numbers=numbers,
             )
-            db.execute(
-                """UPDATE shipments SET writeback_shopify_at=now(),
-                   shopify_fulfillment_id=%s, updated_at=now() WHERE id=%s""",
-                ((fulfillment or {}).get("id"), shipment_id),
-            )
+            for r in rows:
+                db.execute(
+                    """UPDATE shipments SET writeback_shopify_at=now(),
+                       shopify_fulfillment_id=%s, updated_at=now() WHERE id=%s""",
+                    ((fulfillment or {}).get("id"), r["id"]),
+                )
             results["shopify"] = "ok"
         except Exception as e:
             results["shopify"] = f"error: {e}"
             errors.append(f"Shopify: {e}")
 
-    if row["source"] == "backoffice" and not row["writeback_backoffice_at"]:
+    if primary["source"] == "backoffice" and not primary["writeback_backoffice_at"]:
         try:
             import backoffice
+            total_cost = sum(float(r["shipping_cost"] or 0) for r in rows) or None
             backoffice.write_tracking(
-                row["backoffice_db_id"], row["backoffice_invoice_id"],
-                row["tracking_number"], row["shipping_cost"],
-                extra_numbers=(row["tracking_numbers"] or [])[1:],
+                primary["backoffice_db_id"], primary["backoffice_invoice_id"],
+                numbers[0], total_cost,
+                extra_numbers=numbers[1:],
             )
-            db.execute(
-                "UPDATE shipments SET writeback_backoffice_at=now(), updated_at=now() WHERE id=%s",
-                (shipment_id,),
-            )
+            for r in rows:
+                db.execute(
+                    "UPDATE shipments SET writeback_backoffice_at=now(), updated_at=now() WHERE id=%s",
+                    (r["id"],),
+                )
             results["backoffice"] = "ok"
         except Exception as e:
             results["backoffice"] = f"error: {e}"
             errors.append(f"BackOffice: {e}")
 
-    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
+    rows = _group_rows(group_id)
     done = (
-        (row["source"] == "manual")
-        or (row["source"] == "shopify" and row["writeback_shopify_at"])
-        or (row["source"] == "backoffice" and row["writeback_backoffice_at"])
+        primary["source"] == "manual"
+        or (primary["source"] == "shopify" and rows[0]["writeback_shopify_at"])
+        or (primary["source"] == "backoffice" and rows[0]["writeback_backoffice_at"])
     )
-    if done and row["status"] == "label_created":
-        db.execute(
-            "UPDATE shipments SET status='fulfilled', error_message=NULL, updated_at=now() WHERE id=%s",
-            (shipment_id,),
-        )
-    elif errors:
-        db.execute(
-            "UPDATE shipments SET error_message=%s, updated_at=now() WHERE id=%s",
-            ("; ".join(errors), shipment_id),
-        )
+    for r in rows:
+        if done and r["status"] == "label_created":
+            db.execute(
+                "UPDATE shipments SET status='fulfilled', error_message=NULL, updated_at=now() WHERE id=%s",
+                (r["id"],),
+            )
+        elif errors:
+            db.execute(
+                "UPDATE shipments SET error_message=%s, updated_at=now() WHERE id=%s",
+                ("; ".join(errors), r["id"]),
+            )
     return results
 
 
@@ -502,20 +622,55 @@ def retry_writeback(shipment_id):
         return api_error("Shipment not found", 404)
     if row["status"] not in ("label_created", "fulfilled"):
         return api_error("No label yet — nothing to write back")
-    results = run_writebacks(shipment_id)
+    if row["group_id"]:
+        results = run_group_writebacks(row["group_id"])
+    else:
+        results = _run_legacy_writebacks(shipment_id)
     updated = _get_with_username(shipment_id)
     return jsonify({**_row_to_json(updated), "writebacks": results})
 
 
-LIST_SELECT = """
-    SELECT s.*, u.username AS created_by_username,
-           ss.name AS store_name, bd.name AS db_name
-    FROM shipments s
-    JOIN users u ON u.id = s.created_by
-    LEFT JOIN shopify_stores ss ON ss.id = s.shopify_store_id
-    LEFT JOIN backoffice_dbs bd ON bd.id = s.backoffice_db_id
-"""
+def _run_legacy_writebacks(shipment_id):
+    """Rows created before per-box groups existed."""
+    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
+    results = {}
+    if not row["tracking_number"]:
+        return {"skipped": "no tracking number yet"}
+    if row["source"] == "shopify" and not row["writeback_shopify_at"]:
+        try:
+            import shopify_client
+            fulfillment = shopify_client.fulfill_order(
+                row["shopify_store_id"], row["shopify_order_id"],
+                row["tracking_number"], row["courier_name"],
+                all_numbers=row["tracking_numbers"] or None,
+            )
+            db.execute(
+                """UPDATE shipments SET writeback_shopify_at=now(), status='fulfilled',
+                   shopify_fulfillment_id=%s, updated_at=now() WHERE id=%s""",
+                ((fulfillment or {}).get("id"), shipment_id),
+            )
+            results["shopify"] = "ok"
+        except Exception as e:
+            results["shopify"] = f"error: {e}"
+    if row["source"] == "backoffice" and not row["writeback_backoffice_at"]:
+        try:
+            import backoffice
+            backoffice.write_tracking(
+                row["backoffice_db_id"], row["backoffice_invoice_id"],
+                row["tracking_number"], row["shipping_cost"],
+                extra_numbers=(row["tracking_numbers"] or [])[1:],
+            )
+            db.execute(
+                "UPDATE shipments SET writeback_backoffice_at=now(), status='fulfilled', updated_at=now() WHERE id=%s",
+                (shipment_id,),
+            )
+            results["backoffice"] = "ok"
+        except Exception as e:
+            results["backoffice"] = f"error: {e}"
+    return results
 
+
+# ============================================================ list / detail
 
 @bp.get("")
 @login_required
@@ -546,7 +701,7 @@ def list_shipments():
     if date_to:
         sql += " AND (s.created_at AT TIME ZONE 'America/Chicago')::date <= %s"
         params.append(date_to)
-    sql += " ORDER BY s.created_at DESC LIMIT %s"
+    sql += " ORDER BY s.created_at DESC, s.box_number ASC LIMIT %s"
     params.append(limit)
     rows = db.query(sql, params)
     return jsonify([_row_to_json(r) for r in rows])
@@ -562,10 +717,6 @@ def creators():
     return jsonify([r["username"] for r in rows])
 
 
-def _get_with_username(shipment_id):
-    return db.query(LIST_SELECT + " WHERE s.id = %s", (shipment_id,), one=True)
-
-
 @bp.get("/<int:shipment_id>")
 @login_required
 def get_shipment(shipment_id):
@@ -573,9 +724,6 @@ def get_shipment(shipment_id):
     if not row:
         return api_error("Shipment not found", 404)
     return jsonify(_row_to_json(row))
-
-
-LABEL_MIMETYPES = {"pdf": "application/pdf", "png": "image/png", "zpl": "text/plain"}
 
 
 @bp.get("/<int:shipment_id>/label")
@@ -586,8 +734,6 @@ def get_label(shipment_id):
         return api_error("No label stored for this shipment", 404)
     if not os.path.exists(row["label_path"]):
         return api_error("Label file missing from storage", 410)
-    # Sniff the real type — older rows may have been stored with a wrong
-    # extension (e.g. 'url'), which made browsers download instead of display.
     with open(row["label_path"], "rb") as f:
         head = f.read(16)
     if head.startswith(b"%PDF"):
@@ -638,11 +784,13 @@ def print_label(shipment_id):
     return jsonify({"ok": True})
 
 
+# ============================================================ void / undo
+
 @bp.post("/<int:shipment_id>/void")
 @login_required
 def void(shipment_id):
-    """Undo a shipment: cancel the label at Easyship, remove the tracking number
-    from Shopify (cancel fulfillment) / BackOffice (clear TrackingNo, ShippingCost).
+    """Undo a shipment: cancels the label(s) at Easyship and removes tracking
+    from Shopify / BackOffice. For a multi-box group this undoes ALL boxes.
     Calling it again on a voided shipment retries any undo step that failed."""
     row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
     if not row:
@@ -650,58 +798,73 @@ def void(shipment_id):
     if row["status"] not in ("label_created", "fulfilled", "rated", "error", "voided"):
         return api_error(f"Shipment is {row['status']} — cannot void")
 
-    if row["status"] != "voided" and row["easyship_shipment_id"]:
-        ids = row["easyship_shipment_ids"] or [row["easyship_shipment_id"]]
-        cancel_errors = easyship.cancel_all(ids)
+    if row["group_id"]:
+        rows = db.query("SELECT * FROM shipments WHERE group_id = %s ORDER BY box_number",
+                        (row["group_id"],))
+    else:
+        rows = [row]
+    primary = rows[0]
+
+    if row["status"] != "voided":
+        all_ids = []
+        for r in rows:
+            all_ids += r["easyship_shipment_ids"] or ([r["easyship_shipment_id"]] if r["easyship_shipment_id"] else [])
+        cancel_errors = easyship.cancel_all(all_ids)
         if cancel_errors:
             return api_error("; ".join(cancel_errors), 502)
 
     undo = {}
     errors = []
+    numbers = [r["tracking_number"] for r in rows if r["tracking_number"]]
 
-    if row["writeback_shopify_at"]:
+    if primary["writeback_shopify_at"]:
         try:
             import shopify_client
-            fulfillment_gid = row["shopify_fulfillment_id"]
-            if not fulfillment_gid and row["tracking_number"]:
+            fulfillment_gid = primary["shopify_fulfillment_id"]
+            if not fulfillment_gid and numbers:
                 fulfillment_gid = shopify_client.find_fulfillment_by_tracking(
-                    row["shopify_store_id"], row["shopify_order_id"], row["tracking_number"]
+                    primary["shopify_store_id"], primary["shopify_order_id"], numbers[0]
                 )
             if fulfillment_gid:
-                shopify_client.cancel_fulfillment(row["shopify_store_id"], fulfillment_gid)
-            db.execute(
-                """UPDATE shipments SET writeback_shopify_at=NULL,
-                   shopify_fulfillment_id=NULL, updated_at=now() WHERE id=%s""",
-                (shipment_id,),
-            )
+                shopify_client.cancel_fulfillment(primary["shopify_store_id"], fulfillment_gid)
+            for r in rows:
+                db.execute(
+                    """UPDATE shipments SET writeback_shopify_at=NULL,
+                       shopify_fulfillment_id=NULL, updated_at=now() WHERE id=%s""",
+                    (r["id"],),
+                )
             undo["shopify"] = "fulfillment cancelled" if fulfillment_gid else "no matching fulfillment found"
         except Exception as e:
             undo["shopify"] = f"error: {e}"
             errors.append(f"Shopify undo: {e}")
 
-    if row["writeback_backoffice_at"]:
+    if primary["writeback_backoffice_at"]:
         try:
             import backoffice
             backoffice.clear_tracking(
-                row["backoffice_db_id"], row["backoffice_invoice_id"], row["tracking_number"],
-                extra_numbers=(row["tracking_numbers"] or [])[1:],
+                primary["backoffice_db_id"], primary["backoffice_invoice_id"],
+                numbers[0] if numbers else primary["tracking_number"],
+                extra_numbers=numbers[1:],
             )
-            db.execute(
-                "UPDATE shipments SET writeback_backoffice_at=NULL, updated_at=now() WHERE id=%s",
-                (shipment_id,),
-            )
+            for r in rows:
+                db.execute(
+                    "UPDATE shipments SET writeback_backoffice_at=NULL, updated_at=now() WHERE id=%s",
+                    (r["id"],),
+                )
             undo["backoffice"] = "tracking number cleared"
         except Exception as e:
             undo["backoffice"] = f"error: {e}"
             errors.append(f"BackOffice undo: {e}")
 
-    db.execute(
-        "UPDATE shipments SET status='voided', error_message=%s, updated_at=now() WHERE id=%s",
-        ("; ".join(errors) if errors else None, shipment_id),
-    )
+    for r in rows:
+        db.execute(
+            "UPDATE shipments SET status='voided', error_message=%s, updated_at=now() WHERE id=%s",
+            ("; ".join(errors) if errors else None, r["id"]),
+        )
     audit("label.void", {
         "shipment_id": shipment_id,
-        "easyship_shipment_id": row["easyship_shipment_id"],
+        "group_id": row["group_id"],
+        "boxes": len(rows),
         "undo": undo,
     })
-    return jsonify({"ok": not errors, "undo": undo, "errors": errors})
+    return jsonify({"ok": not errors, "undo": undo, "errors": errors, "boxes": len(rows)})

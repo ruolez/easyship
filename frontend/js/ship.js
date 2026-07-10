@@ -2,6 +2,8 @@ const params = new URLSearchParams(location.search);
 const source = params.get('source') || 'manual';
 let orderContext = { source };
 let localShipmentId = null;
+let groupId = null;
+let boxCount = 1;
 let rates = [];
 let selectedRate = null;
 let orderItems = [];
@@ -234,6 +236,8 @@ document.getElementById('get-rates').addEventListener('click', async () => {
       },
     });
     localShipmentId = res.shipment_id;
+    groupId = res.group_id;
+    boxCount = res.box_count || 1;
     rates = res.rates;
     renderRates();
     document.getElementById('panel-rates').style.display = '';
@@ -305,13 +309,13 @@ function renderBuyProgress(progress) {
 let buyPollTimer = null;
 
 document.getElementById('buy-label').addEventListener('click', async () => {
-  if (!selectedRate || !localShipmentId) return;
+  if (!selectedRate || !groupId) return;
   const btn = document.getElementById('buy-label');
   const spinner = document.getElementById('buy-spinner');
   btn.disabled = true;
   spinner.style.display = '';
   try {
-    await api(`/api/shipments/${localShipmentId}/buy`, {
+    await api(`/api/shipments/group/${groupId}/buy`, {
       method: 'POST',
       body: { courier_service_id: selectedRate.courier_service_id, rate: selectedRate },
     });
@@ -322,25 +326,41 @@ document.getElementById('buy-label').addEventListener('click', async () => {
     return;
   }
   buyPollTimer = setInterval(async () => {
-    let s;
+    let g;
     try {
-      s = await api(`/api/shipments/${localShipmentId}`);
+      g = await api(`/api/shipments/group/${groupId}`);
     } catch { return; } // transient poll failure — keep polling
-    const progress = s.progress || {};
+    const progress = g.progress || {};
     renderBuyProgress(progress);
-    if (['label_created', 'fulfilled'].includes(s.status) && progress.state === 'done') {
+    const allDone = g.shipments.every((r) => ['label_created', 'fulfilled'].includes(r.status));
+    if (progress.state === 'done' && allDone) {
       clearInterval(buyPollTimer);
       spinner.style.display = 'none';
       setStep(4);
-      showResult({ ...s, printed: progress.printed });
+      showGroupResult(g);
     } else if (progress.state === 'retry' || progress.state === 'error') {
       clearInterval(buyPollTimer);
       spinner.style.display = 'none';
-      snackbar(progress.message || s.error_message || 'Label purchase failed', 'error');
+      snackbar(progress.message || 'Label purchase did not complete', 'error');
       if (progress.state === 'retry') btn.disabled = false;
     }
   }, 1500);
 });
+
+function showGroupResult(g) {
+  const primary = g.shipments[0];
+  const progress = g.progress || {};
+  const numbers = g.shipments.map((r) => r.tracking_number).filter(Boolean);
+  const cost = g.shipments.reduce((sum, r) => sum + (r.shipping_cost || 0), 0);
+  showResult({
+    ...primary,
+    printed: progress.printed,
+    shipping_cost: cost || primary.shipping_cost,
+    tracking_list: numbers,
+    label_url: `/api/shipments/group/${g.group_id}/label`,
+    has_label: g.shipments.some((r) => r.has_label),
+  });
+}
 
 function showResult(s) {
   ['panel-destination', 'panel-parcels', 'panel-rates', 'rates-actions'].forEach((id) => {
@@ -348,7 +368,12 @@ function showResult(s) {
   });
   const panel = document.getElementById('panel-result');
   panel.style.display = '';
-  document.getElementById('r-tracking').textContent = s.tracking_number || '(pending)';
+  const numbers = s.tracking_list && s.tracking_list.length
+    ? s.tracking_list
+    : (s.tracking_number ? [s.tracking_number] : []);
+  document.getElementById('r-tracking').innerHTML = numbers.length
+    ? numbers.map((n, i) => `<div>${numbers.length > 1 ? `<span class="text-secondary">Box ${i + 1}:</span> ` : ''}${esc(n)}</div>`).join('')
+    : '(pending)';
   document.getElementById('r-courier').textContent = s.courier_name || '';
   document.getElementById('r-cost').textContent = money(s.shipping_cost);
 
@@ -373,7 +398,7 @@ function showResult(s) {
   wb.innerHTML = chips.join(' ');
 
   if (s.has_label) {
-    const url = `/api/shipments/${s.id}/label`;
+    const url = s.label_url || `/api/shipments/${s.id}/label`;
     document.getElementById('r-download').href = url;
     const preview = document.getElementById('r-preview');
     preview.src = url;
