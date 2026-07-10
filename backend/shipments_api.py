@@ -156,18 +156,33 @@ def buy(shipment_id):
         # A gateway timeout does NOT mean the purchase failed — multi-box label
         # generation can outlast Easyship's own gateway. Check the shipment
         # before declaring failure so we never buy the same label twice.
+        # Non-timeout errors get one check too: a retried Buy after an earlier
+        # timeout may hit "label already purchased" while the label exists.
         es = None
-        if e.recoverable:
-            for _ in range(5):
-                time.sleep(3)
-                try:
-                    candidate = easyship.get_shipment(row["easyship_shipment_id"])
-                except EasyshipError:
-                    continue
-                if candidate.get("label_state") not in (None, "not_created", "failed"):
-                    es = candidate
-                    break
+        checks = 12 if e.recoverable else 1
+        for i in range(checks):
+            if i:
+                time.sleep(5)
+            try:
+                candidate = easyship.get_shipment(row["easyship_shipment_id"])
+            except EasyshipError:
+                continue
+            if candidate.get("label_state") not in (None, "not_created", "failed"):
+                es = candidate
+                break
         if es is None:
+            if e.recoverable:
+                # Leave the shipment retryable: the same Easyship shipment is
+                # reused on the next Buy, so a retry can never double-charge.
+                message = (
+                    f"{e} No label was confirmed — click Buy label again to retry; "
+                    "the same shipment is reused so you cannot be charged twice."
+                )
+                db.execute(
+                    "UPDATE shipments SET status='rated', error_message=%s, updated_at=now() WHERE id=%s",
+                    (message, shipment_id),
+                )
+                return api_error(message, 502)
             db.execute(
                 "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
                 (str(e), shipment_id),
