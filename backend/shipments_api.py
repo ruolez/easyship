@@ -175,7 +175,7 @@ def buy(shipment_id):
                 # Leave the shipment retryable: the same Easyship shipment is
                 # reused on the next Buy, so a retry can never double-charge.
                 message = (
-                    f"{e} No label was confirmed — click Buy label again to retry; "
+                    f"{e} No label was confirmed — click Print label again to retry; "
                     "the same shipment is reused so you cannot be charged twice."
                 )
                 db.execute(
