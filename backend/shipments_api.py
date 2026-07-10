@@ -153,16 +153,31 @@ def buy(shipment_id):
     try:
         es = easyship.buy_label(row["easyship_shipment_id"], courier_service_id)
     except EasyshipError as e:
-        db.execute(
-            "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
-            (str(e), shipment_id),
-        )
-        return api_error(str(e), 502)
+        # A gateway timeout does NOT mean the purchase failed — multi-box label
+        # generation can outlast Easyship's own gateway. Check the shipment
+        # before declaring failure so we never buy the same label twice.
+        es = None
+        if e.recoverable:
+            for _ in range(5):
+                time.sleep(3)
+                try:
+                    candidate = easyship.get_shipment(row["easyship_shipment_id"])
+                except EasyshipError:
+                    continue
+                if candidate.get("label_state") not in (None, "not_created", "failed"):
+                    es = candidate
+                    break
+        if es is None:
+            db.execute(
+                "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
+                (str(e), shipment_id),
+            )
+            return api_error(str(e), 502)
 
     # Label generation may lag briefly — poll until ready
     label_state = es.get("label_state")
     tries = 0
-    while label_state not in LABEL_READY_STATES and label_state != "failed" and tries < 10:
+    while label_state not in LABEL_READY_STATES and label_state != "failed" and tries < 20:
         time.sleep(2)
         tries += 1
         try:

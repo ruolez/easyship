@@ -10,7 +10,15 @@ IN_TO_CM = 2.54
 
 
 class EasyshipError(Exception):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def recoverable(self):
+        """Timeouts and gateway 5xx — the request may still have succeeded
+        on Easyship's side."""
+        return self.status is None or self.status >= 500
 
 
 def _base_url():
@@ -38,23 +46,29 @@ def _request(method, path, json_body=None, params=None, timeout=45):
             timeout=timeout,
         )
     except requests.RequestException as e:
-        raise EasyshipError(f"Easyship request failed: {e}")
+        raise EasyshipError(f"Easyship request failed: {e}", status=None)
     if resp.status_code >= 400:
-        raise EasyshipError(_extract_error(resp))
+        raise EasyshipError(_extract_error(resp), status=resp.status_code)
     return resp.json()
 
 
 def _extract_error(resp):
+    body = resp.text or ""
+    if body.lstrip()[:15].lower().startswith(("<!doctype", "<html")):
+        return (
+            f"Easyship did not respond in time (gateway error {resp.status_code}). "
+            "The request may still have gone through on their side."
+        )
     try:
         data = resp.json()
         err = data.get("error") or {}
-        message = err.get("message") or str(err) or resp.text[:300]
+        message = err.get("message") or str(err) or body[:300]
         details = err.get("details")
         if details:
             message += " — " + "; ".join(str(d) for d in details)
         return f"Easyship error ({resp.status_code}): {message}"
     except ValueError:
-        return f"Easyship error ({resp.status_code}): {resp.text[:300]}"
+        return f"Easyship error ({resp.status_code}): {body[:300]}"
 
 
 def _clean(d):
