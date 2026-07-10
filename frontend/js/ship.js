@@ -191,7 +191,11 @@ function seedParcels(noBoxes, totalWeight) {
   for (let i = 0; i < boxes; i++) addParcelRow(per);
 }
 
-document.getElementById('add-parcel').addEventListener('click', () => addParcelRow());
+document.getElementById('add-parcel').addEventListener('click', () => {
+  addParcelRow();
+  const rows = document.querySelectorAll('.parcel-row');
+  rows[rows.length - 1].querySelector('.p-weight').focus();
+});
 
 function collectParcels() {
   return [...document.querySelectorAll('.parcel-row')].map((row) => ({
