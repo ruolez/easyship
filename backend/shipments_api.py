@@ -167,19 +167,24 @@ def _set_progress(shipment_id, state, boxes=None, message=None, extra=None):
     )
 
 
-def _box_progress(ids, state):
+def _box_progress(ids, state, errors=None):
+    errors = errors or {}
     boxes = []
     for i, sid in enumerate(ids):
         s = state.get(sid)
-        if not s:
-            boxes.append({"box": i + 1, "status": "purchasing"})
+        box = {"box": i + 1}
+        if not s or s.get("label_state") in (None, "not_created"):
+            box["status"] = "purchasing"
         elif s.get("label_state") in LABEL_READY_STATES:
             numbers = easyship.extract_tracking_numbers(s)
-            boxes.append({"box": i + 1, "status": "ready", "tracking": numbers[0] if numbers else None})
+            box.update(status="ready", tracking=numbers[0] if numbers else None)
         elif s.get("label_state") == "failed":
-            boxes.append({"box": i + 1, "status": "failed"})
+            box["status"] = "failed"
         else:
-            boxes.append({"box": i + 1, "status": "generating"})
+            box["status"] = "generating"
+        if sid in errors and box["status"] in ("purchasing", "failed"):
+            box["error"] = errors[sid][:200]
+        boxes.append(box)
     return boxes
 
 
@@ -246,11 +251,13 @@ def _buy_impl(shipment_id, courier_service_id, rate, user_id):
     # of time. Retrying later can never double-charge: the same Easyship
     # shipments are reused and each can carry only one label.
     state = {}
+    box_errors = {}
     last_error = None
     for sid in ids:
         res = results.get(sid)
         if isinstance(res, EasyshipError):
             last_error = res
+            box_errors[sid] = str(res)
             state[sid] = None
         else:
             state[sid] = res
@@ -268,8 +275,9 @@ def _buy_impl(shipment_id, courier_service_id, rate, user_id):
         timeout_s = int(db.get_setting("label_timeout_seconds") or 120)
     except ValueError:
         timeout_s = 120
-    _set_progress(shipment_id, "buying", boxes=_box_progress(ids, state))
+    _set_progress(shipment_id, "buying", boxes=_box_progress(ids, state, box_errors))
     deadline = time.monotonic() + max(timeout_s, 30)
+    rebuy_next = {}
     while pending() and time.monotonic() < deadline:
         time.sleep(3)
         refreshed = easyship.get_shipments(pending())
@@ -278,7 +286,28 @@ def _buy_impl(shipment_id, courier_service_id, rate, user_id):
                 last_error = res
             else:
                 state[sid] = res
-        _set_progress(shipment_id, "buying", boxes=_box_progress(ids, state))
+
+        # A box still at not_created means its purchase request was LOST
+        # (rate limit / gateway) — polling alone would wait forever. Re-issue
+        # the purchase; a shipment can only carry one label, so this can
+        # never double-charge.
+        now = time.monotonic()
+        rebuy_ids = [
+            sid for sid in pending()
+            if (not state[sid] or state[sid].get("label_state") in (None, "not_created"))
+            and now >= rebuy_next.get(sid, 0)
+        ]
+        if rebuy_ids:
+            for sid, res in easyship.buy_labels(rebuy_ids, courier_service_id).items():
+                rebuy_next[sid] = time.monotonic() + 12
+                if isinstance(res, EasyshipError):
+                    last_error = res
+                    box_errors[sid] = str(res)
+                else:
+                    state[sid] = res
+                    box_errors.pop(sid, None)
+
+        _set_progress(shipment_id, "buying", boxes=_box_progress(ids, state, box_errors))
 
     failed = [sid for sid in ids if state[sid] and state[sid].get("label_state") == "failed"]
     if failed:
@@ -287,7 +316,7 @@ def _buy_impl(shipment_id, courier_service_id, rate, user_id):
             "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
             (message, shipment_id),
         )
-        _set_progress(shipment_id, "error", boxes=_box_progress(ids, state), message=message)
+        _set_progress(shipment_id, "error", boxes=_box_progress(ids, state, box_errors), message=message)
         return
 
     if pending():
@@ -300,7 +329,7 @@ def _buy_impl(shipment_id, courier_service_id, rate, user_id):
             "UPDATE shipments SET status='rated', error_message=%s, updated_at=now() WHERE id=%s",
             (message, shipment_id),
         )
-        _set_progress(shipment_id, "retry", boxes=_box_progress(ids, state), message=message)
+        _set_progress(shipment_id, "retry", boxes=_box_progress(ids, state, box_errors), message=message)
         return
 
     # All boxes ready: collect tracking numbers and label documents in box order

@@ -292,6 +292,7 @@ function renderBuyProgress(progress) {
       <div class="fixed"><span class="parcel-num" style="display:inline-flex;width:26px;height:26px;border-radius:50%;background:var(--primary-light);color:var(--primary);font-weight:650;font-size:12.5px;align-items:center;justify-content:center">${b.box}</span></div>
       <div class="fixed" style="min-width:170px">${b.status === 'ready' ? '<span class="chip static ok">✓ label ready</span>' : b.status === 'failed' ? '<span class="chip static err">✕ failed</span>' : `<span class="text-secondary">${statusLabel[b.status] || b.status}</span>`}</div>
       <div class="fixed mono" style="font-size:13px">${b.tracking ? esc(b.tracking) : ''}</div>
+      ${b.error ? `<div class="fixed" style="font-size:12px;color:var(--error);max-width:420px;white-space:normal">${esc(b.error)}</div>` : ''}
     </div>`).join('');
   const statusEl = document.getElementById('buy-status');
   if (progress.state === 'finalizing') statusEl.textContent = progress.message || 'Saving label…';
