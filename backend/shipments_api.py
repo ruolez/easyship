@@ -96,7 +96,7 @@ def get_rates():
     shipment_id = row["id"]
 
     try:
-        es = easyship.create_shipment(destination, parcels, items)
+        es_list = easyship.create_shipments(destination, parcels, items)
     except EasyshipError as e:
         db.execute(
             "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
@@ -104,34 +104,51 @@ def get_rates():
         )
         return api_error(str(e), 502)
 
-    rates = sorted(es.get("rates") or [], key=lambda r: r.get("total_charge") or 0)
+    ids = [s["easyship_shipment_id"] for s in es_list]
     db.execute(
-        "UPDATE shipments SET easyship_shipment_id=%s, status='rated', error_message=NULL, updated_at=now() WHERE id=%s",
-        (es["easyship_shipment_id"], shipment_id),
+        """UPDATE shipments SET easyship_shipment_id=%s, easyship_shipment_ids=%s,
+           status='rated', error_message=NULL, updated_at=now() WHERE id=%s""",
+        (ids[0], json.dumps(ids), shipment_id),
     )
+    rates = combine_rates(es_list)
     if not rates:
-        return api_error(
-            "No rates available for this shipment. Check the address and parcel details "
-            "(some couriers do not support multi-box shipments — try one box per shipment).",
-            422,
-        )
+        message = "No rates available for this shipment. Check the address and parcel details."
+        if len(es_list) > 1:
+            message = ("No single courier returned rates for every box. "
+                       "Check each box's weight and dimensions.")
+        return api_error(message, 422)
     return jsonify({
         "shipment_id": shipment_id,
-        "easyship_shipment_id": es["easyship_shipment_id"],
-        "rates": [
-            {
-                "courier_service_id": r["courier_service"]["id"],
-                "courier_name": r["courier_service"].get("name"),
-                "umbrella_name": r["courier_service"].get("umbrella_name"),
-                "total_charge": r.get("total_charge"),
-                "currency": r.get("currency"),
-                "min_delivery_time": r.get("min_delivery_time"),
-                "max_delivery_time": r.get("max_delivery_time"),
-                "value_for_money_rank": r.get("value_for_money_rank"),
-            }
-            for r in rates
-        ],
+        "easyship_shipment_id": ids[0],
+        "box_count": len(ids),
+        "rates": rates,
     })
+
+
+def combine_rates(es_list):
+    """One quote list across per-box shipments: only couriers that can serve
+    EVERY box, price = sum across boxes."""
+    rate_maps = [
+        {r["courier_service"]["id"]: r for r in (s.get("rates") or [])}
+        for s in es_list
+    ]
+    common = set(rate_maps[0])
+    for m in rate_maps[1:]:
+        common &= set(m)
+    combined = []
+    for cid in common:
+        rs = [m[cid] for m in rate_maps]
+        combined.append({
+            "courier_service_id": cid,
+            "courier_name": rs[0]["courier_service"].get("name"),
+            "umbrella_name": rs[0]["courier_service"].get("umbrella_name"),
+            "total_charge": round(sum(r.get("total_charge") or 0 for r in rs), 2),
+            "currency": rs[0].get("currency"),
+            "min_delivery_time": max((r.get("min_delivery_time") or 0) for r in rs) or None,
+            "max_delivery_time": max((r.get("max_delivery_time") or 0) for r in rs) or None,
+            "value_for_money_rank": rs[0].get("value_for_money_rank"),
+        })
+    return sorted(combined, key=lambda r: r["total_charge"])
 
 
 @bp.post("/<int:shipment_id>/buy")
@@ -150,93 +167,88 @@ def buy(shipment_id):
     if not row["easyship_shipment_id"]:
         return api_error("Shipment has no Easyship shipment id — get rates first")
 
-    try:
-        es = easyship.buy_label(row["easyship_shipment_id"], courier_service_id)
-    except EasyshipError as e:
-        # A gateway timeout does NOT mean the purchase failed — multi-box label
-        # generation can outlast Easyship's own gateway. Check the shipment
-        # before declaring failure so we never buy the same label twice.
-        # Non-timeout errors get one check too: a retried Buy after an earlier
-        # timeout may hit "label already purchased" while the label exists.
-        es = None
-        checks = 12 if e.recoverable else 1
-        for i in range(checks):
-            if i:
-                time.sleep(5)
-            try:
-                candidate = easyship.get_shipment(row["easyship_shipment_id"])
-            except EasyshipError:
-                continue
-            if candidate.get("label_state") not in (None, "not_created", "failed"):
-                es = candidate
-                break
-        if es is None:
-            if e.recoverable:
-                # Leave the shipment retryable: the same Easyship shipment is
-                # reused on the next Buy, so a retry can never double-charge.
-                message = (
-                    f"{e} No label was confirmed — click Print label again to retry; "
-                    "the same shipment is reused so you cannot be charged twice."
-                )
-                db.execute(
-                    "UPDATE shipments SET status='rated', error_message=%s, updated_at=now() WHERE id=%s",
-                    (message, shipment_id),
-                )
-                return api_error(message, 502)
-            db.execute(
-                "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
-                (str(e), shipment_id),
+    ids = row["easyship_shipment_ids"] or [row["easyship_shipment_id"]]
+
+    # Buy every box's label in parallel (one Easyship shipment per box).
+    results = easyship.buy_labels(ids, courier_service_id)
+
+    # Unified polling: a buy error may mean "already purchased" (retry after an
+    # earlier timeout) or a gateway timeout while the label still generates —
+    # keep refreshing every shipment until each is ready, failed, or we run out
+    # of time. Retrying later can never double-charge: the same Easyship
+    # shipments are reused and each can carry only one label.
+    state = {}
+    last_error = None
+    for sid in ids:
+        res = results.get(sid)
+        if isinstance(res, EasyshipError):
+            last_error = res
+            state[sid] = None
+        else:
+            state[sid] = res
+
+    def pending():
+        return [
+            sid for sid in ids
+            if not state[sid] or (
+                state[sid].get("label_state") not in LABEL_READY_STATES
+                and state[sid].get("label_state") != "failed"
             )
-            return api_error(str(e), 502)
+        ]
 
-    # Label generation may lag briefly — poll until ready
-    label_state = es.get("label_state")
-    tries = 0
-    while label_state not in LABEL_READY_STATES and label_state != "failed" and tries < 20:
-        time.sleep(2)
-        tries += 1
-        try:
-            es = easyship.get_shipment(row["easyship_shipment_id"])
-            label_state = es.get("label_state")
-        except EasyshipError:
-            break
-
-    if label_state == "failed":
-        db.execute(
-            "UPDATE shipments SET status='error', error_message='Label generation failed at Easyship', updated_at=now() WHERE id=%s",
-            (shipment_id,),
-        )
-        return api_error("Label generation failed at Easyship", 502)
-
-    # Multi-box: per-parcel tracking numbers and label pages can lag behind
-    # label_state=generated — refresh until we have one of each per box.
-    expected = len(row["parcels"] or []) or 1
-    tracking_numbers = easyship.extract_tracking_numbers(es)
-    docs = easyship.extract_label_documents(es)
-    tries = 0
-    while expected > 1 and tries < 6 and (
-        len(tracking_numbers) < expected or easyship.count_label_pages(docs) < expected
-    ):
+    deadline = time.monotonic() + 90
+    while pending() and time.monotonic() < deadline:
         time.sleep(3)
-        tries += 1
-        try:
-            es = easyship.get_shipment(row["easyship_shipment_id"])
-        except EasyshipError:
-            break
-        tracking_numbers = easyship.extract_tracking_numbers(es)
-        docs = easyship.extract_label_documents(es)
+        refreshed = easyship.get_shipments(pending())
+        for sid, res in refreshed.items():
+            if isinstance(res, EasyshipError):
+                last_error = res
+            else:
+                state[sid] = res
+
+    failed = [sid for sid in ids if state[sid] and state[sid].get("label_state") == "failed"]
+    if failed:
+        message = f"Label generation failed at Easyship for {len(failed)} of {len(ids)} box(es)"
+        db.execute(
+            "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
+            (message, shipment_id),
+        )
+        return api_error(message, 502)
+
+    if pending():
+        message = (
+            f"{last_error or 'Easyship did not finish in time.'} "
+            f"{len(pending())} of {len(ids)} label(s) not confirmed yet — click Print label "
+            "again to retry; the same shipments are reused so you cannot be charged twice."
+        )
+        db.execute(
+            "UPDATE shipments SET status='rated', error_message=%s, updated_at=now() WHERE id=%s",
+            (message, shipment_id),
+        )
+        return api_error(message, 502)
+
+    # All boxes ready: collect tracking numbers and label documents in box order
+    tracking_numbers = []
+    docs = []
+    for sid in ids:
+        for n in easyship.extract_tracking_numbers(state[sid]):
+            if n not in tracking_numbers:
+                tracking_numbers.append(n)
+        sid_docs = easyship.extract_label_documents(state[sid])
+        if not sid_docs:
+            try:
+                sid_docs = easyship.extract_label_documents(
+                    easyship.get_shipment(sid, pdf_4x6=True)
+                )
+            except EasyshipError:
+                pass
+        docs.extend(sid_docs)
 
     tracking_number = tracking_numbers[0] if tracking_numbers else None
+    es = state[ids[0]]
     courier = es.get("courier_service") or {}
     rate = data.get("rate") or {}
     total_charge = rate.get("total_charge")
-
-    if not docs:
-        try:
-            es_docs = easyship.get_shipment(row["easyship_shipment_id"], pdf_4x6=True)
-            docs = easyship.extract_label_documents(es_docs)
-        except EasyshipError:
-            pass
     label_bytes, label_format = easyship.merge_label_documents(docs)
 
     label_path = None
@@ -516,10 +528,10 @@ def void(shipment_id):
         return api_error(f"Shipment is {row['status']} — cannot void")
 
     if row["status"] != "voided" and row["easyship_shipment_id"]:
-        try:
-            easyship.cancel_shipment(row["easyship_shipment_id"])
-        except EasyshipError as e:
-            return api_error(str(e), 502)
+        ids = row["easyship_shipment_ids"] or [row["easyship_shipment_id"]]
+        cancel_errors = easyship.cancel_all(ids)
+        if cancel_errors:
+            return api_error("; ".join(cancel_errors), 502)
 
     undo = {}
     errors = []

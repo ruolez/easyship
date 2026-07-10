@@ -1,4 +1,6 @@
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 
 import requests
 
@@ -22,27 +24,34 @@ class EasyshipError(Exception):
 
 
 def _base_url():
-    mode = db.get_setting("easyship_mode", "sandbox")
+    mode = db.get_setting("easyship_mode") or "sandbox"
     return config.EASYSHIP_BASE_URLS[mode]
 
 
 def _token():
-    mode = db.get_setting("easyship_mode", "sandbox")
+    mode = db.get_setting("easyship_mode") or "sandbox"
     token = db.get_setting(f"easyship_{mode}_token")
     if not token:
         raise EasyshipError(f"No Easyship {mode} token configured — set it in Settings")
     return token
 
 
-def _request(method, path, json_body=None, params=None, timeout=45):
-    url = f"{_base_url()}{path}"
+def _auth():
+    """Resolve (base_url, token) inside the request context — worker threads
+    have no Flask context, so parallel helpers capture this first."""
+    return _base_url(), _token()
+
+
+def _request(method, path, json_body=None, params=None, timeout=45, auth=None):
+    base_url, token = auth or _auth()
+    url = f"{base_url}{path}"
     try:
         resp = requests.request(
             method,
             url,
             json=json_body,
             params=params,
-            headers={"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             timeout=timeout,
         )
     except requests.RequestException as e:
@@ -187,25 +196,89 @@ def list_item_categories():
     ]
 
 
-def create_shipment(destination, parcels, items):
-    body = {
-        "origin_address": origin_address(),
-        "destination_address": build_destination(destination),
-        "incoterms": "DDU",
-        "parcels": build_parcels(parcels, items),
-    }
-    data = _request("POST", "/shipments", json_body=body)
-    return data["shipment"]
+def create_shipments(destination, parcels, items):
+    """One Easyship shipment PER BOX, created in parallel. Couriers like USPS
+    don't support true multi-parcel shipments — separate shipments give every
+    box its own label and tracking number, and parallel requests keep it fast.
+    Returns shipments in box order."""
+    auth = _auth()
+    origin = origin_address()
+    dest = build_destination(destination)
+    bodies = []
+    for i, parcel in enumerate(parcels):
+        bodies.append({
+            "origin_address": origin,
+            "destination_address": dest,
+            "incoterms": "DDU",
+            # order items ride on box 1 for customs; other boxes get a stub
+            "parcels": build_parcels([parcel], items if i == 0 else []),
+        })
+
+    if len(bodies) == 1:
+        data = _request("POST", "/shipments", json_body=bodies[0], timeout=60, auth=auth)
+        return [data["shipment"]]
+
+    results = [None] * len(bodies)
+    with ThreadPoolExecutor(max_workers=min(len(bodies), 6)) as pool:
+        futures = {
+            pool.submit(partial(_request, "POST", "/shipments",
+                                json_body=body, timeout=60, auth=auth)): i
+            for i, body in enumerate(bodies)
+        }
+        for future in as_completed(futures):
+            i = futures[future]
+            try:
+                results[i] = future.result()["shipment"]
+            except EasyshipError as e:
+                results[i] = e
+
+    errors = [r for r in results if isinstance(r, EasyshipError)]
+    if errors:
+        # don't leave orphan shipments behind for the boxes that succeeded
+        created = [r["easyship_shipment_id"] for r in results if not isinstance(r, EasyshipError)]
+        cancel_all(created)
+        raise errors[0]
+    return results
 
 
-def buy_label(easyship_shipment_id, courier_service_id):
-    data = _request(
-        "POST",
-        f"/shipments/{easyship_shipment_id}/label",
-        json_body={"courier_service_id": courier_service_id},
-        timeout=60,
-    )
-    return data["shipment"]
+def buy_labels(shipment_ids, courier_service_id):
+    """Purchase labels for all shipments in parallel.
+    Returns {shipment_id: shipment_object_or_EasyshipError}."""
+    auth = _auth()
+    out = {}
+    with ThreadPoolExecutor(max_workers=min(len(shipment_ids), 6)) as pool:
+        futures = {
+            pool.submit(partial(_request, "POST", f"/shipments/{sid}/label",
+                                json_body={"courier_service_id": courier_service_id},
+                                timeout=90, auth=auth)): sid
+            for sid in shipment_ids
+        }
+        for future in as_completed(futures):
+            sid = futures[future]
+            try:
+                out[sid] = future.result()["shipment"]
+            except EasyshipError as e:
+                out[sid] = e
+    return out
+
+
+def get_shipments(shipment_ids):
+    """Fetch several shipments in parallel.
+    Returns {shipment_id: shipment_object_or_EasyshipError}."""
+    auth = _auth()
+    out = {}
+    with ThreadPoolExecutor(max_workers=min(len(shipment_ids), 6)) as pool:
+        futures = {
+            pool.submit(partial(_request, "GET", f"/shipments/{sid}", auth=auth)): sid
+            for sid in shipment_ids
+        }
+        for future in as_completed(futures):
+            sid = futures[future]
+            try:
+                out[sid] = future.result()["shipment"]
+            except EasyshipError as e:
+                out[sid] = e
+    return out
 
 
 def get_shipment(easyship_shipment_id, pdf_4x6=False):
@@ -216,6 +289,25 @@ def get_shipment(easyship_shipment_id, pdf_4x6=False):
 
 def cancel_shipment(easyship_shipment_id):
     return _request("POST", f"/shipments/{easyship_shipment_id}/cancel")
+
+
+def cancel_all(shipment_ids):
+    """Cancel several shipments; already-cancelled ones don't count as errors.
+    Returns a list of error strings."""
+    errors = []
+    for sid in [s for s in shipment_ids if s]:
+        try:
+            cancel_shipment(sid)
+        except EasyshipError as e:
+            try:
+                current = get_shipment(sid)
+                if current.get("label_state") in ("voided", "cancelled") or \
+                   current.get("shipment_state") in ("cancelled", "abandoned"):
+                    continue
+            except EasyshipError:
+                pass
+            errors.append(f"{sid}: {e}")
+    return errors
 
 
 def extract_tracking_numbers(shipment):
