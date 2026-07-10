@@ -29,6 +29,7 @@ SETTING_KEYS = [
     "print_mode",
     "printer_host",
     "printer_port",
+    "label_timeout_seconds",
 ]
 
 SECRET_KEYS = {"easyship_sandbox_token", "easyship_production_token"}

@@ -18,8 +18,10 @@ def api_error(message, status=400):
     return jsonify({"error": message}), status
 
 
-def audit(action, detail=None):
+def audit(action, detail=None, user_id=None):
+    if user_id is None:
+        user_id = session.get("user_id")
     db.execute(
         "INSERT INTO audit_log (user_id, action, detail) VALUES (%s, %s, %s)",
-        (session.get("user_id"), action, json.dumps(detail) if detail is not None else None),
+        (user_id, action, json.dumps(detail) if detail is not None else None),
     )

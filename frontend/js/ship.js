@@ -277,6 +277,32 @@ function renderRates() {
 }
 
 /* ---------- Buy ---------- */
+function renderBuyProgress(progress) {
+  const el = document.getElementById('buy-progress');
+  if (!progress || !progress.boxes) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const statusLabel = {
+    purchasing: '<span class="spinner"></span> purchasing…',
+    generating: '<span class="spinner"></span> generating label…',
+    ready: '✓ label ready',
+    failed: '✕ failed',
+  };
+  el.innerHTML = progress.boxes.map((b) => `
+    <div class="row mb-16" style="align-items:center;gap:10px">
+      <div class="fixed"><span class="parcel-num" style="display:inline-flex;width:26px;height:26px;border-radius:50%;background:var(--primary-light);color:var(--primary);font-weight:650;font-size:12.5px;align-items:center;justify-content:center">${b.box}</span></div>
+      <div class="fixed" style="min-width:170px">${b.status === 'ready' ? '<span class="chip static ok">✓ label ready</span>' : b.status === 'failed' ? '<span class="chip static err">✕ failed</span>' : `<span class="text-secondary">${statusLabel[b.status] || b.status}</span>`}</div>
+      <div class="fixed mono" style="font-size:13px">${b.tracking ? esc(b.tracking) : ''}</div>
+    </div>`).join('');
+  const statusEl = document.getElementById('buy-status');
+  if (progress.state === 'finalizing') statusEl.textContent = progress.message || 'Saving label…';
+  else {
+    const done = progress.boxes.filter((b) => b.status === 'ready').length;
+    statusEl.textContent = `Generating labels… ${done}/${progress.boxes.length} ready`;
+  }
+}
+
+let buyPollTimer = null;
+
 document.getElementById('buy-label').addEventListener('click', async () => {
   if (!selectedRate || !localShipmentId) return;
   const btn = document.getElementById('buy-label');
@@ -284,18 +310,35 @@ document.getElementById('buy-label').addEventListener('click', async () => {
   btn.disabled = true;
   spinner.style.display = '';
   try {
-    const res = await api(`/api/shipments/${localShipmentId}/buy`, {
+    await api(`/api/shipments/${localShipmentId}/buy`, {
       method: 'POST',
       body: { courier_service_id: selectedRate.courier_service_id, rate: selectedRate },
     });
-    setStep(4);
-    showResult(res);
   } catch (err) {
     snackbar(err.message, 'error');
     btn.disabled = false;
-  } finally {
     spinner.style.display = 'none';
+    return;
   }
+  buyPollTimer = setInterval(async () => {
+    let s;
+    try {
+      s = await api(`/api/shipments/${localShipmentId}`);
+    } catch { return; } // transient poll failure — keep polling
+    const progress = s.progress || {};
+    renderBuyProgress(progress);
+    if (['label_created', 'fulfilled'].includes(s.status) && progress.state === 'done') {
+      clearInterval(buyPollTimer);
+      spinner.style.display = 'none';
+      setStep(4);
+      showResult({ ...s, printed: progress.printed });
+    } else if (progress.state === 'retry' || progress.state === 'error') {
+      clearInterval(buyPollTimer);
+      spinner.style.display = 'none';
+      snackbar(progress.message || s.error_message || 'Label purchase failed', 'error');
+      if (progress.state === 'retry') btn.disabled = false;
+    }
+  }, 1500);
 });
 
 function showResult(s) {

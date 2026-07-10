@@ -4,6 +4,7 @@ const SETTING_IDS = [
   'origin_company', 'origin_contact', 'origin_address1', 'origin_address2',
   'origin_city', 'origin_state', 'origin_zip', 'origin_phone', 'origin_email',
   'placeholder_email', 'print_mode', 'printer_host', 'printer_port',
+  'label_timeout_seconds',
 ];
 
 initNav('settings').then(async () => {

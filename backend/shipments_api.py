@@ -1,8 +1,9 @@
 import json
 import os
+import threading
 import time
 
-from flask import Blueprint, jsonify, request, send_file, session
+from flask import Blueprint, current_app, jsonify, request, send_file, session
 
 import config
 import db
@@ -45,6 +46,7 @@ def _row_to_json(row):
         "tracking_numbers": row.get("tracking_numbers") or ([row["tracking_number"]] if row["tracking_number"] else []),
         "has_label": bool(row["label_path"]),
         "status": row["status"],
+        "progress": row.get("progress"),
         "error_message": row["error_message"],
         "writeback_shopify_at": central_time(row["writeback_shopify_at"]),
         "writeback_backoffice_at": central_time(row["writeback_backoffice_at"]),
@@ -151,6 +153,36 @@ def combine_rates(es_list):
     return sorted(combined, key=lambda r: r["total_charge"])
 
 
+def _set_progress(shipment_id, state, boxes=None, message=None, extra=None):
+    progress = {"state": state}
+    if boxes is not None:
+        progress["boxes"] = boxes
+    if message:
+        progress["message"] = message
+    if extra:
+        progress.update(extra)
+    db.execute(
+        "UPDATE shipments SET progress=%s, updated_at=now() WHERE id=%s",
+        (json.dumps(progress), shipment_id),
+    )
+
+
+def _box_progress(ids, state):
+    boxes = []
+    for i, sid in enumerate(ids):
+        s = state.get(sid)
+        if not s:
+            boxes.append({"box": i + 1, "status": "purchasing"})
+        elif s.get("label_state") in LABEL_READY_STATES:
+            numbers = easyship.extract_tracking_numbers(s)
+            boxes.append({"box": i + 1, "status": "ready", "tracking": numbers[0] if numbers else None})
+        elif s.get("label_state") == "failed":
+            boxes.append({"box": i + 1, "status": "failed"})
+        else:
+            boxes.append({"box": i + 1, "status": "generating"})
+    return boxes
+
+
 @bp.post("/<int:shipment_id>/buy")
 @login_required
 def buy(shipment_id):
@@ -166,7 +198,43 @@ def buy(shipment_id):
         return api_error(f"Shipment is {row['status']} — cannot buy a label")
     if not row["easyship_shipment_id"]:
         return api_error("Shipment has no Easyship shipment id — get rates first")
+    progress = row["progress"] or {}
+    if progress.get("state") == "buying":
+        # the worker updates the row every few seconds; a long-stale 'buying'
+        # means the process died mid-purchase — allow a retry then
+        from datetime import datetime, timedelta, timezone
+        if datetime.now(timezone.utc) - row["updated_at"] < timedelta(minutes=5):
+            return api_error("Label purchase already in progress", 409)
 
+    ids = row["easyship_shipment_ids"] or [row["easyship_shipment_id"]]
+    _set_progress(shipment_id, "buying", boxes=[
+        {"box": i + 1, "status": "purchasing"} for i in range(len(ids))
+    ])
+
+    app = current_app._get_current_object()
+    worker = threading.Thread(
+        target=_buy_worker,
+        args=(app, shipment_id, courier_service_id, data.get("rate") or {}, session["user_id"]),
+        daemon=True,
+    )
+    worker.start()
+    return jsonify({"started": True, "box_count": len(ids)})
+
+
+def _buy_worker(app, shipment_id, courier_service_id, rate, user_id):
+    with app.app_context():
+        try:
+            _buy_impl(shipment_id, courier_service_id, rate, user_id)
+        except Exception as e:  # never leave the row stuck in 'buying'
+            db.execute(
+                "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
+                (str(e), shipment_id),
+            )
+            _set_progress(shipment_id, "error", message=str(e))
+
+
+def _buy_impl(shipment_id, courier_service_id, rate, user_id):
+    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
     ids = row["easyship_shipment_ids"] or [row["easyship_shipment_id"]]
 
     # Buy every box's label in parallel (one Easyship shipment per box).
@@ -196,7 +264,12 @@ def buy(shipment_id):
             )
         ]
 
-    deadline = time.monotonic() + 90
+    try:
+        timeout_s = int(db.get_setting("label_timeout_seconds") or 120)
+    except ValueError:
+        timeout_s = 120
+    _set_progress(shipment_id, "buying", boxes=_box_progress(ids, state))
+    deadline = time.monotonic() + max(timeout_s, 30)
     while pending() and time.monotonic() < deadline:
         time.sleep(3)
         refreshed = easyship.get_shipments(pending())
@@ -205,6 +278,7 @@ def buy(shipment_id):
                 last_error = res
             else:
                 state[sid] = res
+        _set_progress(shipment_id, "buying", boxes=_box_progress(ids, state))
 
     failed = [sid for sid in ids if state[sid] and state[sid].get("label_state") == "failed"]
     if failed:
@@ -213,7 +287,8 @@ def buy(shipment_id):
             "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
             (message, shipment_id),
         )
-        return api_error(message, 502)
+        _set_progress(shipment_id, "error", boxes=_box_progress(ids, state), message=message)
+        return
 
     if pending():
         message = (
@@ -225,7 +300,8 @@ def buy(shipment_id):
             "UPDATE shipments SET status='rated', error_message=%s, updated_at=now() WHERE id=%s",
             (message, shipment_id),
         )
-        return api_error(message, 502)
+        _set_progress(shipment_id, "retry", boxes=_box_progress(ids, state), message=message)
+        return
 
     # All boxes ready: collect tracking numbers and label documents in box order
     tracking_numbers = []
@@ -247,8 +323,9 @@ def buy(shipment_id):
     tracking_number = tracking_numbers[0] if tracking_numbers else None
     es = state[ids[0]]
     courier = es.get("courier_service") or {}
-    rate = data.get("rate") or {}
     total_charge = rate.get("total_charge")
+    _set_progress(shipment_id, "finalizing", boxes=_box_progress(ids, state),
+                  message="Saving label and updating order…")
     label_bytes, label_format = easyship.merge_label_documents(docs)
 
     label_path = None
@@ -283,15 +360,15 @@ def buy(shipment_id):
     )
     audit("label.buy", {
         "shipment_id": shipment_id,
-        "easyship_shipment_id": row["easyship_shipment_id"],
+        "easyship_shipment_ids": ids,
         "courier": courier.get("name"),
         "cost": total_charge,
-    })
+    }, user_id=user_id)
 
     writebacks = run_writebacks(shipment_id)
     printed = _auto_print(shipment_id)
-    updated = _get_with_username(shipment_id)
-    return jsonify({**_row_to_json(updated), "writebacks": writebacks, "printed": printed})
+    _set_progress(shipment_id, "done", boxes=_box_progress(ids, state),
+                  extra={"printed": printed, "writebacks": writebacks})
 
 
 def _auto_print(shipment_id):
