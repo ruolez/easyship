@@ -8,25 +8,26 @@
 </head>
 <body>
   <header id="appbar"></header>
-  <div class="container narrow">
-    <div class="card" style="max-width:640px;margin:48px auto 16px">
-      <h2>📦 Ship an order</h2>
-      <div class="field mb-16">
-        <label>Store / Database</label>
-        <select id="source-select" style="font-size:16px;padding:14px"></select>
-      </div>
-      <div class="field mb-16">
-        <label>Order / Invoice number — scan or type, then Enter</label>
-        <input id="order-number" autocomplete="off"
-               style="font-size:22px;padding:16px;letter-spacing:1px" placeholder="Scan order…">
-      </div>
-      <div class="row">
-        <div class="fixed"><button class="btn btn-primary" id="lookup-btn">Look up order</button></div>
-        <div class="fixed" id="lookup-status"></div>
+  <div class="container">
+    <div class="scan-hero">
+      <div class="card">
+        <h2>Ship an order</h2>
+        <div class="field mb-16">
+          <label>Store / Database</label>
+          <select id="source-select"></select>
+        </div>
+        <div class="field mb-16">
+          <label>Order / Invoice number <span class="hint">— scan or type, then <kbd>Enter</kbd></span></label>
+          <input id="order-number" autocomplete="off" placeholder="Scan order…">
+        </div>
+        <div class="row">
+          <div class="fixed"><button class="btn btn-primary" id="lookup-btn">Look up order</button></div>
+          <div class="fixed" id="lookup-status"></div>
+        </div>
       </div>
     </div>
-    <div style="max-width:640px;margin:0 auto" class="text-secondary">
-      Browse open orders instead on the <a href="/orders.html">Orders</a> page,
+    <div class="scan-links">
+      Browse open orders on the <a href="/orders.html">Orders</a> page,
       or create a <a href="/ship.html?source=manual">manual shipment</a>.
     </div>
   </div>

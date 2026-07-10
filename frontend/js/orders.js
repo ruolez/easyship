@@ -69,7 +69,7 @@ async function loadShopifyOrders() {
           <td><strong>${esc(o.name)}</strong></td>
           <td>${esc(o.created_at)}</td>
           <td>${esc(o.customer)}</td>
-          <td class="wrap">${esc(o.ship_to)}</td>
+          <td class="ellip" style="max-width:260px" title="${esc(o.ship_to)}">${esc(o.ship_to)}</td>
           <td>${o.item_count}</td>
           <td>${money(o.total)}</td>
           <td><button class="btn btn-primary btn-small"
@@ -135,7 +135,7 @@ async function loadInvoices() {
           <td><strong>${esc(inv.invoice_number)}</strong>${inv.tracking_no ? `<br><span class="chip static warn" title="Already has tracking number">✓ ${esc(inv.tracking_no)}</span>` : ''}</td>
           <td>${esc(inv.ship_date)}</td>
           <td>${esc(inv.business_name)}</td>
-          <td class="wrap">${esc(inv.ship_to)}</td>
+          <td class="ellip" style="max-width:260px" title="${esc(inv.ship_to)}">${esc(inv.ship_to)}</td>
           <td>${inv.no_boxes ?? ''}</td>
           <td>${inv.total_weight ?? ''}</td>
           <td>${money(inv.invoice_total)}</td>

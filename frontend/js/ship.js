@@ -117,7 +117,7 @@ function showOrderSummary(html, items) {
         <td>${i.quantity}</td><td>${money(i.value)}</td>
       </tr>`).join('')}</tbody></table></div>`;
   }
-  el.innerHTML = `<h2>🧾 ${html}</h2>${itemsHtml}`;
+  el.innerHTML = `<h2>${html}</h2>${itemsHtml}`;
 }
 
 /* ---------- Parcels ---------- */

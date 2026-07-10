@@ -47,12 +47,12 @@ async function load() {
       return `<tr>
         <td><strong>${esc(ref)}</strong></td>
         <td>${esc(s.created_by)}</td>
-        <td>${esc(s.service_name)}</td>
-        <td class="wrap" style="max-width:260px">${esc(formatAddress(s.destination))}</td>
-        <td>${s.total_weight_lb ?? ''}</td>
-        <td class="wrap" style="max-width:180px">${esc(s.courier_name || '')}</td>
+        <td class="ellip" style="max-width:150px" title="${esc(s.service_name)}">${esc(s.service_name)}</td>
+        <td class="ellip" style="max-width:260px" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
+        <td class="num">${s.total_weight_lb ?? ''}</td>
+        <td class="ellip" style="max-width:170px" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}</td>
         <td>${esc(s.courier_umbrella_name || '')}</td>
-        <td>${money(s.shipping_cost)}</td>
+        <td class="num">${money(s.shipping_cost)}</td>
         <td class="mono" title="${esc((s.tracking_numbers || []).join(', '))}">${esc(s.tracking_number || '')}${(s.tracking_numbers || []).length > 1 ? ` <span class="chip static warn">+${s.tracking_numbers.length - 1}</span>` : ''}</td>
         <td><span class="status status-${esc(s.status)}" title="${esc(s.error_message || '')}">${esc(s.status.replace('_', ' '))}</span></td>
         <td>${esc((s.label_created_at || '').split(' ')[0] || '')}</td>
