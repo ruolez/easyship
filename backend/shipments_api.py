@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, request, send_file, session
 import config
 import db
 import easyship_client as easyship
-from auth import login_required
+from auth import admin_required, login_required
 from easyship_client import EasyshipError
 from util import api_error, audit, central_time
 
@@ -193,19 +193,36 @@ def buy(shipment_id):
         )
         return api_error("Label generation failed at Easyship", 502)
 
+    # Multi-box: per-parcel tracking numbers and label pages can lag behind
+    # label_state=generated — refresh until we have one of each per box.
+    expected = len(row["parcels"] or []) or 1
     tracking_numbers = easyship.extract_tracking_numbers(es)
+    docs = easyship.extract_label_documents(es)
+    tries = 0
+    while expected > 1 and tries < 6 and (
+        len(tracking_numbers) < expected or easyship.count_label_pages(docs) < expected
+    ):
+        time.sleep(3)
+        tries += 1
+        try:
+            es = easyship.get_shipment(row["easyship_shipment_id"])
+        except EasyshipError:
+            break
+        tracking_numbers = easyship.extract_tracking_numbers(es)
+        docs = easyship.extract_label_documents(es)
+
     tracking_number = tracking_numbers[0] if tracking_numbers else None
     courier = es.get("courier_service") or {}
     rate = data.get("rate") or {}
     total_charge = rate.get("total_charge")
 
-    label_bytes, label_format = easyship.extract_label_document(es)
-    if not label_bytes:
+    if not docs:
         try:
             es_docs = easyship.get_shipment(row["easyship_shipment_id"], pdf_4x6=True)
-            label_bytes, label_format = easyship.extract_label_document(es_docs)
+            docs = easyship.extract_label_documents(es_docs)
         except EasyshipError:
             pass
+    label_bytes, label_format = easyship.merge_label_documents(docs)
 
     label_path = None
     if label_bytes:
@@ -439,6 +456,21 @@ def get_label(shipment_id):
     )
     response.headers["Content-Disposition"] = f'inline; filename="label-{shipment_id}.{fmt}"'
     return response
+
+
+@bp.get("/<int:shipment_id>/easyship")
+@admin_required
+def easyship_raw(shipment_id):
+    """Diagnostic: the raw shipment object as Easyship returns it right now."""
+    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
+    if not row:
+        return api_error("Shipment not found", 404)
+    if not row["easyship_shipment_id"]:
+        return api_error("Shipment was never sent to Easyship")
+    try:
+        return jsonify(easyship.get_shipment(row["easyship_shipment_id"]))
+    except EasyshipError as e:
+        return api_error(str(e), 502)
 
 
 @bp.post("/<int:shipment_id>/print")

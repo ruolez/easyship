@@ -219,15 +219,40 @@ def cancel_shipment(easyship_shipment_id):
 
 
 def extract_tracking_numbers(shipment):
-    """All tracking numbers, one per parcel on multi-box shipments."""
+    """All tracking numbers. Per-box numbers live at parcels[].tracking_number
+    (couriers that issue them); trackings[] only carries the shipment-level
+    lead number."""
     numbers = []
-    for tracking in shipment.get("trackings") or []:
-        n = tracking.get("tracking_number")
+
+    def add(n):
         if n and n not in numbers:
             numbers.append(n)
-    if not numbers and shipment.get("tracking_number"):
-        numbers.append(shipment["tracking_number"])
+
+    for parcel in shipment.get("parcels") or []:
+        add(parcel.get("tracking_number"))
+    for tracking in shipment.get("trackings") or []:
+        add(tracking.get("tracking_number"))
+    add(shipment.get("tracking_number"))
     return numbers
+
+
+def count_label_pages(docs):
+    """Printable pages across label documents — a 3-box shipment may arrive as
+    one 3-page PDF or three 1-page documents."""
+    import io
+    total = 0
+    for data, fmt in docs:
+        if fmt == "pdf":
+            try:
+                from pypdf import PdfReader
+                total += len(PdfReader(io.BytesIO(data)).pages)
+            except Exception:
+                total += 1
+        elif fmt == "zpl":
+            total += max(data.count(b"^XA"), 1)
+        else:
+            total += 1
+    return total
 
 
 def extract_tracking_number(shipment):
