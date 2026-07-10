@@ -30,7 +30,7 @@ async function load() {
   const tbody = document.getElementById('parcels-body');
   const empty = document.getElementById('empty');
   empty.style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="13"><span class="spinner"></span> Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="14"><span class="spinner"></span> Loading…</td></tr>';
   try {
     const rows = await api(`/api/shipments?${params}`);
     if (!rows.length) {
@@ -44,11 +44,20 @@ async function load() {
       const needsRetry = s.status === 'label_created' &&
         ((s.source === 'shopify' && !s.writeback_shopify_at) ||
          (s.source === 'backoffice' && !s.writeback_backoffice_at));
+      const boxDetail = ((s.progress || {}).boxes || [])
+        .map((b) => `Box ${b.box}: ${b.status}${b.tracking ? ' ' + b.tracking : ''}${b.error ? ' — ' + b.error : ''}`)
+        .join('\n');
+      const partial = s.boxes_ready < s.box_count;
+      const boxesCell = s.box_count > 1 || partial
+        ? `<span class="chip static ${partial ? 'err' : 'ok'}" title="${esc(boxDetail)}">${s.boxes_ready}/${s.box_count}</span>`
+        : s.box_count;
+      const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id && s.easyship_shipment_id;
       return `<tr>
         <td><strong>${esc(ref)}</strong></td>
         <td>${esc(s.created_by)}</td>
         <td class="ellip" style="max-width:150px" title="${esc(s.service_name)}">${esc(s.service_name)}</td>
         <td class="ellip" style="max-width:260px" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
+        <td class="num">${boxesCell}</td>
         <td class="num">${s.total_weight_lb ?? ''}</td>
         <td class="ellip" style="max-width:170px" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}</td>
         <td>${esc(s.courier_umbrella_name || '')}</td>
@@ -58,6 +67,7 @@ async function load() {
         <td>${esc((s.label_created_at || '').split(' ')[0] || '')}</td>
         <td>${esc(s.created_at)}</td>
         <td style="white-space:nowrap">
+          ${canResume ? `<button class="btn btn-text btn-small" onclick="resumeBuy(${s.id})">Resume labels</button>` : ''}
           ${s.has_label ? `<a class="btn btn-text btn-small" href="/api/shipments/${s.id}/label" target="_blank">Label</a>` : ''}
           ${s.has_label ? `<button class="btn btn-text btn-small" onclick="reprint(${s.id})" title="Send to printer">🖨</button>` : ''}
           ${needsRetry ? `<button class="btn btn-text btn-small" onclick="retryWb(${s.id})">Retry writeback</button>` : ''}
@@ -72,6 +82,37 @@ async function load() {
     empty.style.display = '';
   }
 }
+
+window.resumeBuy = async (id) => {
+  const row = (await api(`/api/shipments/${id}`));
+  try {
+    await api(`/api/shipments/${id}/buy`, {
+      method: 'POST',
+      body: { courier_service_id: row.courier_service_id, rate: row.rate || {} },
+    });
+  } catch (err) {
+    snackbar(err.message, 'error');
+    return;
+  }
+  snackbar('Resuming label purchase…');
+  const timer = setInterval(async () => {
+    let s;
+    try { s = await api(`/api/shipments/${id}`); } catch { return; }
+    const st = (s.progress || {}).state;
+    const boxes = (s.progress || {}).boxes || [];
+    const ready = boxes.filter((b) => b.status === 'ready').length;
+    if (st === 'buying') snackbar(`Purchasing labels… ${ready}/${boxes.length} ready`);
+    if (st === 'done') {
+      clearInterval(timer);
+      snackbar('All labels purchased', 'success');
+      load();
+    } else if (st === 'retry' || st === 'error') {
+      clearInterval(timer);
+      snackbar((s.progress || {}).message || 'Purchase did not complete — see the Boxes column', 'error');
+      load();
+    }
+  }, 2000);
+};
 
 window.reprint = async (id) => {
   try {

@@ -21,7 +21,18 @@ def _row_to_json(row):
     total_weight = row.get("total_weight_lb")
     if total_weight is None:
         total_weight = sum(float(p.get("weight") or 0) for p in row["parcels"] or [])
+    box_count = len(row["parcels"] or []) or 1
+    progress = row.get("progress") or {}
+    progress_boxes = progress.get("boxes") or []
+    if progress_boxes:
+        boxes_ready = len([b for b in progress_boxes if b.get("status") == "ready"])
+    else:
+        boxes_ready = len(row.get("tracking_numbers") or ([1] if row["tracking_number"] else []))
     return {
+        "box_count": box_count,
+        "boxes_ready": min(boxes_ready, box_count),
+        "courier_service_id": row["courier_service_id"],
+        "rate": row["rate"],
         "id": row["id"],
         "source": row["source"],
         "service_name": row.get("store_name") or row.get("db_name")
@@ -212,6 +223,12 @@ def buy(shipment_id):
             return api_error("Label purchase already in progress", 409)
 
     ids = row["easyship_shipment_ids"] or [row["easyship_shipment_id"]]
+    # persist the chosen courier so an interrupted purchase can be resumed
+    # from the Parcels page with the same selection
+    db.execute(
+        "UPDATE shipments SET courier_service_id=%s, rate=%s, updated_at=now() WHERE id=%s",
+        (courier_service_id, json.dumps(data.get("rate") or {}), shipment_id),
+    )
     _set_progress(shipment_id, "buying", boxes=[
         {"box": i + 1, "status": "purchasing"} for i in range(len(ids))
     ])
