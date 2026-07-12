@@ -826,14 +826,17 @@ def void(shipment_id):
                     primary["shopify_store_id"], primary["shopify_order_id"], numbers[0]
                 )
             if fulfillment_gid:
-                shopify_client.cancel_fulfillment(primary["shopify_store_id"], fulfillment_gid)
+                shopify_undo = shopify_client.remove_tracking(
+                    primary["shopify_store_id"], primary["shopify_order_id"],
+                    fulfillment_gid, numbers,
+                )
             for r in rows:
                 db.execute(
                     """UPDATE shipments SET writeback_shopify_at=NULL,
                        shopify_fulfillment_id=NULL, updated_at=now() WHERE id=%s""",
                     (r["id"],),
                 )
-            undo["shopify"] = "fulfillment cancelled" if fulfillment_gid else "no matching fulfillment found"
+            undo["shopify"] = shopify_undo if fulfillment_gid else "no matching fulfillment found"
         except Exception as e:
             undo["shopify"] = f"error: {e}"
             errors.append(f"Shopify undo: {e}")

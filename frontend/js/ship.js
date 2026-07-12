@@ -75,6 +75,10 @@ async function prefill() {
       if (o.total_weight_lb) {
         document.querySelector('.p-weight').value = o.total_weight_lb;
       }
+      if ((o.existing_tracking || []).length) {
+        await confirmReship(`Shopify order ${o.name}`, o.existing_tracking,
+          "New tracking numbers are added to the order's existing fulfillment — it stays fulfilled.");
+      }
     } else if (source === 'backoffice') {
       const invoiceId = params.get('invoice_id');
       const dbId = Number(params.get('db_id'));
@@ -89,10 +93,38 @@ async function prefill() {
         orderItems
       );
       seedParcels(inv.no_boxes, inv.total_weight);
+      if ((inv.tracking_no || '').trim()) {
+        await confirmReship(`Invoice ${inv.invoice_number}`, [inv.tracking_no.trim()],
+          'New tracking numbers are added to the invoice Notes in BackOffice — the existing tracking number is kept.');
+      }
     }
   } catch (err) {
     snackbar(`Could not load order: ${err.message}`, 'error');
   }
+}
+
+/* Warn that this order was already processed. Continue resolves and the flow
+   proceeds; Cancel goes back to the scan page. */
+function confirmReship(what, numbers, note) {
+  return new Promise((resolve) => {
+    const backdrop = document.getElementById('modal-backdrop');
+    document.getElementById('modal').innerHTML = `
+      <h3>Order already processed</h3>
+      <p><strong>${esc(what)}</strong> already has tracking:</p>
+      <p class="mono" style="margin-top:8px">${numbers.map(esc).join('<br>')}</p>
+      <p class="text-secondary" style="margin-top:8px">${esc(note)}</p>
+      <div class="actions">
+        <button class="btn btn-text" id="m-cancel">Cancel</button>
+        <button class="btn btn-primary" id="m-continue">Continue</button>
+      </div>`;
+    backdrop.classList.add('show');
+    document.getElementById('m-cancel').addEventListener('click', () => { location.href = '/index.html'; });
+    document.getElementById('m-continue').addEventListener('click', () => {
+      backdrop.classList.remove('show');
+      resolve();
+    });
+    document.getElementById('m-continue').focus();
+  });
 }
 
 function fillDestination(d) {
