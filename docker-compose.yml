@@ -4,8 +4,10 @@ services:
     container_name: easyship-nginx
     ports:
       - "${APP_PORT:-5557}:80"
+      - "${APP_HTTPS_PORT:-5558}:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
       - ./frontend:/usr/share/nginx/html:ro
     depends_on:
       - backend
