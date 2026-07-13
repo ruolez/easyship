@@ -181,14 +181,31 @@ window.resumeBuy = async (gid) => {
   }, 2000);
 };
 
+function printDialog(url) {
+  const frame = document.createElement('iframe');
+  frame.style.display = 'none';
+  frame.src = url;
+  frame.addEventListener('load', () => {
+    try {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+    } catch {
+      window.open(url, '_blank');
+    }
+  }, { once: true });
+  document.body.appendChild(frame);
+}
+
 window.reprint = async (id) => {
   try {
     if (clientSettings.print_mode === 'browserprint') {
       await ZebraPrint.printLabelUrl(`/api/shipments/${id}/label`);
       snackbar('Label sent to Zebra printer', 'success');
-    } else {
+    } else if (clientSettings.print_mode === 'network') {
       await api(`/api/shipments/${id}/print`, { method: 'POST' });
       snackbar('Sent to printer', 'success');
+    } else {
+      printDialog(`/api/shipments/${id}/label`);
     }
   } catch (err) {
     snackbar(err.message, 'error');
