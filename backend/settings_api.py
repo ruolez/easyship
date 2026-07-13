@@ -30,9 +30,14 @@ SETTING_KEYS = [
     "printer_host",
     "printer_port",
     "label_timeout_seconds",
+    "shipper_host",
+    "shipper_port",
+    "shipper_db",
+    "shipper_user",
+    "shipper_password",
 ]
 
-SECRET_KEYS = {"easyship_sandbox_token", "easyship_production_token"}
+SECRET_KEYS = {"easyship_sandbox_token", "easyship_production_token", "shipper_password"}
 
 
 @bp.get("/settings")
@@ -96,6 +101,37 @@ def test_printer():
         )
     except printer.PrinterError as e:
         return api_error(str(e))
+    return jsonify({"ok": True})
+
+
+@bp.post("/settings/test/shipper")
+@admin_required
+def test_shipper():
+    import pymssql
+    data = request.get_json(silent=True) or {}
+
+    def val(field, key):
+        v = (data.get(field) or "").strip()
+        return v if v and v != MASK else (db.get_setting(key) or "").strip()
+
+    host = val("host", "shipper_host")
+    port = val("port", "shipper_port")
+    db_name = val("db", "shipper_db")
+    user = val("user", "shipper_user")
+    password = val("password", "shipper_password")
+    if not (host and db_name and user):
+        return api_error("Host, database and username are required")
+    try:
+        conn = pymssql.connect(
+            server=host, port=int(port or 1433), database=db_name,
+            user=user, password=password, timeout=10, login_timeout=10,
+        )
+        with conn.cursor() as cur:
+            cur.execute("SELECT TOP 1 id FROM parcels ORDER BY id DESC")
+            cur.fetchone()
+        conn.close()
+    except Exception as e:
+        return api_error(f"Connection failed: {e}")
     return jsonify({"ok": True})
 
 

@@ -5,6 +5,7 @@ const SETTING_IDS = [
   'origin_city', 'origin_state', 'origin_zip', 'origin_phone', 'origin_email',
   'placeholder_email', 'print_mode', 'printer_host', 'printer_port',
   'label_timeout_seconds',
+  'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
 ];
 
 initNav('settings').then(async () => {
@@ -201,6 +202,19 @@ document.getElementById('test-printer').addEventListener('click', () => {
       port: document.getElementById('printer_port').value,
     },
   }).then((r) => ({ ...r, account: 'test label sent' })));
+});
+
+document.getElementById('test-shipper').addEventListener('click', () => {
+  testResult('shipper-test-result', api('/api/settings/test/shipper', {
+    method: 'POST',
+    body: {
+      host: document.getElementById('shipper_host').value,
+      port: document.getElementById('shipper_port').value,
+      db: document.getElementById('shipper_db').value,
+      user: document.getElementById('shipper_user').value,
+      password: document.getElementById('shipper_password').value,
+    },
+  }));
 });
 
 document.getElementById('test-browserprint').addEventListener('click', () => {

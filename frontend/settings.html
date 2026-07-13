@@ -167,6 +167,21 @@
         </div>
         <button class="btn btn-text mt-16" id="add-db">+ Add database</button>
       </div>
+
+      <div class="card" id="card-shipper">
+        <h2>Shipper verification database</h2>
+        <div class="row mb-16">
+          <div class="field"><label>Host</label><input id="shipper_host"><span class="hint">Leave empty to disable the pre-ship verification check</span></div>
+          <div class="field fixed" style="min-width:100px"><label>Port</label><input id="shipper_port" placeholder="1433"></div>
+          <div class="field"><label>Database</label><input id="shipper_db"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Username</label><input id="shipper_user"></div>
+          <div class="field"><label>Password</label><input type="password" id="shipper_password" autocomplete="off"></div>
+          <div class="fixed"><button class="btn btn-outlined" id="test-shipper">Test connection</button></div>
+          <div class="fixed" id="shipper-test-result"></div>
+        </div>
+      </div>
     </section>
 
     <!-- ================= Users ================= -->

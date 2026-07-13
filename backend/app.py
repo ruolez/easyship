@@ -20,11 +20,13 @@ def create_app():
     import reports_api
     import settings_api
     import shipments_api
+    import shipper_api
     import shopify_api
 
     app.register_blueprint(auth.bp)
     app.register_blueprint(settings_api.bp)
     app.register_blueprint(shipments_api.bp)
+    app.register_blueprint(shipper_api.bp)
     app.register_blueprint(shopify_api.bp)
     app.register_blueprint(backoffice_api.bp)
     app.register_blueprint(reports_api.bp)
