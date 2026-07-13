@@ -132,13 +132,13 @@ function render() {
         <td><strong>${esc(ref)}</strong></td>
         <td>${esc(s.created_by)}</td>
         <td class="ellip" style="max-width:150px" title="${esc(s.service_name)}">${esc(s.service_name)}</td>
-        <td class="ellip" style="max-width:260px" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
+        <td class="ellip" style="max-width:140px" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
         <td class="num">${boxesCell}</td>
         <td class="num">${s.total_weight_lb ?? ''}</td>
         <td class="ellip" style="max-width:170px" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}</td>
         <td>${esc(s.courier_umbrella_name || '')}</td>
         <td class="num">${money(s.shipping_cost)}</td>
-        <td class="mono" title="${esc((s.tracking_numbers || []).join(', '))}">${esc(s.tracking_number || '')}${(s.tracking_numbers || []).length > 1 ? ` <span class="chip static warn">+${s.tracking_numbers.length - 1}</span>` : ''}</td>
+        <td class="mono ellip" style="max-width:140px" title="${esc((s.tracking_numbers || []).join(', '))}">${esc(s.tracking_number || '')}${(s.tracking_numbers || []).length > 1 ? ` <span class="chip static warn">+${s.tracking_numbers.length - 1}</span>` : ''}</td>
         <td><span class="status status-${esc(s.status)}" title="${esc(s.error_message || '')}">${esc(s.status.replace('_', ' '))}</span></td>
         <td>${esc((s.label_created_at || '').split(' ')[0] || '')}</td>
         <td>${esc(s.created_at)}</td>

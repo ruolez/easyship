@@ -252,7 +252,7 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
    ============================================================ */
 .container { max-width: 1240px; margin: 0 auto; padding: 28px 28px 48px; }
 .container.narrow { max-width: 880px; }
-.container.wide { max-width: 1560px; }
+.container.wide { max-width: 1900px; }
 
 .page-head {
   display: flex;
@@ -804,7 +804,7 @@ table.striped tbody tr:nth-child(even) { background: rgba(148, 163, 184, 0.08); 
 table.striped tbody tr:hover { background: var(--surface-sunken); }
 
 /* ---------- In-table filter row ---------- */
-.filter-row th { padding: 2px 8px 12px; vertical-align: top; }
+.filter-row th { padding: 12px 8px 14px; top: 36px; }
 .filter-row input, .filter-row select {
   width: 100%;
   min-width: 96px;
@@ -823,5 +823,6 @@ table.striped tbody tr:hover { background: var(--surface-sunken); }
   box-shadow: 0 0 0 3px var(--primary-ring);
 }
 .filter-row .dates { display: flex; flex-direction: column; gap: 4px; }
-.filter-row input[type="date"] { min-width: 130px; }
+.filter-row input[type="date"] { min-width: 118px; height: 24px; font-size: 11px; padding: 2px 5px; }
 .filter-row .btn { height: 32px; }
+table.compact th, table.compact td { padding: 10px 9px; }
