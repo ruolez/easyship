@@ -63,10 +63,12 @@ function fillOptions(id, values) {
 }
 
 function visibleRows() {
+  const store = document.getElementById('store-filter').value;
   const carrier = document.getElementById('carrier-filter').value;
   const service = document.getElementById('service-filter').value;
   let rows = allRows.filter((s) =>
-    (!carrier || s.courier_umbrella_name === carrier)
+    (!store || s.service_name === store)
+    && (!carrier || s.courier_umbrella_name === carrier)
     && (!service || s.courier_name === service));
   if (sortKey) {
     const val = SORT_VALUE[sortKey];
@@ -93,6 +95,7 @@ async function load() {
   try {
     allRows = await api(`/api/shipments?${params}`);
     const uniq = (vals) => [...new Set(vals.filter(Boolean))].sort();
+    fillOptions('store-filter', uniq(allRows.map((s) => s.service_name)));
     fillOptions('carrier-filter', uniq(allRows.map((s) => s.courier_umbrella_name)));
     fillOptions('service-filter', uniq(allRows.map((s) => s.courier_name)));
     render();
@@ -262,7 +265,7 @@ document.getElementById('search').addEventListener('keydown', (e) => {
 ['status-filter', 'user-filter', 'date-from', 'date-to'].forEach((id) => {
   document.getElementById(id).addEventListener('change', load);
 });
-['carrier-filter', 'service-filter'].forEach((id) => {
+['store-filter', 'carrier-filter', 'service-filter'].forEach((id) => {
   document.getElementById(id).addEventListener('change', render);
 });
 
