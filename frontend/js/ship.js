@@ -76,7 +76,7 @@ async function prefill() {
       if (o.total_weight_lb) {
         document.querySelector('.p-weight').value = o.total_weight_lb;
       }
-      if ((o.existing_tracking || []).length) {
+      if ((o.existing_tracking || []).length && !params.get('reship_ack')) {
         await confirmReship(`Shopify order ${o.name}`, o.existing_tracking,
           "New tracking numbers are added to the order's existing fulfillment — it stays fulfilled.");
       }
@@ -94,7 +94,7 @@ async function prefill() {
         orderItems
       );
       seedParcels(inv.no_boxes, inv.total_weight);
-      if ((inv.tracking_no || '').trim()) {
+      if ((inv.tracking_no || '').trim() && !params.get('reship_ack')) {
         await confirmReship(`Invoice ${inv.invoice_number}`, [inv.tracking_no.trim()],
           'New tracking numbers are added to the invoice Notes in BackOffice — the existing tracking number is kept.');
       }

@@ -34,14 +34,15 @@ async function loadSources() {
   numberInput.focus();
 }
 
-/* Warn that the order failed the Shipper verification check. Resolves true
-   on Continue anyway, false on Cancel (stay on the scan page). */
-function confirmProceed(title, message) {
+/* Warning modal before leaving the scan page. Resolves true on Continue
+   anyway, false on Cancel (stay on the scan page). */
+function confirmProceed(title, message, detailsHtml = '') {
   return new Promise((resolve) => {
     const backdrop = document.getElementById('modal-backdrop');
     document.getElementById('modal').innerHTML = `
       <h3>${esc(title)}</h3>
       <p>${esc(message)}</p>
+      ${detailsHtml}
       <div class="actions">
         <button class="btn btn-text" id="m-cancel">Cancel</button>
         <button class="btn btn-primary" id="m-continue">Continue anyway</button>
@@ -75,6 +76,21 @@ async function verificationGate(kind, id, number) {
     'This order has not been verified in Shipper.');
 }
 
+/* Warn when the order already has tracking (previously shipped). */
+async function reshipGate(what, numbers, note) {
+  if (!numbers.length) return true;
+  statusEl.innerHTML = '';
+  return confirmProceed('Order already processed', `${what} already has tracking:`,
+    `<p class="mono" style="margin-top:8px">${numbers.map(esc).join('<br>')}</p>
+     <p class="text-secondary" style="margin-top:8px">${esc(note)}</p>`);
+}
+
+function stayOnScan() {
+  statusEl.innerHTML = '';
+  numberInput.select();
+  numberInput.focus();
+}
+
 async function lookup() {
   const source = sourceSelect.value;
   const number = numberInput.value.trim();
@@ -86,22 +102,29 @@ async function lookup() {
   try {
     if (kind === 'backoffice') {
       const inv = await api(`/api/backoffice/${id}/lookup?number=${encodeURIComponent(number)}`);
-      if (!(await verificationGate('backoffice', id, number))) {
-        statusEl.innerHTML = '';
-        numberInput.select();
-        numberInput.focus();
+      const tracking = (inv.tracking_no || '').trim();
+      if (!(await reshipGate(`Invoice ${inv.invoice_number}`, tracking ? [tracking] : [],
+        'New tracking numbers are added to the invoice Notes in BackOffice — the existing tracking number is kept.'))) {
+        stayOnScan();
         return;
       }
-      location.href = `/ship.html?source=backoffice&db_id=${id}&invoice_id=${inv.invoice_id}`;
+      if (!(await verificationGate('backoffice', id, number))) {
+        stayOnScan();
+        return;
+      }
+      location.href = `/ship.html?source=backoffice&db_id=${id}&invoice_id=${inv.invoice_id}&reship_ack=1`;
     } else {
       const order = await api(`/api/shopify/lookup?store_id=${id}&number=${encodeURIComponent(number)}`);
-      if (!(await verificationGate('shopify', id, order.name || number))) {
-        statusEl.innerHTML = '';
-        numberInput.select();
-        numberInput.focus();
+      if (!(await reshipGate(`Shopify order ${order.name}`, order.existing_tracking || [],
+        "New tracking numbers are added to the order's existing fulfillment — it stays fulfilled."))) {
+        stayOnScan();
         return;
       }
-      location.href = `/ship.html?source=shopify&store_id=${id}&order_id=${encodeURIComponent(order.id)}`;
+      if (!(await verificationGate('shopify', id, order.name || number))) {
+        stayOnScan();
+        return;
+      }
+      location.href = `/ship.html?source=shopify&store_id=${id}&order_id=${encodeURIComponent(order.id)}&reship_ack=1`;
     }
   } catch (err) {
     statusEl.innerHTML = `<span class="chip static err">✕ ${esc(err.message)}</span>`;
