@@ -793,3 +793,12 @@ td { font-variant-numeric: tabular-nums; }
   opacity: 1;
   pointer-events: auto;
 }
+
+/* ---------- Sortable columns & striped rows ---------- */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--on-surface); }
+th.sortable::after { content: '↕'; margin-left: 5px; font-size: 10px; opacity: 0.35; }
+th.sortable.asc::after { content: '▲'; opacity: 1; color: var(--primary); }
+th.sortable.desc::after { content: '▼'; opacity: 1; color: var(--primary); }
+table.striped tbody tr:nth-child(even) { background: rgba(148, 163, 184, 0.08); }
+table.striped tbody tr:hover { background: var(--surface-sunken); }

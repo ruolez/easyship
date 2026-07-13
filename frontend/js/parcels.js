@@ -22,6 +22,62 @@ async function loadUsers() {
   } catch { /* filter stays open */ }
 }
 
+/* ---------- Client-side sorting & column filters over the fetched page ---------- */
+let allRows = [];
+let sortKey = null;
+let sortDir = 1;
+
+const SORT_VALUE = {
+  ref: (s) => (s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`).toLowerCase(),
+  user: (s) => (s.created_by || '').toLowerCase(),
+  service: (s) => (s.service_name || '').toLowerCase(),
+  address: (s) => formatAddress(s.destination).toLowerCase(),
+  boxes: (s) => s.box_total || 1,
+  weight: (s) => s.total_weight_lb ?? -1,
+  courier: (s) => (s.courier_name || '').toLowerCase(),
+  carrier: (s) => (s.courier_umbrella_name || '').toLowerCase(),
+  cost: (s) => s.shipping_cost ?? -1,
+  tracking: (s) => s.tracking_number || '',
+  status: (s) => s.status || '',
+  shipped: (s) => s.label_created_at || '',
+  created: (s) => s.created_at || '',
+};
+
+document.querySelectorAll('th.sortable').forEach((th) => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if (sortKey === key) sortDir = -sortDir;
+    else { sortKey = key; sortDir = 1; }
+    document.querySelectorAll('th.sortable').forEach((h) => h.classList.remove('asc', 'desc'));
+    th.classList.add(sortDir === 1 ? 'asc' : 'desc');
+    render();
+  });
+});
+
+function fillOptions(id, values) {
+  const el = document.getElementById(id);
+  const current = el.value;
+  el.innerHTML = '<option value="">All</option>'
+    + values.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  if (values.includes(current)) el.value = current;
+}
+
+function visibleRows() {
+  const carrier = document.getElementById('carrier-filter').value;
+  const service = document.getElementById('service-filter').value;
+  let rows = allRows.filter((s) =>
+    (!carrier || s.courier_umbrella_name === carrier)
+    && (!service || s.courier_name === service));
+  if (sortKey) {
+    const val = SORT_VALUE[sortKey];
+    rows = [...rows].sort((a, b) => {
+      const va = val(a); const vb = val(b);
+      return ((va > vb) - (va < vb)) * sortDir;
+    });
+  }
+  return rows;
+}
+
 async function load() {
   const params = new URLSearchParams({
     q: document.getElementById('search').value.trim(),
@@ -35,14 +91,31 @@ async function load() {
   empty.style.display = 'none';
   tbody.innerHTML = '<tr><td colspan="14"><span class="spinner"></span> Loading…</td></tr>';
   try {
-    const rows = await api(`/api/shipments?${params}`);
-    if (!rows.length) {
-      tbody.innerHTML = '';
-      empty.textContent = 'No parcels found.';
-      empty.style.display = '';
-      return;
-    }
-    tbody.innerHTML = rows.map((s) => {
+    allRows = await api(`/api/shipments?${params}`);
+    const uniq = (vals) => [...new Set(vals.filter(Boolean))].sort();
+    fillOptions('carrier-filter', uniq(allRows.map((s) => s.courier_umbrella_name)));
+    fillOptions('service-filter', uniq(allRows.map((s) => s.courier_name)));
+    render();
+  } catch (err) {
+    allRows = [];
+    tbody.innerHTML = '';
+    empty.textContent = err.message;
+    empty.style.display = '';
+  }
+}
+
+function render() {
+  const tbody = document.getElementById('parcels-body');
+  const empty = document.getElementById('empty');
+  const rows = visibleRows();
+  if (!rows.length) {
+    tbody.innerHTML = '';
+    empty.textContent = 'No parcels found.';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+  tbody.innerHTML = rows.map((s) => {
       const ref = s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
       const needsRetry = s.status === 'label_created' && s.box_number === 1 &&
         ((s.source === 'shopify' && !s.writeback_shopify_at) ||
@@ -75,12 +148,7 @@ async function load() {
           ${s.status === 'voided' && s.error_message ? `<button class="btn btn-danger btn-small" onclick="retryUndo(${s.id})">Retry undo</button>` : ''}
         </td>
       </tr>`;
-    }).join('');
-  } catch (err) {
-    tbody.innerHTML = '';
-    empty.textContent = err.message;
-    empty.style.display = '';
-  }
+  }).join('');
 }
 
 window.resumeBuy = async (gid) => {
@@ -193,6 +261,9 @@ document.getElementById('search').addEventListener('keydown', (e) => {
 });
 ['status-filter', 'user-filter', 'date-from', 'date-to'].forEach((id) => {
   document.getElementById(id).addEventListener('change', load);
+});
+['carrier-filter', 'service-filter'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', render);
 });
 
 loadUsers();

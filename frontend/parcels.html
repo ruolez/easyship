@@ -32,6 +32,14 @@
             <option value="error">Error</option>
           </select>
         </div>
+        <div class="field fixed" style="min-width:140px">
+          <label>Carrier</label>
+          <select id="carrier-filter"><option value="">All</option></select>
+        </div>
+        <div class="field fixed" style="min-width:170px">
+          <label>Shipping service</label>
+          <select id="service-filter"><option value="">All</option></select>
+        </div>
         <div class="field fixed" style="min-width:150px">
           <label>From</label>
           <input type="date" id="date-from">
@@ -43,12 +51,23 @@
         <div class="fixed"><button class="btn btn-outlined btn-small" id="refresh">Refresh</button></div>
       </div>
       <div class="table-wrap">
-        <table>
+        <table class="striped">
           <thead>
             <tr>
-              <th>Order #</th><th>User</th><th>Service</th><th>Address</th><th class="num">Boxes</th><th class="num">Weight</th>
-              <th>Shipping Service</th><th>Carrier</th><th class="num">Cost</th><th>Tracking Number</th>
-              <th>Status</th><th>Shipping Date</th><th>Created (CT)</th><th></th>
+              <th class="sortable" data-sort="ref">Order #</th>
+              <th class="sortable" data-sort="user">User</th>
+              <th class="sortable" data-sort="service">Service</th>
+              <th class="sortable" data-sort="address">Address</th>
+              <th class="num sortable" data-sort="boxes">Boxes</th>
+              <th class="num sortable" data-sort="weight">Weight</th>
+              <th class="sortable" data-sort="courier">Shipping Service</th>
+              <th class="sortable" data-sort="carrier">Carrier</th>
+              <th class="num sortable" data-sort="cost">Cost</th>
+              <th class="sortable" data-sort="tracking">Tracking Number</th>
+              <th class="sortable" data-sort="status">Status</th>
+              <th class="sortable" data-sort="shipped">Shipping Date</th>
+              <th class="sortable" data-sort="created">Created (CT)</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="parcels-body"></tbody>
