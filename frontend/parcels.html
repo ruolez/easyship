@@ -11,56 +11,13 @@
   <div class="container wide">
     <div class="page-head"><h1>Parcels</h1><span class="sub">Every label, who created it, and where the tracking went</span></div>
     <div class="card">
-      <div class="row mb-16">
-        <div class="field">
-          <label>Search (order #, tracking, customer, city)</label>
-          <input type="text" id="search" placeholder="Search…">
-        </div>
-        <div class="field fixed" style="min-width:140px">
-          <label>User</label>
-          <select id="user-filter"><option value="">All</option></select>
-        </div>
-        <div class="field fixed" style="min-width:150px">
-          <label>Status</label>
-          <select id="status-filter">
-            <option value="">All</option>
-            <option value="fulfilled">Fulfilled</option>
-            <option value="label_created">Label created</option>
-            <option value="rated">Rated (no label)</option>
-            <option value="draft">Draft</option>
-            <option value="voided">Voided</option>
-            <option value="error">Error</option>
-          </select>
-        </div>
-        <div class="field fixed" style="min-width:150px">
-          <label>Store</label>
-          <select id="store-filter"><option value="">All</option></select>
-        </div>
-        <div class="field fixed" style="min-width:140px">
-          <label>Carrier</label>
-          <select id="carrier-filter"><option value="">All</option></select>
-        </div>
-        <div class="field fixed" style="min-width:170px">
-          <label>Shipping service</label>
-          <select id="service-filter"><option value="">All</option></select>
-        </div>
-        <div class="field fixed" style="min-width:150px">
-          <label>From</label>
-          <input type="date" id="date-from">
-        </div>
-        <div class="field fixed" style="min-width:150px">
-          <label>To</label>
-          <input type="date" id="date-to">
-        </div>
-        <div class="fixed"><button class="btn btn-outlined btn-small" id="refresh">Refresh</button></div>
-      </div>
       <div class="table-wrap">
         <table class="striped">
           <thead>
             <tr>
               <th class="sortable" data-sort="ref">Order #</th>
               <th class="sortable" data-sort="user">User</th>
-              <th class="sortable" data-sort="service">Service</th>
+              <th class="sortable" data-sort="store">Store</th>
               <th class="sortable" data-sort="address">Address</th>
               <th class="num sortable" data-sort="boxes">Boxes</th>
               <th class="num sortable" data-sort="weight">Weight</th>
@@ -72,6 +29,37 @@
               <th class="sortable" data-sort="shipped">Shipping Date</th>
               <th class="sortable" data-sort="created">Created (CT)</th>
               <th></th>
+            </tr>
+            <tr class="filter-row">
+              <th><input type="text" id="search" placeholder="Search…" title="Search order #, tracking, customer, city" style="min-width:120px"></th>
+              <th><select id="user-filter"><option value="">All</option></select></th>
+              <th><select id="store-filter"><option value="">All</option></select></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th><select id="service-filter"><option value="">All</option></select></th>
+              <th><select id="carrier-filter"><option value="">All</option></select></th>
+              <th></th>
+              <th></th>
+              <th>
+                <select id="status-filter">
+                  <option value="">All</option>
+                  <option value="fulfilled">Fulfilled</option>
+                  <option value="label_created">Label created</option>
+                  <option value="rated">Rated (no label)</option>
+                  <option value="draft">Draft</option>
+                  <option value="voided">Voided</option>
+                  <option value="error">Error</option>
+                </select>
+              </th>
+              <th></th>
+              <th>
+                <div class="dates">
+                  <input type="date" id="date-from" title="Created from">
+                  <input type="date" id="date-to" title="Created to">
+                </div>
+              </th>
+              <th><button class="btn btn-outlined btn-small" id="refresh">Refresh</button></th>
             </tr>
           </thead>
           <tbody id="parcels-body"></tbody>

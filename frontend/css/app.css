@@ -802,3 +802,26 @@ th.sortable.asc::after { content: '▲'; opacity: 1; color: var(--primary); }
 th.sortable.desc::after { content: '▼'; opacity: 1; color: var(--primary); }
 table.striped tbody tr:nth-child(even) { background: rgba(148, 163, 184, 0.08); }
 table.striped tbody tr:hover { background: var(--surface-sunken); }
+
+/* ---------- In-table filter row ---------- */
+.filter-row th { padding: 2px 8px 12px; vertical-align: top; }
+.filter-row input, .filter-row select {
+  width: 100%;
+  min-width: 96px;
+  height: 32px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--on-surface);
+  background: var(--surface);
+  border: 1px solid var(--outline-strong);
+  border-radius: 6px;
+}
+.filter-row input:focus, .filter-row select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+.filter-row .dates { display: flex; flex-direction: column; gap: 4px; }
+.filter-row input[type="date"] { min-width: 130px; }
+.filter-row .btn { height: 32px; }
