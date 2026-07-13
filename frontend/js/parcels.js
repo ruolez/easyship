@@ -1,5 +1,8 @@
 initNav('parcels');
 
+let clientSettings = { print_mode: 'browser' };
+api('/api/settings/client').then((s) => { clientSettings = s; }).catch(() => {});
+
 function formatAddress(d) {
   if (!d) return '';
   const parts = [
@@ -109,8 +112,13 @@ window.resumeBuy = async (gid) => {
 
 window.reprint = async (id) => {
   try {
-    await api(`/api/shipments/${id}/print`, { method: 'POST' });
-    snackbar('Sent to printer', 'success');
+    if (clientSettings.print_mode === 'browserprint') {
+      await ZebraPrint.printLabelUrl(`/api/shipments/${id}/label`);
+      snackbar('Label sent to Zebra printer', 'success');
+    } else {
+      await api(`/api/shipments/${id}/print`, { method: 'POST' });
+      snackbar('Sent to printer', 'success');
+    }
   } catch (err) {
     snackbar(err.message, 'error');
   }

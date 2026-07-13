@@ -137,6 +137,11 @@ document.getElementById('test-printer').addEventListener('click', () => {
   }).then((r) => ({ ...r, account: 'test label sent' })));
 });
 
+document.getElementById('test-browserprint').addEventListener('click', () => {
+  testResult('browserprint-test-result',
+    ZebraPrint.test().then(() => ({ account: 'test label sent' })));
+});
+
 /* ---------- BackOffice databases ---------- */
 async function loadDbs() {
   const dbs = await api('/api/backoffice-dbs');

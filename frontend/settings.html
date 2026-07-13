@@ -113,6 +113,7 @@
           <select id="print_mode">
             <option value="browser">Local printer (browser print dialog)</option>
             <option value="network">Network thermal printer (direct)</option>
+            <option value="browserprint">Zebra Browser Print (local USB printer)</option>
           </select>
         </div>
         <div class="field"><label>Printer IP / host</label><input id="printer_host" placeholder="192.168.1.50"></div>
@@ -120,7 +121,13 @@
         <div class="fixed"><button class="btn btn-outlined" id="test-printer">Test print</button></div>
         <div class="fixed" id="printer-test-result"></div>
       </div>
-      <div class="hint mt-16">Direct printing sends the label exactly as Easyship generates it. For thermal printers set your Easyship dashboard → Printing Options to ZPL, 4x6.</div>
+      <div class="row mt-16">
+        <div class="fixed"><button class="btn btn-outlined" id="test-browserprint">Test Zebra print (this computer)</button></div>
+        <div class="fixed" id="browserprint-test-result"></div>
+      </div>
+      <div class="hint mt-16">Direct printing sends the label exactly as Easyship generates it. For thermal printers set your Easyship dashboard → Printing Options to ZPL, 4x6.
+        Zebra Browser Print mode prints silently through the Zebra Browser Print app on each packing station — it must be running with a default printer set,
+        and the first print asks to accept this website inside the app. Test it from the packing station, not the server.</div>
     </div>
 
     <div class="row mb-16">
@@ -165,6 +172,7 @@
 
   <script src="/js/api.js"></script>
   <script src="/js/nav.js"></script>
+  <script src="/js/browserprint.js"></script>
   <script src="/js/settings.js"></script>
 </body>
 </html>

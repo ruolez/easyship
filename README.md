@@ -56,6 +56,10 @@ Default login: **admin** / value of `ADMIN_INITIAL_PASSWORD` in `.env` (change i
    - A failed writeback never loses the label — retry from the Shipments page.
 4. **Shipments** page — full history with user attribution, label reprint, void (cancels the shipment at Easyship), retry writeback.
 
+### Zebra Browser Print (silent label printing)
+
+For a USB-attached Zebra thermal printer on the packing station, set Settings → Label printing → **Zebra Browser Print (local USB printer)**. Labels then print silently the moment they're ready — no print dialog. Requirements on each packing station: the [Zebra Browser Print](https://www.zebra.com/us/en/software/printer-software/browser-print.html) app installed and running with the Zebra set as its default printer, and the Easyship dashboard → Printing Options set to **ZPL, 4x6** (the app stores and forwards the ZPL as-is). The first print asks you to accept the website inside the Browser Print app — click Accept once. Use Settings → *Test Zebra print (this computer)* to verify a station; reprints from the Parcels page go to the Zebra too. Older labels saved as PDF can't be sent to the Zebra — open them via the Label link and print normally.
+
 ### USB scale (auto-weigh)
 
 The Ship page reads a USB HID scale via WebHID and live-fills the focused weight field with stable readings. Fairbanks Ultegra (e.g. 29824) is the primary/preferred device; any HID-class scale (Dymo, Mettler, Stamps.com) works. Requirements: Chrome/Edge and the **https** URL (WebHID needs a secure context — plain `http://<lan-ip>` won't show the scale widget; `http://localhost` is fine). One-time setup per station: open `https://<server-ip>:<https-port>`, accept the self-signed certificate warning, click **Connect scale** in the Packages card and pick the scale. After that it reconnects automatically on every page load. Typing a weight manually pauses auto-fill until the field is refocused.

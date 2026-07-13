@@ -9,6 +9,7 @@ let selectedRate = null;
 let orderItems = [];
 let clientSettings = { placeholder_email: '', print_mode: 'browser' };
 let savedBoxes = [];
+let lastLabelUrl = null;
 
 initNav('scan');
 init();
@@ -431,18 +432,24 @@ function showResult(s) {
 
   if (s.has_label) {
     const url = s.label_url || `/api/shipments/${s.id}/label`;
+    lastLabelUrl = url;
     document.getElementById('r-download').href = url;
     const preview = document.getElementById('r-preview');
-    preview.src = url;
-    preview.style.display = '';
-    if (s.printed == null && clientSettings.print_mode === 'browser') {
-      // Local printer: pop the browser print dialog as soon as the PDF loads
-      preview.addEventListener('load', () => {
-        try {
-          preview.contentWindow.focus();
-          preview.contentWindow.print();
-        } catch { window.open(url, '_blank'); }
-      }, { once: true });
+    if (clientSettings.print_mode === 'browserprint') {
+      preview.style.display = 'none'; // ZPL has no visual preview; Open label still works
+      if (s.printed == null) sendToZebra(url);
+    } else {
+      preview.src = url;
+      preview.style.display = '';
+      if (s.printed == null && clientSettings.print_mode === 'browser') {
+        // Local printer: pop the browser print dialog as soon as the PDF loads
+        preview.addEventListener('load', () => {
+          try {
+            preview.contentWindow.focus();
+            preview.contentWindow.print();
+          } catch { window.open(url, '_blank'); }
+        }, { once: true });
+      }
     }
   } else {
     document.getElementById('r-download').style.display = 'none';
@@ -452,7 +459,31 @@ function showResult(s) {
   panel.scrollIntoView({ behavior: 'smooth' });
 }
 
+async function sendToZebra(url) {
+  const wb = document.getElementById('r-writebacks');
+  try {
+    await ZebraPrint.printLabelUrl(url);
+    wb.innerHTML += ' <span class="chip static ok">🖨 Sent to printer</span>';
+    snackbar('Label sent to Zebra printer', 'success');
+  } catch (err) {
+    wb.innerHTML += ` <span class="chip static err">🖨 ${esc(err.message)}</span>
+      <button class="btn btn-text btn-small" onclick="printAgain()">Print again</button>`;
+    snackbar(err.message, 'error');
+  }
+}
+
 window.printAgain = async (id) => {
+  if (clientSettings.print_mode === 'browserprint') {
+    const url = lastLabelUrl || (id ? `/api/shipments/${id}/label` : null);
+    if (!url) return;
+    try {
+      await ZebraPrint.printLabelUrl(url);
+      snackbar('Label sent to Zebra printer', 'success');
+    } catch (err) {
+      snackbar(err.message, 'error');
+    }
+    return;
+  }
   try {
     await api(`/api/shipments/${id}/print`, { method: 'POST' });
     snackbar('Sent to printer', 'success');
