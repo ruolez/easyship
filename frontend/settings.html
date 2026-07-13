@@ -9,161 +9,197 @@
 <body>
   <header id="appbar"></header>
   <div class="container narrow">
-    <div class="page-head"><h1>Settings</h1></div>
+    <div class="page-head">
+      <div>
+        <h1>Settings</h1>
+        <div class="sub" id="settings-sub">Configure shipping, printing and integrations</div>
+      </div>
+    </div>
 
-    <div class="card" id="card-easyship">
-      <h2>Easyship API</h2>
-      <div class="row mb-16">
-        <div class="field fixed" style="min-width:220px">
-          <label>Mode</label>
-          <select id="easyship_mode">
-            <option value="sandbox">Sandbox (test)</option>
-            <option value="production">Production (live — labels cost money)</option>
-          </select>
+    <nav class="tabs" id="settings-tabs">
+      <button class="tab" data-tab="shipping">Shipping</button>
+      <button class="tab" data-tab="printing">Printing</button>
+      <button class="tab" data-tab="boxes">Boxes</button>
+      <button class="tab" data-tab="integrations">Integrations</button>
+      <button class="tab" data-tab="users">Users</button>
+      <button class="tab" data-tab="account">My account</button>
+    </nav>
+
+    <!-- ================= Shipping ================= -->
+    <section class="tab-panel" data-panel="shipping">
+      <div class="card" id="card-easyship">
+        <h2>Easyship API</h2>
+        <div class="row mb-16">
+          <div class="field fixed" style="min-width:220px">
+            <label>Mode</label>
+            <select id="easyship_mode">
+              <option value="sandbox">Sandbox (test)</option>
+              <option value="production">Production (live — labels cost money)</option>
+            </select>
+          </div>
+          <div class="fixed"><button class="btn btn-outlined" id="test-easyship">Test connection</button></div>
+          <div class="fixed" id="easyship-test-result"></div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Sandbox access token</label>
+            <input type="password" id="easyship_sandbox_token" autocomplete="off">
+          </div>
+          <div class="field">
+            <label>Production access token</label>
+            <input type="password" id="easyship_production_token" autocomplete="off">
+          </div>
+        </div>
+        <div class="row mt-16">
+          <div class="field fixed" style="min-width:260px">
+            <label>Default item category (customs)</label>
+            <select id="default_item_category"></select>
+            <span class="hint">Applied to shipment items — Easyship requires one per item</span>
+          </div>
         </div>
       </div>
-      <div class="row">
-        <div class="field">
-          <label>Sandbox access token</label>
-          <input type="password" id="easyship_sandbox_token" autocomplete="off">
-        </div>
-        <div class="field">
-          <label>Production access token</label>
-          <input type="password" id="easyship_production_token" autocomplete="off">
-        </div>
-      </div>
-      <div class="row mt-16">
-        <div class="field fixed" style="min-width:260px">
-          <label>Default item category (customs)</label>
-          <select id="default_item_category"></select>
-          <span class="hint">Applied to shipment items — Easyship requires one per item</span>
-        </div>
-      </div>
-      <div class="row mt-16">
-        <div class="fixed"><button class="btn btn-outlined" id="test-easyship">Test connection</button></div>
-        <div class="fixed" id="easyship-test-result"></div>
-      </div>
-    </div>
 
-    <div class="card" id="card-origin">
-      <h2>Origin address (ship from)</h2>
-      <div class="row">
-        <div class="field"><label>Company</label><input id="origin_company"></div>
-        <div class="field"><label>Contact name</label><input id="origin_contact"></div>
-      </div>
-      <div class="row mt-16">
-        <div class="field"><label>Address 1</label><input id="origin_address1"></div>
-        <div class="field"><label>Address 2</label><input id="origin_address2"></div>
-      </div>
-      <div class="row mt-16">
-        <div class="field"><label>City</label><input id="origin_city"></div>
-        <div class="field fixed" style="min-width:90px"><label>State</label><input id="origin_state" maxlength="2" style="text-transform:uppercase"></div>
-        <div class="field fixed" style="min-width:120px"><label>ZIP</label><input id="origin_zip"></div>
-      </div>
-      <div class="row mt-16">
-        <div class="field"><label>Phone</label><input id="origin_phone"></div>
-        <div class="field"><label>Email</label><input id="origin_email" type="email"></div>
-      </div>
-    </div>
-
-    <div class="card" id="card-backoffice">
-      <h2>BackOffice databases</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Name</th><th>Host</th><th>Database</th><th>Status</th><th></th></tr></thead>
-          <tbody id="dbs-body"></tbody>
-        </table>
-      </div>
-      <button class="btn btn-text mt-16" id="add-db">+ Add database</button>
-    </div>
-
-    <div class="card" id="card-boxes">
-      <h2>Box sizes</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Name</th><th>L × W × H (in)</th><th></th></tr></thead>
-          <tbody id="boxes-body"></tbody>
-        </table>
-      </div>
-      <div class="row mt-16">
-        <div class="field"><label>Name</label><input id="box-name" placeholder="Medium box"></div>
-        <div class="field fixed" style="min-width:100px"><label>Length</label><input id="box-length" type="number" step="0.1"></div>
-        <div class="field fixed" style="min-width:100px"><label>Width</label><input id="box-width" type="number" step="0.1"></div>
-        <div class="field fixed" style="min-width:100px"><label>Height</label><input id="box-height" type="number" step="0.1"></div>
-        <div class="fixed"><button class="btn btn-outlined" id="add-box">Add box</button></div>
-      </div>
-    </div>
-
-    <div class="card" id="card-workflow">
-      <h2>Workflow &amp; printing</h2>
-      <div class="row mb-16">
-        <div class="field">
-          <label>Placeholder email (used when an order has no email)</label>
-          <input id="placeholder_email" type="email" placeholder="shipping@yourcompany.com">
+      <div class="card" id="card-origin">
+        <h2>Origin address (ship from)</h2>
+        <div class="row">
+          <div class="field"><label>Company</label><input id="origin_company"></div>
+          <div class="field"><label>Contact name</label><input id="origin_contact"></div>
         </div>
-        <div class="field fixed" style="min-width:200px">
-          <label>Label wait timeout (seconds)</label>
-          <input id="label_timeout_seconds" type="number" min="30" step="10" placeholder="120">
-          <span class="hint">How long to wait for Easyship before offering a retry</span>
+        <div class="row mt-16">
+          <div class="field"><label>Address 1</label><input id="origin_address1"></div>
+          <div class="field"><label>Address 2</label><input id="origin_address2"></div>
+        </div>
+        <div class="row mt-16">
+          <div class="field"><label>City</label><input id="origin_city"></div>
+          <div class="field fixed" style="min-width:90px"><label>State</label><input id="origin_state" maxlength="2" style="text-transform:uppercase"></div>
+          <div class="field fixed" style="min-width:120px"><label>ZIP</label><input id="origin_zip"></div>
+        </div>
+        <div class="row mt-16">
+          <div class="field"><label>Phone</label><input id="origin_phone"></div>
+          <div class="field"><label>Email</label><input id="origin_email" type="email"></div>
         </div>
       </div>
-      <div class="row">
-        <div class="field fixed" style="min-width:240px">
-          <label>Label printing</label>
-          <select id="print_mode">
-            <option value="browser">Local printer (browser print dialog)</option>
-            <option value="network">Network thermal printer (direct)</option>
-            <option value="browserprint">Zebra Browser Print (local USB printer)</option>
-          </select>
+    </section>
+
+    <!-- ================= Printing ================= -->
+    <section class="tab-panel" data-panel="printing">
+      <div class="card" id="card-printing">
+        <h2>Label printing</h2>
+        <div class="row">
+          <div class="field fixed" style="min-width:320px">
+            <label>Print mode</label>
+            <select id="print_mode">
+              <option value="browser">Browser print dialog</option>
+              <option value="network">Network thermal printer (direct from server)</option>
+              <option value="browserprint">Zebra Browser Print (USB printer on this station)</option>
+            </select>
+          </div>
         </div>
-        <div class="field"><label>Printer IP / host</label><input id="printer_host" placeholder="192.168.1.50"></div>
-        <div class="field fixed" style="min-width:100px"><label>Port</label><input id="printer_port" placeholder="9100"></div>
-        <div class="fixed"><button class="btn btn-outlined" id="test-printer">Test print</button></div>
-        <div class="fixed" id="printer-test-result"></div>
+        <div class="row mt-16" id="print-network">
+          <div class="field"><label>Printer IP / host</label><input id="printer_host" placeholder="192.168.1.50"></div>
+          <div class="field fixed" style="min-width:100px"><label>Port</label><input id="printer_port" placeholder="9100"></div>
+          <div class="fixed"><button class="btn btn-outlined" id="test-printer">Test print</button></div>
+          <div class="fixed" id="printer-test-result"></div>
+        </div>
+        <div class="row mt-16" id="print-browserprint">
+          <div class="fixed"><button class="btn btn-outlined" id="test-browserprint">Test Zebra print (this computer)</button></div>
+          <div class="fixed" id="browserprint-test-result"></div>
+        </div>
+        <div class="hint mt-16" id="print-hint"></div>
       </div>
-      <div class="row mt-16">
-        <div class="fixed"><button class="btn btn-outlined" id="test-browserprint">Test Zebra print (this computer)</button></div>
-        <div class="fixed" id="browserprint-test-result"></div>
+
+      <div class="card" id="card-workflow">
+        <h2>Workflow</h2>
+        <div class="row">
+          <div class="field">
+            <label>Placeholder email (used when an order has no email)</label>
+            <input id="placeholder_email" type="email" placeholder="shipping@yourcompany.com">
+          </div>
+          <div class="field fixed" style="min-width:200px">
+            <label>Label wait timeout (seconds)</label>
+            <input id="label_timeout_seconds" type="number" min="30" step="10" placeholder="120">
+            <span class="hint">How long to wait for Easyship before offering a retry</span>
+          </div>
+        </div>
       </div>
-      <div class="hint mt-16">Direct printing sends the label exactly as Easyship generates it. For thermal printers set your Easyship dashboard → Printing Options to ZPL, 4x6.
-        Zebra Browser Print mode prints silently through the Zebra Browser Print app on each packing station — it must be running with a default printer set,
-        and the first print asks to accept this website inside the app. Test it from the packing station, not the server.</div>
-    </div>
+    </section>
 
-    <div class="row mb-16">
-      <button class="btn btn-primary" id="save-settings">Save all settings</button>
-    </div>
-
-    <div class="card" id="card-stores">
-      <h2>Shopify stores</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Name</th><th>Domain</th><th>Status</th><th></th></tr></thead>
-          <tbody id="stores-body"></tbody>
-        </table>
+    <!-- ================= Boxes ================= -->
+    <section class="tab-panel" data-panel="boxes">
+      <div class="card" id="card-boxes">
+        <h2>Box sizes</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>L × W × H (in)</th><th></th></tr></thead>
+            <tbody id="boxes-body"></tbody>
+          </table>
+        </div>
+        <div class="row mt-16">
+          <div class="field"><label>Name</label><input id="box-name" placeholder="Medium box"></div>
+          <div class="field fixed" style="min-width:100px"><label>Length</label><input id="box-length" type="number" step="0.1"></div>
+          <div class="field fixed" style="min-width:100px"><label>Width</label><input id="box-width" type="number" step="0.1"></div>
+          <div class="field fixed" style="min-width:100px"><label>Height</label><input id="box-height" type="number" step="0.1"></div>
+          <div class="fixed"><button class="btn btn-outlined" id="add-box">Add box</button></div>
+        </div>
       </div>
-      <button class="btn btn-text mt-16" id="add-store">+ Add store</button>
-    </div>
+    </section>
 
-    <div class="card" id="card-users">
-      <h2>Users</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead>
-          <tbody id="users-body"></tbody>
-        </table>
+    <!-- ================= Integrations ================= -->
+    <section class="tab-panel" data-panel="integrations">
+      <div class="card" id="card-stores">
+        <h2>Shopify stores</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Domain</th><th>Status</th><th></th></tr></thead>
+            <tbody id="stores-body"></tbody>
+          </table>
+        </div>
+        <button class="btn btn-text mt-16" id="add-store">+ Add store</button>
       </div>
-      <button class="btn btn-text mt-16" id="add-user">+ Add user</button>
-    </div>
 
-    <div class="card" id="card-password">
-      <h2>Change my password</h2>
-      <div class="row">
-        <div class="field"><label>New password</label><input type="password" id="my-new-password" autocomplete="new-password"></div>
-        <div class="fixed"><button class="btn btn-outlined" id="change-my-password">Change password</button></div>
+      <div class="card" id="card-backoffice">
+        <h2>BackOffice databases</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Host</th><th>Database</th><th>Status</th><th></th></tr></thead>
+            <tbody id="dbs-body"></tbody>
+          </table>
+        </div>
+        <button class="btn btn-text mt-16" id="add-db">+ Add database</button>
       </div>
-    </div>
+    </section>
 
+    <!-- ================= Users ================= -->
+    <section class="tab-panel" data-panel="users">
+      <div class="card" id="card-users">
+        <h2>Users</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead>
+            <tbody id="users-body"></tbody>
+          </table>
+        </div>
+        <button class="btn btn-text mt-16" id="add-user">+ Add user</button>
+      </div>
+    </section>
+
+    <!-- ================= My account ================= -->
+    <section class="tab-panel" data-panel="account">
+      <div class="card" id="card-password">
+        <h2>Change my password</h2>
+        <div class="row">
+          <div class="field"><label>New password</label><input type="password" id="my-new-password" autocomplete="new-password"></div>
+          <div class="fixed"><button class="btn btn-outlined" id="change-my-password">Change password</button></div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="savebar" id="savebar">
+    <span>Unsaved changes</span>
+    <button class="btn btn-text" id="discard-settings">Discard</button>
+    <button class="btn btn-primary" id="save-settings">Save changes</button>
   </div>
 
   <div class="modal-backdrop" id="modal-backdrop">

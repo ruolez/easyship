@@ -16,7 +16,14 @@ const NAV_ITEMS = [
 ];
 
 async function initNav(activePage) {
-  const mount = document.getElementById('appbar');
+  // Re-entrant: outerHTML below consumes #appbar, so recreate the mount on re-render
+  document.querySelectorAll('.mobile-bar, .sidebar-backdrop, .sidebar').forEach((el) => el.remove());
+  let mount = document.getElementById('appbar');
+  if (!mount) {
+    mount = document.createElement('header');
+    mount.id = 'appbar';
+    document.body.prepend(mount);
+  }
   document.body.classList.add('with-sidebar');
   const active = NAV_ITEMS.find((i) => i.page === activePage);
 

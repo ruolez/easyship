@@ -8,19 +8,84 @@ const SETTING_IDS = [
 ];
 
 initNav('settings').then(async () => {
-  if (window.currentUser && window.currentUser.role !== 'admin') {
-    ['card-easyship', 'card-origin', 'card-backoffice', 'card-boxes', 'card-workflow', 'card-stores', 'card-users']
-      .forEach((id) => document.getElementById(id).style.display = 'none');
-    document.getElementById('save-settings').style.display = 'none';
-    return;
-  }
+  const isAdmin = window.currentUser && window.currentUser.role === 'admin';
+  initTabs(isAdmin);
+  if (!isAdmin) return;
   await loadCategories();
   await loadSettings();
+  updatePrintModeUI();
+  watchDirty();
   await loadStores();
   await loadDbs();
   await loadBoxes();
   await loadUsers();
 });
+
+/* ---------- Tabs ---------- */
+const ADMIN_TABS = ['shipping', 'printing', 'boxes', 'integrations', 'users'];
+
+function initTabs(isAdmin) {
+  const buttons = [...document.querySelectorAll('#settings-tabs .tab')];
+  buttons.forEach((b) => {
+    if (!isAdmin && ADMIN_TABS.includes(b.dataset.tab)) b.style.display = 'none';
+    b.addEventListener('click', () => showTab(b.dataset.tab));
+  });
+  const allowed = buttons.map((b) => b.dataset.tab)
+    .filter((t) => isAdmin || !ADMIN_TABS.includes(t));
+  const fromHash = location.hash.replace('#', '');
+  showTab(allowed.includes(fromHash) ? fromHash : allowed[0]);
+}
+
+function showTab(tab) {
+  document.querySelectorAll('#settings-tabs .tab')
+    .forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab-panel')
+    .forEach((p) => p.classList.toggle('active', p.dataset.panel === tab));
+  if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`);
+}
+
+/* ---------- Unsaved-changes save bar ---------- */
+let dirty = false;
+
+function setDirty(v) {
+  dirty = v;
+  document.getElementById('savebar').classList.toggle('show', v);
+}
+
+function watchDirty() {
+  SETTING_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => setDirty(true));
+    el.addEventListener('change', () => setDirty(true));
+  });
+}
+
+window.addEventListener('beforeunload', (e) => {
+  if (dirty) e.preventDefault();
+});
+
+document.getElementById('discard-settings').addEventListener('click', async () => {
+  await loadSettings();
+  updatePrintModeUI();
+  setDirty(false);
+});
+
+/* ---------- Print mode: show only what the selected mode needs ---------- */
+const PRINT_HINTS = {
+  browser: 'After purchase the label opens in this browser’s print dialog — works with any printer, one click per label.',
+  network: 'The server sends labels straight to a thermal printer on the network — no dialog. Set your Easyship dashboard → Printing Options to ZPL, 4x6.',
+  browserprint: 'Labels print silently through the Zebra Browser Print app on each packing station. The app must be running with the Zebra set as its default printer; the first print asks to accept this website inside the app. Requires Easyship dashboard → Printing Options set to ZPL, 4x6. Test from the packing station, not the server.',
+};
+
+function updatePrintModeUI() {
+  const mode = document.getElementById('print_mode').value || 'browser';
+  document.getElementById('print-network').style.display = mode === 'network' ? '' : 'none';
+  document.getElementById('print-browserprint').style.display = mode === 'browserprint' ? '' : 'none';
+  document.getElementById('print-hint').textContent = PRINT_HINTS[mode] || '';
+}
+
+document.getElementById('print_mode').addEventListener('change', updatePrintModeUI);
 
 /* ---------- Box sizes ---------- */
 async function loadBoxes() {
@@ -96,6 +161,7 @@ document.getElementById('save-settings').addEventListener('click', async () => {
     await api('/api/settings', { method: 'PUT', body });
     snackbar('Settings saved', 'success');
     await loadSettings();
+    setDirty(false);
     initNav('settings');
   } catch (err) {
     snackbar(err.message, 'error');
