@@ -20,6 +20,7 @@ initNav('settings').then(async () => {
   await loadDbs();
   await loadBoxes();
   await loadUsers();
+  loadServices();
 });
 
 /* ---------- Tabs ---------- */
@@ -138,6 +139,58 @@ async function loadCategories() {
     select.innerHTML = '<option value="dry_food_supplements">Dry Food Supplements</option>';
   }
 }
+
+/* ---------- Shipping services (rate exclusions) ---------- */
+async function loadServices() {
+  const list = document.getElementById('services-list');
+  list.innerHTML = '<p class="text-secondary">Loading services…</p>';
+  try {
+    const res = await api('/api/settings/courier-services');
+    renderServices(res.services || [], new Set(res.excluded || []));
+  } catch (err) {
+    list.innerHTML = `<p class="text-secondary">Could not load services: ${esc(err.message)}</p>`;
+  }
+}
+
+function renderServices(services, excluded) {
+  const list = document.getElementById('services-list');
+  if (!services.length) {
+    list.innerHTML = '<p class="text-secondary">No services returned. Check the Easyship token and mode above.</p>';
+    return;
+  }
+  const groups = new Map();
+  services.forEach((s) => {
+    const key = s.umbrella_name || 'Other';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  });
+  list.innerHTML = [...groups.entries()].map(([carrier, items]) => `
+    <div class="svc-group">
+      <h4>${esc(carrier)}</h4>
+      <div class="svc-grid">
+        ${items.map((s) => `
+          <label class="svc-item">
+            <input type="checkbox" class="svc-exclude" value="${esc(s.id)}" ${excluded.has(s.id) ? 'checked' : ''}>
+            <span>${esc(s.name)}</span>
+          </label>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+async function saveServices() {
+  const excluded = [...document.querySelectorAll('.svc-exclude:checked')].map((el) => el.value);
+  const status = document.getElementById('services-status');
+  status.textContent = '';
+  try {
+    await api('/api/settings/excluded-services', { method: 'POST', body: { excluded } });
+    snackbar(`Saved — ${excluded.length} service${excluded.length === 1 ? '' : 's'} hidden`, 'success');
+  } catch (err) {
+    snackbar(err.message, 'error');
+  }
+}
+
+document.getElementById('reload-services').addEventListener('click', loadServices);
+document.getElementById('save-services').addEventListener('click', saveServices);
 
 async function loadSettings() {
   const settings = await api('/api/settings');

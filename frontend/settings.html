@@ -79,6 +79,18 @@
           <div class="field"><label>Email</label><input id="origin_email" type="email"></div>
         </div>
       </div>
+
+      <div class="card" id="card-services">
+        <h2>Shipping services
+          <button class="btn btn-outlined btn-small" id="reload-services" style="margin-left:auto">Reload</button>
+        </h2>
+        <p class="hint mb-16">Checked services are hidden from the rate list on the shipping page. Fetched live from your Easyship account (current mode).</p>
+        <div id="services-list"><p class="text-secondary">Loading services…</p></div>
+        <div class="row mt-16">
+          <div class="fixed"><button class="btn btn-primary" id="save-services">Save exclusions</button></div>
+          <div class="fixed" id="services-status"></div>
+        </div>
+      </div>
     </section>
 
     <!-- ================= Printing ================= -->

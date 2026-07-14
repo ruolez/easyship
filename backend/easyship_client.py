@@ -1,4 +1,5 @@
 import base64
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,6 +9,8 @@ import requests
 
 import config
 import db
+
+EXCLUDED_SERVICES_KEY = "excluded_courier_service_ids"
 
 # Easyship limits requests per second; parallel per-box calls must be spaced
 # out. Processing still overlaps — only the launches are staggered.
@@ -240,6 +243,54 @@ def list_item_categories():
         for c in data.get("item_categories") or []
         if c.get("slug")
     ]
+
+
+def _service_label(c):
+    return (
+        c.get("official_name") or c.get("name")
+        or c.get("service_name") or c.get("umbrella_name") or "Service"
+    ).strip()
+
+
+def list_courier_services():
+    """Every active courier service on the account as [{id, name, umbrella_name}],
+    deduped and sorted by carrier then service. Paginates /courier_services. The
+    `id` matches the courier_service.id used in rates, so it's a safe exclusion key."""
+    services = {}
+    page = 1
+    while page <= 20:  # safety cap; the account has far fewer than 2000 services
+        data = _request("GET", "/courier_services", params={"page": page, "per_page": 100})
+        batch = data.get("courier_services") or []
+        for c in batch:
+            sid = c.get("id")
+            if sid:
+                services[sid] = {
+                    "id": sid,
+                    "umbrella_name": c.get("umbrella_name") or "",
+                    "name": _service_label(c),
+                }
+        total = ((data.get("meta") or {}).get("pagination") or {}).get("count")
+        if not batch or len(batch) < 100 or (total is not None and len(services) >= total):
+            break
+        page += 1
+    return sorted(services.values(), key=lambda s: (s["umbrella_name"].lower(), s["name"].lower()))
+
+
+def get_excluded_service_ids():
+    """Set of courier_service_id strings the user has chosen to hide from rates."""
+    raw = db.get_setting(EXCLUDED_SERVICES_KEY)
+    if not raw:
+        return set()
+    try:
+        return {str(i) for i in json.loads(raw) if i}
+    except (ValueError, TypeError):
+        return set()
+
+
+def set_excluded_service_ids(ids):
+    clean = sorted({str(i) for i in ids if i})
+    db.set_setting(EXCLUDED_SERVICES_KEY, json.dumps(clean))
+    return clean
 
 
 def create_shipments(destination, parcels, items):

@@ -159,6 +159,31 @@ def easyship_categories():
     return jsonify([{"slug": s, "name": s.replace("_", " ").title()} for s in FALLBACK_CATEGORIES])
 
 
+@bp.get("/settings/courier-services")
+@admin_required
+def courier_services():
+    import easyship_client
+    excluded = sorted(easyship_client.get_excluded_service_ids())
+    try:
+        services = easyship_client.list_courier_services()
+    except Exception as e:
+        return api_error(f"Could not fetch services from Easyship: {e}")
+    return jsonify({"services": services, "excluded": excluded})
+
+
+@bp.post("/settings/excluded-services")
+@admin_required
+def save_excluded_services():
+    data = request.get_json(silent=True) or {}
+    ids = data.get("excluded")
+    if not isinstance(ids, list):
+        return api_error("excluded must be a list of courier_service_id values")
+    import easyship_client
+    clean = easyship_client.set_excluded_service_ids(ids)
+    audit("settings.excluded_services", {"count": len(clean)})
+    return jsonify({"ok": True, "excluded": clean})
+
+
 @bp.post("/settings/test/easyship")
 @admin_required
 def test_easyship():

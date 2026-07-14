@@ -156,6 +156,15 @@ def get_rates():
             message = ("No single courier returned rates for every box. "
                        "Check each box's weight and dimensions.")
         return api_error(message, 422)
+
+    excluded = easyship.get_excluded_service_ids()
+    if excluded:
+        visible = [r for r in rates if r["courier_service_id"] not in excluded]
+        if not visible:
+            return api_error(
+                "Every available courier service is excluded — adjust exclusions in Settings.", 422
+            )
+        rates = visible
     return jsonify({
         "group_id": group_id,
         "shipment_id": row_ids[0],
