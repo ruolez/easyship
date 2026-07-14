@@ -427,26 +427,54 @@ def extract_label_documents(shipment):
     return docs
 
 
+def _image_to_pdf(data):
+    """Wrap a raster label (PNG/JPG) in a single-page PDF at its native size,
+    honoring the image's embedded DPI so a 4x6 label stays 4x6."""
+    import io
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(data))
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    dpi = img.info.get("dpi")
+    resolution = float(dpi[0]) if dpi and dpi[0] else 203.0  # thermal labels are 203 DPI
+    buf = io.BytesIO()
+    img.save(buf, format="PDF", resolution=resolution)
+    return buf.getvalue()
+
+
+def _merge_to_pdf(docs):
+    """One multi-page PDF, one label per page — PDF pages copied as-is, raster
+    labels converted first. Handles all-PDF, all-image, and mixed sets."""
+    import io
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+    for data, fmt in docs:
+        page_pdf = data if fmt == "pdf" else _image_to_pdf(data)
+        for page in PdfReader(io.BytesIO(page_pdf)).pages:
+            writer.add_page(page)
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
 def merge_label_documents(docs):
-    """Combine per-box labels into one printable file: multi-page PDF or
-    concatenated ZPL. Returns (bytes, format) or (None, None)."""
+    """Combine per-box labels into one printable file. PDF/PNG labels merge into
+    a single multi-page PDF (one label per page); ZPL concatenates. Returns
+    (bytes, format) or (None, None)."""
     if not docs:
         return None, None
     if len(docs) == 1:
         return docs[0]
     formats = {fmt for _, fmt in docs}
-    if formats == {"pdf"}:
-        import io
-        from pypdf import PdfReader, PdfWriter
-        writer = PdfWriter()
-        for data, _ in docs:
-            for page in PdfReader(io.BytesIO(data)).pages:
-                writer.add_page(page)
-        buf = io.BytesIO()
-        writer.write(buf)
-        return buf.getvalue(), "pdf"
     if formats == {"zpl"}:
         return b"\n".join(data for data, _ in docs), "zpl"
+    if formats <= {"pdf", "png"}:
+        try:
+            return _merge_to_pdf(docs), "pdf"
+        except Exception:
+            return docs[0]  # never drop the whole job if conversion fails
     return docs[0]
 
 
