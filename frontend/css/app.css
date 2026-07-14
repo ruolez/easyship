@@ -300,6 +300,23 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 .ship-grid .rate-list { max-height: 46vh; overflow-y: auto; padding-right: 2px; }
 .ship-grid #panel-result .row.mb-16 > .fixed { flex: 1 1 auto; }
 
+/* Denser cards/fields inside the columns so everything fits without overflow. */
+.ship-grid .card { padding: 18px 18px; }
+.ship-grid .card h2 { flex-wrap: wrap; row-gap: 6px; margin-bottom: 14px; }
+.ship-grid .card .row { gap: 12px; }
+.ship-grid .field input,
+.ship-grid .field select { height: 34px; font-size: 13.5px; }
+
+/* Boxes row: shrink box/weight/dimension controls to fit the middle column. */
+.ship-grid .parcel-row { gap: 10px; padding: 10px 12px; }
+.ship-grid .parcel-row .parcel-num { width: 22px; height: 22px; font-size: 11.5px; }
+.ship-grid .parcel-row select.p-box { min-width: 0; }
+.ship-grid .parcel-row .field.parcel-weight { flex: 0 0 76px; }
+.ship-grid .parcel-row .field label { font-size: 10px; letter-spacing: 0.3px; }
+.ship-grid .parcel-row .dims-group { gap: 4px; }
+.ship-grid .parcel-row .dims-group input { width: 42px; padding: 0 4px; }
+.ship-grid .parcel-row .remove-parcel { width: 26px; height: 26px; font-size: 13px; }
+
 /* ============================================================
    Buttons
    ============================================================ */
@@ -664,40 +681,55 @@ td { font-variant-numeric: tabular-nums; }
 .parcel-row .remove-parcel:hover { background: var(--error-light); color: var(--error); }
 
 /* ============================================================
-   Rate cards
+   Rate list (compact radio rows)
    ============================================================ */
-.rate-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
-.rate-card {
-  position: relative;
+.rate-list { display: flex; flex-direction: column; gap: 8px; }
+.rate-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   border: 1px solid var(--outline-strong);
   border-radius: 8px;
   background: var(--surface);
-  padding: 15px 16px;
+  padding: 10px 14px;
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
 }
-.rate-card:hover { border-color: var(--primary); }
-.rate-card:focus-visible { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
-.rate-card.selected { border-color: var(--primary); background: var(--primary-light); box-shadow: 0 0 0 1px var(--primary); }
-.rate-card.selected::after {
-  content: '✓';
+.rate-row:hover { border-color: var(--primary); }
+.rate-row:focus-visible { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+.rate-row.selected { border-color: var(--primary); background: var(--primary-light); box-shadow: 0 0 0 1px var(--primary); }
+.rate-radio {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--outline-strong);
+  background: var(--surface);
+  position: relative;
+  transition: border-color 0.12s;
+}
+.rate-row:hover .rate-radio,
+.rate-row.selected .rate-radio { border-color: var(--primary); }
+.rate-row.selected .rate-radio::after {
+  content: '';
   position: absolute;
-  top: 10px;
-  right: 12px;
-  width: 20px;
-  height: 20px;
+  inset: 3px;
   border-radius: 50%;
   background: var(--primary);
-  color: #fff;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
-.rate-card .courier { font-weight: 600; font-size: 13.5px; margin-bottom: 6px; padding-right: 24px; }
-.rate-card .price { font-size: 19px; font-weight: 700; color: var(--on-surface); font-variant-numeric: tabular-nums; }
-.rate-card .price .text-secondary { font-size: 12px; font-weight: 500; }
-.rate-card .meta { color: var(--text-secondary); font-size: 12.5px; margin-top: 3px; }
+.rate-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.rate-courier { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.rate-days { color: var(--text-secondary); font-size: 12px; }
+.rate-price {
+  margin-left: auto;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--on-surface);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rate-price small { font-size: 11px; font-weight: 500; color: var(--text-secondary); }
+.rate-best { font-size: 10.5px; padding: 1px 6px; }
 
 /* ============================================================
    Scan screen

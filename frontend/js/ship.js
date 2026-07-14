@@ -169,7 +169,7 @@ function addParcelRow(weight = '', length = '', width = '', height = '') {
     <div class="field"><label>Box</label><select class="p-box">${boxOptions}</select></div>
     <div class="field parcel-weight"><label>Weight (lb)</label><input class="p-weight" type="number" step="0.1" min="0.1" value="${weight}" placeholder="0.0"></div>
     <div class="field">
-      <label>Dimensions — L × W × H (in)</label>
+      <label>L × W × H (in)</label>
       <div class="dims-group">
         <input class="p-length" type="number" step="0.1" value="${length}" placeholder="L">
         <span>×</span>
@@ -289,27 +289,33 @@ function renderRates() {
   selectedRate = null;
   document.getElementById('buy-label').disabled = true;
   list.innerHTML = rates.map((r, i) => `
-    <div class="rate-card" data-idx="${i}" tabindex="0">
-      <div class="courier">${esc(r.courier_name)}</div>
-      <div class="price">${money(r.total_charge)} <span class="text-secondary" style="font-size:13px">${esc(r.currency || 'USD')}</span></div>
-      <div class="meta">${r.min_delivery_time ?? '?'}–${r.max_delivery_time ?? '?'} business days</div>
-      ${r.value_for_money_rank === 1 ? '<div class="chip static ok mt-16" style="margin-top:8px">Best value</div>' : ''}
+    <div class="rate-row" data-idx="${i}" tabindex="0" role="radio" aria-checked="false">
+      <span class="rate-radio"></span>
+      <span class="rate-info">
+        <span class="rate-courier">${esc(r.courier_name)}${r.value_for_money_rank === 1 ? ' <span class="chip static ok rate-best">Best value</span>' : ''}</span>
+        <span class="rate-days">${r.min_delivery_time ?? '?'}–${r.max_delivery_time ?? '?'} business days</span>
+      </span>
+      <span class="rate-price">${money(r.total_charge)} <small>${esc(r.currency || 'USD')}</small></span>
     </div>`).join('');
-  const select = (card) => {
-    list.querySelectorAll('.rate-card').forEach((c) => c.classList.remove('selected'));
-    card.classList.add('selected');
-    selectedRate = rates[Number(card.dataset.idx)];
+  const select = (row) => {
+    list.querySelectorAll('.rate-row').forEach((c) => {
+      c.classList.remove('selected');
+      c.setAttribute('aria-checked', 'false');
+    });
+    row.classList.add('selected');
+    row.setAttribute('aria-checked', 'true');
+    selectedRate = rates[Number(row.dataset.idx)];
     const buyBtn = document.getElementById('buy-label');
     buyBtn.disabled = false;
     buyBtn.focus();
   };
-  list.querySelectorAll('.rate-card').forEach((card) => {
-    card.addEventListener('click', () => select(card));
-    card.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(card); }
+  list.querySelectorAll('.rate-row').forEach((row) => {
+    row.addEventListener('click', () => select(row));
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(row); }
     });
   });
-  const first = list.querySelector('.rate-card');
+  const first = list.querySelector('.rate-row');
   if (first) first.focus();
 }
 
