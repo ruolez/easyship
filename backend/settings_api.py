@@ -170,17 +170,22 @@ def test_easyship():
         token = db.get_setting(token_key)
     if not token:
         return api_error(f"No {mode} token configured")
+    # NB: the /account endpoint 500s unconditionally on Easyship's side (even with
+    # no token), so we validate the token against /item_categories instead — a
+    # lightweight authenticated endpoint that returns 401 on a bad/missing token.
     try:
         resp = requests.get(
-            f"{config.EASYSHIP_BASE_URLS[mode]}/account",
+            f"{config.EASYSHIP_BASE_URLS[mode]}/item_categories",
             headers={"Authorization": f"Bearer {token}"},
+            params={"perPage": 1},
             timeout=15,
         )
     except requests.RequestException as e:
         return api_error(f"Connection failed: {e}")
     if resp.status_code == 200:
-        account = resp.json().get("account", {})
-        return jsonify({"ok": True, "mode": mode, "account": account.get("name") or "connected"})
+        return jsonify({"ok": True, "mode": mode, "account": "connected"})
+    if resp.status_code in (401, 403):
+        return api_error(f"Token rejected ({resp.status_code}) — check the {mode} token")
     return api_error(f"Easyship returned {resp.status_code}: {resp.text[:300]}")
 
 
