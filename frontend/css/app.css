@@ -290,7 +290,7 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 /* ---------- Ship screen: 3-column horizontal layout ---------- */
 .ship-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1fr);
+  grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.3fr) minmax(0, 1.1fr);
   gap: 16px;
   align-items: start;
 }
