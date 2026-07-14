@@ -64,7 +64,14 @@ def _auth():
 def _request(method, path, json_body=None, params=None, timeout=45, auth=None):
     base_url, token = auth or _auth()
     url = f"{base_url}{path}"
+    # GETs are idempotent, so we ride through transient gateway timeouts / 5xx
+    # (e.g. Cloudflare 522) by retrying them. Money-sensitive writes (label
+    # purchase) are deliberately NOT retried here — the group-buy loop re-issues
+    # those only after re-checking shipment state, so a lost write can never
+    # double-charge.
+    retry_recoverable = method.upper() == "GET"
     resp = None
+    last_exc = None
     for attempt in range(4):
         _throttle()
         try:
@@ -77,6 +84,10 @@ def _request(method, path, json_body=None, params=None, timeout=45, auth=None):
                 timeout=timeout,
             )
         except requests.RequestException as e:
+            if retry_recoverable and attempt < 3:
+                last_exc = e
+                time.sleep(min(1.5 * (attempt + 1), 10))
+                continue
             raise EasyshipError(f"Easyship request failed: {e}", status=None)
         if resp.status_code == 429:
             try:
@@ -85,7 +96,12 @@ def _request(method, path, json_body=None, params=None, timeout=45, auth=None):
                 retry_after = 0
             time.sleep(min(retry_after or 1.5 * (attempt + 1), 15))
             continue
+        if retry_recoverable and resp.status_code >= 500 and attempt < 3:
+            time.sleep(min(1.5 * (attempt + 1), 10))
+            continue
         break
+    if resp is None:
+        raise EasyshipError(f"Easyship request failed: {last_exc}", status=None)
     if resp.status_code >= 400:
         raise EasyshipError(_extract_error(resp), status=resp.status_code)
     return resp.json()

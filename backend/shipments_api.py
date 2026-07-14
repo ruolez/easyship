@@ -385,9 +385,13 @@ def _group_buy_impl(group_id, courier_service_id, rate, user_id):
         ]
 
     try:
-        timeout_s = int(db.get_setting("label_timeout_seconds") or 120)
+        timeout_s = int(db.get_setting("label_timeout_seconds") or 180)
     except ValueError:
-        timeout_s = 120
+        timeout_s = 180
+    try:
+        rebuy_interval_s = max(int(db.get_setting("label_rebuy_interval_seconds") or 6), 3)
+    except ValueError:
+        rebuy_interval_s = 6
     deadline = time.monotonic() + max(timeout_s, 30)
     rebuy_next = {}
 
@@ -415,7 +419,7 @@ def _group_buy_impl(group_id, courier_service_id, rate, user_id):
         ]
         if rebuy_ids:
             for sid, res in easyship.buy_labels(rebuy_ids, courier_service_id).items():
-                rebuy_next[sid] = time.monotonic() + 12
+                rebuy_next[sid] = time.monotonic() + rebuy_interval_s
                 if isinstance(res, EasyshipError):
                     last_error = res
                     box_errors[sid] = str(res)
