@@ -230,7 +230,7 @@ def delete_box(box_id):
 @login_required
 def list_stores():
     rows = db.query(
-        "SELECT id, name, shop_domain, is_active, created_at FROM shopify_stores ORDER BY id"
+        "SELECT id, name, shop_domain, prefix, is_active, created_at FROM shopify_stores ORDER BY id"
     )
     return jsonify([
         {**r, "created_at": r["created_at"].isoformat()} for r in rows
@@ -246,9 +246,10 @@ def create_store():
     token = (data.get("access_token") or "").strip()
     if not name or not domain or not token:
         return api_error("Name, shop domain and access token are required")
+    prefix = (data.get("prefix") or "").strip()
     row = db.execute(
-        "INSERT INTO shopify_stores (name, shop_domain, access_token) VALUES (%s, %s, %s) RETURNING id",
-        (name, domain, token),
+        "INSERT INTO shopify_stores (name, shop_domain, access_token, prefix) VALUES (%s, %s, %s, %s) RETURNING id",
+        (name, domain, token, prefix),
         returning=True,
     )
     audit("store.create", {"name": name, "domain": domain})
@@ -268,9 +269,11 @@ def update_store(store_id):
     if not token or token == MASK:
         token = store["access_token"]
     is_active = bool(data.get("is_active", store["is_active"]))
+    prefix = data.get("prefix")
+    prefix = prefix.strip() if prefix is not None else store["prefix"]
     db.execute(
-        "UPDATE shopify_stores SET name=%s, shop_domain=%s, access_token=%s, is_active=%s WHERE id=%s",
-        (name, domain, token, is_active, store_id),
+        "UPDATE shopify_stores SET name=%s, shop_domain=%s, access_token=%s, prefix=%s, is_active=%s WHERE id=%s",
+        (name, domain, token, prefix, is_active, store_id),
     )
     audit("store.update", {"id": store_id, "name": name})
     return jsonify({"ok": True})

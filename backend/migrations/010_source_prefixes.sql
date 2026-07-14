@@ -1,0 +1,2 @@
+ALTER TABLE shopify_stores  ADD COLUMN prefix TEXT NOT NULL DEFAULT '';
+ALTER TABLE backoffice_dbs  ADD COLUMN prefix TEXT NOT NULL DEFAULT '';

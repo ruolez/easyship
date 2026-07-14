@@ -3,6 +3,10 @@ initNav('scan');
 const sourceSelect = document.getElementById('source-select');
 const numberInput = document.getElementById('order-number');
 const statusEl = document.getElementById('lookup-status');
+const autoDetectToggle = document.getElementById('auto-detect');
+
+/* Active sources with their configured prefixes, for auto-detect. */
+let sources = [];
 
 async function loadSources() {
   const [dbs, stores] = await Promise.all([
@@ -12,6 +16,10 @@ async function loadSources() {
   const groups = [];
   const activeDbs = dbs.filter((d) => d.is_active);
   const activeStores = stores.filter((s) => s.is_active);
+  sources = [
+    ...activeDbs.map((d) => ({ kind: 'backoffice', id: d.id, name: d.name, prefix: (d.prefix || '').trim() })),
+    ...activeStores.map((s) => ({ kind: 'shopify', id: s.id, name: s.name, prefix: (s.prefix || '').trim() })),
+  ];
   if (activeDbs.length) {
     groups.push(`<optgroup label="BackOffice">${activeDbs
       .map((d) => `<option value="backoffice:${d.id}">${esc(d.name)}</option>`)
@@ -31,7 +39,25 @@ async function loadSources() {
   if (last && sourceSelect.querySelector(`option[value="${last}"]`)) {
     sourceSelect.value = last;
   }
+  applyAutoDetect();
   numberInput.focus();
+}
+
+/* Reflect the auto-detect toggle: dim the manual dropdown when detection is on. */
+function applyAutoDetect() {
+  sourceSelect.disabled = autoDetectToggle.checked;
+}
+
+/* Resolve a scanned number to a source via configured prefixes.
+   Longest matching prefix wins. Returns the source, or {error} when none or
+   several sources tie at the longest match. */
+function detectSource(number) {
+  const matches = sources.filter((s) => s.prefix && number.startsWith(s.prefix));
+  if (!matches.length) return { error: 'none' };
+  const maxLen = Math.max(...matches.map((s) => s.prefix.length));
+  const best = matches.filter((s) => s.prefix.length === maxLen);
+  if (best.length > 1) return { error: 'ambiguous' };
+  return { source: best[0] };
 }
 
 /* Warning modal before leaving the scan page. Resolves true on Continue
@@ -92,13 +118,34 @@ function stayOnScan() {
 }
 
 async function lookup() {
-  const source = sourceSelect.value;
   const number = numberInput.value.trim();
-  if (!source) { snackbar('Configure a BackOffice database or Shopify store in Settings first', 'error'); return; }
   if (!number) { numberInput.focus(); return; }
-  localStorage.setItem('easyship.lastSource', source);
-  const [kind, id] = source.split(':');
-  statusEl.innerHTML = '<span class="spinner"></span>';
+
+  let kind, id;
+  if (autoDetectToggle.checked) {
+    const res = detectSource(number);
+    if (res.error === 'none') {
+      statusEl.innerHTML = '<span class="chip static err">✕ No store matches this order number</span>';
+      numberInput.select();
+      numberInput.focus();
+      return;
+    }
+    if (res.error === 'ambiguous') {
+      statusEl.innerHTML = '<span class="chip static err">✕ Multiple stores match this prefix</span>';
+      numberInput.select();
+      numberInput.focus();
+      return;
+    }
+    ({ kind, id } = res.source);
+    sourceSelect.value = `${kind}:${id}`;
+    statusEl.innerHTML = `<span class="chip static ok">Detected: ${esc(res.source.name)}</span> <span class="spinner"></span>`;
+  } else {
+    const source = sourceSelect.value;
+    if (!source) { snackbar('Configure a BackOffice database or Shopify store in Settings first', 'error'); return; }
+    localStorage.setItem('easyship.lastSource', source);
+    [kind, id] = source.split(':');
+    statusEl.innerHTML = '<span class="spinner"></span>';
+  }
   try {
     if (kind === 'backoffice') {
       const inv = await api(`/api/backoffice/${id}/lookup?number=${encodeURIComponent(number)}`);
@@ -138,5 +185,13 @@ numberInput.addEventListener('keydown', (e) => {
 });
 document.getElementById('lookup-btn').addEventListener('click', lookup);
 sourceSelect.addEventListener('change', () => numberInput.focus());
+
+autoDetectToggle.checked = localStorage.getItem('easyship.autoDetect') === '1';
+autoDetectToggle.addEventListener('change', () => {
+  localStorage.setItem('easyship.autoDetect', autoDetectToggle.checked ? '1' : '0');
+  applyAutoDetect();
+  statusEl.innerHTML = '';
+  numberInput.focus();
+});
 
 loadSources();

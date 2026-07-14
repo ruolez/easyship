@@ -826,3 +826,14 @@ table.striped tbody tr:hover { background: var(--surface-sunken); }
 .filter-row input[type="date"] { min-width: 118px; height: 24px; font-size: 11px; padding: 2px 5px; }
 .filter-row .btn { height: 32px; }
 table.compact th, table.compact td { padding: 10px 9px; }
+
+.auto-detect-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--on-surface);
+}
+.auto-detect-toggle input { width: 16px; height: 16px; cursor: pointer; }
+select:disabled { opacity: 0.55; cursor: not-allowed; }

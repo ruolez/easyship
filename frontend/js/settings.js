@@ -227,13 +227,14 @@ async function loadDbs() {
   const dbs = await api('/api/backoffice-dbs');
   const tbody = document.getElementById('dbs-body');
   if (!dbs.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="text-secondary">No databases configured.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="text-secondary">No databases configured.</td></tr>';
     return;
   }
   tbody.innerHTML = dbs.map((d) => `<tr>
     <td><strong>${esc(d.name)}</strong></td>
     <td class="mono">${esc(d.host)}:${esc(d.port)}</td>
     <td class="mono">${esc(d.db_name)}</td>
+    <td class="mono">${esc(d.prefix || '')}</td>
     <td>${d.is_active ? '<span class="chip static ok">active</span>' : '<span class="chip static">inactive</span>'}</td>
     <td>
       <button class="btn btn-text btn-small" onclick="testDb(${d.id}, this)">Test</button>
@@ -263,6 +264,7 @@ function dbForm(dbRow) {
     <div class="field mb-16"><label>Host / IP</label><input id="m-db-host" value="${dbRow ? esc(dbRow.host) : ''}"></div>
     <div class="field mb-16"><label>Port</label><input id="m-db-port" value="${dbRow ? esc(dbRow.port) : '1433'}"></div>
     <div class="field mb-16"><label>Database name</label><input id="m-db-dbname" value="${dbRow ? esc(dbRow.db_name) : ''}"></div>
+    <div class="field mb-16"><label>Order-number prefix (for scan auto-detect)</label><input id="m-db-prefix" autocomplete="off" value="${dbRow ? esc(dbRow.prefix || '') : ''}"></div>
     <div class="field mb-16"><label>Username</label><input id="m-db-user" autocomplete="off" value="${dbRow ? esc(dbRow.username) : ''}"></div>
     <div class="field mb-16"><label>Password${dbRow ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-db-pass" autocomplete="off"></div>
     ${dbRow ? `<div class="field mb-16"><label>Status</label><select id="m-db-active"><option value="true" ${dbRow.is_active ? 'selected' : ''}>Active</option><option value="false" ${!dbRow.is_active ? 'selected' : ''}>Inactive</option></select></div>` : ''}
@@ -277,6 +279,7 @@ function dbForm(dbRow) {
       port: document.getElementById('m-db-port').value,
       db_name: document.getElementById('m-db-dbname').value,
       username: document.getElementById('m-db-user').value,
+      prefix: document.getElementById('m-db-prefix').value,
       password: document.getElementById('m-db-pass').value,
     };
     if (dbRow) body.is_active = document.getElementById('m-db-active').value === 'true';
@@ -333,12 +336,13 @@ async function loadStores() {
   const stores = await api('/api/shopify-stores');
   const tbody = document.getElementById('stores-body');
   if (!stores.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="text-secondary">No stores configured.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="text-secondary">No stores configured.</td></tr>';
     return;
   }
   tbody.innerHTML = stores.map((s) => `<tr>
     <td><strong>${esc(s.name)}</strong></td>
     <td class="mono">${esc(s.shop_domain)}</td>
+    <td class="mono">${esc(s.prefix || '')}</td>
     <td>${s.is_active ? '<span class="chip static ok">active</span>' : '<span class="chip static">inactive</span>'}</td>
     <td>
       <button class="btn btn-text btn-small" onclick="testStore(${s.id}, this)">Test</button>
@@ -366,6 +370,7 @@ function storeForm(store) {
     <h3>${store ? 'Edit store' : 'Add Shopify store'}</h3>
     <div class="field mb-16"><label>Name</label><input id="m-store-name" value="${store ? esc(store.name) : ''}"></div>
     <div class="field mb-16"><label>Shop domain (mystore.myshopify.com)</label><input id="m-store-domain" value="${store ? esc(store.shop_domain) : ''}"></div>
+    <div class="field mb-16"><label>Order-number prefix (for scan auto-detect)</label><input id="m-store-prefix" autocomplete="off" value="${store ? esc(store.prefix || '') : ''}"></div>
     <div class="field mb-16"><label>Admin API access token${store ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-store-token" autocomplete="off"></div>
     ${store ? `<div class="field mb-16"><label>Status</label><select id="m-store-active"><option value="true" ${store.is_active ? 'selected' : ''}>Active</option><option value="false" ${!store.is_active ? 'selected' : ''}>Inactive</option></select></div>` : ''}
     <div class="actions">
@@ -376,6 +381,7 @@ function storeForm(store) {
     const body = {
       name: document.getElementById('m-store-name').value,
       shop_domain: document.getElementById('m-store-domain').value,
+      prefix: document.getElementById('m-store-prefix').value,
       access_token: document.getElementById('m-store-token').value,
     };
     if (store) body.is_active = document.getElementById('m-store-active').value === 'true';

@@ -22,7 +22,7 @@ MASK = "••••••••"
 @login_required
 def list_dbs():
     rows = db.query(
-        "SELECT id, name, host, port, db_name, username, is_active FROM backoffice_dbs ORDER BY id"
+        "SELECT id, name, host, port, db_name, username, prefix, is_active FROM backoffice_dbs ORDER BY id"
     )
     return jsonify(rows)
 
@@ -35,12 +35,13 @@ def create_db():
     if not all((data.get(k) or "").strip() for k in required):
         return api_error("Name, host, database, username and password are required")
     row = db.execute(
-        """INSERT INTO backoffice_dbs (name, host, port, db_name, username, password)
-           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+        """INSERT INTO backoffice_dbs (name, host, port, db_name, username, password, prefix)
+           VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
         (
             data["name"].strip(), data["host"].strip(),
             (data.get("port") or "1433").strip(), data["db_name"].strip(),
             data["username"].strip(), data["password"],
+            (data.get("prefix") or "").strip(),
         ),
         returning=True,
     )
@@ -58,9 +59,11 @@ def update_db(db_id):
     password = data.get("password") or ""
     if not password or password == MASK:
         password = row["password"]
+    prefix = data.get("prefix")
+    prefix = prefix.strip() if prefix is not None else row["prefix"]
     db.execute(
         """UPDATE backoffice_dbs SET name=%s, host=%s, port=%s, db_name=%s,
-           username=%s, password=%s, is_active=%s WHERE id=%s""",
+           username=%s, password=%s, prefix=%s, is_active=%s WHERE id=%s""",
         (
             (data.get("name") or row["name"]).strip(),
             (data.get("host") or row["host"]).strip(),
@@ -68,6 +71,7 @@ def update_db(db_id):
             (data.get("db_name") or row["db_name"]).strip(),
             (data.get("username") or row["username"]).strip(),
             password,
+            prefix,
             bool(data.get("is_active", row["is_active"])),
             db_id,
         ),
