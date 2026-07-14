@@ -166,7 +166,10 @@ function renderServices(services, excluded) {
   });
   list.innerHTML = [...groups.entries()].map(([carrier, items]) => `
     <div class="svc-group">
-      <h4>${esc(carrier)}</h4>
+      <div class="svc-group-head">
+        <h4>${esc(carrier)}</h4>
+        <label class="svc-selectall"><input type="checkbox" class="svc-group-toggle"> Exclude all</label>
+      </div>
       <div class="svc-grid">
         ${items.map((s) => `
           <label class="svc-item">
@@ -175,7 +178,32 @@ function renderServices(services, excluded) {
           </label>`).join('')}
       </div>
     </div>`).join('');
+  list.querySelectorAll('.svc-group').forEach(syncGroupToggle);
 }
+
+function svcGroupBoxes(group) {
+  return [...group.querySelectorAll('.svc-exclude')];
+}
+
+// Reflect the carrier's "Exclude all" checkbox from its services: checked when
+// all are excluded, indeterminate when some are.
+function syncGroupToggle(group) {
+  const boxes = svcGroupBoxes(group);
+  const checked = boxes.filter((b) => b.checked).length;
+  const toggle = group.querySelector('.svc-group-toggle');
+  toggle.checked = boxes.length > 0 && checked === boxes.length;
+  toggle.indeterminate = checked > 0 && checked < boxes.length;
+}
+
+document.getElementById('services-list').addEventListener('change', (e) => {
+  const group = e.target.closest('.svc-group');
+  if (!group) return;
+  if (e.target.classList.contains('svc-group-toggle')) {
+    svcGroupBoxes(group).forEach((b) => { b.checked = e.target.checked; });
+  } else if (e.target.classList.contains('svc-exclude')) {
+    syncGroupToggle(group);
+  }
+});
 
 async function saveServices() {
   const excluded = [...document.querySelectorAll('.svc-exclude:checked')].map((el) => el.value);
