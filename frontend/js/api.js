@@ -48,3 +48,41 @@ function money(v) {
   if (v == null || v === '') return '';
   return '$' + Number(v).toFixed(2);
 }
+
+// Print a PDF (often multi-page — one page per box on a multi-box shipment)
+// through the browser print dialog, printing EVERY page. Pointing an iframe's
+// src at the label URL and calling contentWindow.print() only prints the first
+// page: the request fires while Chrome's PDF plugin is still streaming/paginating
+// the document. Loading the fully-fetched bytes as a Blob into a dedicated hidden
+// iframe and printing on load hands the whole document to the plugin up front.
+async function printPdfUrl(url) {
+  let blobUrl;
+  try {
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`Could not load label (HTTP ${res.status})`);
+    blobUrl = URL.createObjectURL(await res.blob());
+  } catch (err) {
+    window.open(url, '_blank'); // last resort: open the label so it can be printed manually
+    throw err;
+  }
+  const frame = document.createElement('iframe');
+  frame.setAttribute('aria-hidden', 'true');
+  // visibility:hidden (not display:none) — a display:none iframe won't print.
+  frame.style.cssText =
+    'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;visibility:hidden';
+  frame.src = blobUrl;
+  frame.addEventListener('load', () => {
+    try {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+    } catch {
+      window.open(blobUrl, '_blank');
+    }
+    // Keep the frame/blob alive while the modal dialog is open, then clean up.
+    setTimeout(() => {
+      frame.remove();
+      URL.revokeObjectURL(blobUrl);
+    }, 60000);
+  }, { once: true });
+  document.body.appendChild(frame);
+}

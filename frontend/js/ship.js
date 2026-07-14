@@ -442,13 +442,8 @@ function showResult(s) {
       preview.src = url;
       preview.style.display = '';
       if (s.printed == null && clientSettings.print_mode === 'browser') {
-        // Local printer: pop the browser print dialog as soon as the PDF loads
-        preview.addEventListener('load', () => {
-          try {
-            preview.contentWindow.focus();
-            preview.contentWindow.print();
-          } catch { window.open(url, '_blank'); }
-        }, { once: true });
+        // Local printer: pop the browser print dialog with every page (one per box)
+        printPdfUrl(url).catch((err) => snackbar(err.message, 'error'));
       }
     }
   } else {

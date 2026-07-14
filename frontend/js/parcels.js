@@ -182,18 +182,7 @@ window.resumeBuy = async (gid) => {
 };
 
 function printDialog(url) {
-  const frame = document.createElement('iframe');
-  frame.style.display = 'none';
-  frame.src = url;
-  frame.addEventListener('load', () => {
-    try {
-      frame.contentWindow.focus();
-      frame.contentWindow.print();
-    } catch {
-      window.open(url, '_blank');
-    }
-  }, { once: true });
-  document.body.appendChild(frame);
+  printPdfUrl(url).catch((err) => snackbar(err.message, 'error'));
 }
 
 window.reprint = async (id) => {
