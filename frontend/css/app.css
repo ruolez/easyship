@@ -287,6 +287,19 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 .row > * { flex: 1; min-width: 140px; }
 .row > .fixed { flex: 0 0 auto; min-width: 0; }
 
+/* ---------- Ship screen: 3-column horizontal layout ---------- */
+.ship-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.ship-grid .ship-col { min-width: 0; }
+/* Keep each column compact so the packer never scrolls the page. */
+#order-summary .table-wrap { max-height: 20vh; overflow-y: auto; }
+.ship-grid .rate-list { max-height: 46vh; overflow-y: auto; padding-right: 2px; }
+.ship-grid #panel-result .row.mb-16 > .fixed { flex: 1 1 auto; }
+
 /* ============================================================
    Buttons
    ============================================================ */
@@ -726,6 +739,8 @@ td { font-variant-numeric: tabular-nums; }
 @media (max-width: 768px) {
   .container { padding: 16px 14px 40px; }
   .card { padding: 16px; }
+  .ship-grid { grid-template-columns: 1fr; }
+  .ship-grid .rate-list { max-height: none; }
   .table-wrap { margin: 0 -16px; padding: 0 16px; }
   .row { flex-direction: column; align-items: stretch; }
   .row > .fixed { flex: 1; }

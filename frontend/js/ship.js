@@ -7,7 +7,7 @@ let boxCount = 1;
 let rates = [];
 let selectedRate = null;
 let orderItems = [];
-let clientSettings = { placeholder_email: '', print_mode: 'browser' };
+let clientSettings = { placeholder_email: '', print_mode: 'browser', countdown_seconds: 5 };
 let savedBoxes = [];
 let lastLabelUrl = null;
 
@@ -396,9 +396,7 @@ function showGroupResult(g) {
 }
 
 function showResult(s) {
-  ['panel-destination', 'panel-parcels', 'panel-rates', 'rates-actions'].forEach((id) => {
-    document.getElementById(id).style.display = 'none';
-  });
+  // Keep the address + boxes columns visible; the result fills the right column.
   const panel = document.getElementById('panel-result');
   panel.style.display = '';
   const numbers = s.tracking_list && s.tracking_list.length
@@ -434,17 +432,11 @@ function showResult(s) {
     const url = s.label_url || `/api/shipments/${s.id}/label`;
     lastLabelUrl = url;
     document.getElementById('r-download').href = url;
-    const preview = document.getElementById('r-preview');
     if (clientSettings.print_mode === 'browserprint') {
-      preview.style.display = 'none'; // ZPL has no visual preview; Open label still works
-      if (s.printed == null) sendToZebra(url);
-    } else {
-      preview.src = url;
-      preview.style.display = '';
-      if (s.printed == null && clientSettings.print_mode === 'browser') {
-        // Local printer: pop the browser print dialog with every page (one per box)
-        printPdfUrl(url).catch((err) => snackbar(err.message, 'error'));
-      }
+      if (s.printed == null) sendToZebra(url); // ZPL has no visual preview; Open label still works
+    } else if (s.printed == null && clientSettings.print_mode === 'browser') {
+      // Local printer: pop the browser print dialog with every page (one per box)
+      printPdfUrl(url).catch((err) => { cancelAutoAdvance(); snackbar(err.message, 'error'); });
     }
   } else {
     document.getElementById('r-download').style.display = 'none';
@@ -452,6 +444,42 @@ function showResult(s) {
   const nextBtn = document.getElementById('r-next');
   if (nextBtn) nextBtn.focus();
   panel.scrollIntoView({ behavior: 'smooth' });
+  // Auto-advance to the next order once a label prints cleanly. A print error
+  // pauses the countdown so the packer can reprint first.
+  const printFailed = typeof s.printed === 'string' && s.printed.startsWith('error');
+  if (s.has_label && !printFailed) startAutoAdvance();
+}
+
+/* ---------- Auto-advance countdown ---------- */
+let advanceTimer = null;
+
+function startAutoAdvance() {
+  const seconds = parseInt(clientSettings.countdown_seconds, 10);
+  if (!Number.isFinite(seconds) || seconds <= 0) return; // 0 = disabled
+  cancelAutoAdvance();
+  const btn = document.getElementById('r-next');
+  let remaining = seconds;
+  const render = () => { if (btn) btn.textContent = `Next order (${remaining}s)`; };
+  render();
+  advanceTimer = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearInterval(advanceTimer);
+      advanceTimer = null;
+      location.href = '/index.html';
+      return;
+    }
+    render();
+  }, 1000);
+}
+
+function cancelAutoAdvance() {
+  if (advanceTimer !== null) {
+    clearInterval(advanceTimer);
+    advanceTimer = null;
+  }
+  const btn = document.getElementById('r-next');
+  if (btn) btn.textContent = 'Next order (Enter)';
 }
 
 async function sendToZebra(url) {
@@ -461,6 +489,7 @@ async function sendToZebra(url) {
     wb.innerHTML += ' <span class="chip static ok">🖨 Sent to printer</span>';
     snackbar('Label sent to Zebra printer', 'success');
   } catch (err) {
+    cancelAutoAdvance(); // print failed — let the packer reprint before advancing
     wb.innerHTML += ` <span class="chip static err">🖨 ${esc(err.message)}</span>
       <button class="btn btn-text btn-small" onclick="printAgain()">Print again</button>`;
     snackbar(err.message, 'error');
@@ -468,6 +497,7 @@ async function sendToZebra(url) {
 }
 
 window.printAgain = async (id) => {
+  cancelAutoAdvance(); // packer is acting on this order — don't yank them away
   if (clientSettings.print_mode === 'browserprint') {
     const url = lastLabelUrl || (id ? `/api/shipments/${id}/label` : null);
     if (!url) return;
@@ -488,6 +518,7 @@ window.printAgain = async (id) => {
 };
 
 window.retryWriteback = async () => {
+  cancelAutoAdvance(); // packer is acting on this order — don't yank them away
   try {
     const res = await api(`/api/shipments/${localShipmentId}/writeback`, { method: 'POST' });
     showResult(res);

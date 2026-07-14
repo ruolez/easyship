@@ -30,6 +30,7 @@ SETTING_KEYS = [
     "printer_host",
     "printer_port",
     "label_timeout_seconds",
+    "countdown_seconds",
     "shipper_host",
     "shipper_port",
     "shipper_db",
@@ -85,6 +86,7 @@ def client_settings():
         "mode": db.get_setting("easyship_mode") or "sandbox",
         "placeholder_email": db.get_setting("placeholder_email") or "",
         "print_mode": db.get_setting("print_mode") or "browser",
+        "countdown_seconds": int(db.get_setting("countdown_seconds") or 5),
     })
 
 
