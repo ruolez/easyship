@@ -683,15 +683,15 @@ td { font-variant-numeric: tabular-nums; }
 /* ============================================================
    Rate list (compact radio rows)
    ============================================================ */
-.rate-list { display: flex; flex-direction: column; gap: 8px; }
+.rate-list { display: flex; flex-direction: column; gap: 4px; }
 .rate-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 9px;
   border: 1px solid var(--outline-strong);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
-  padding: 10px 14px;
+  padding: 5px 11px;
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
 }
@@ -700,8 +700,8 @@ td { font-variant-numeric: tabular-nums; }
 .rate-row.selected { border-color: var(--primary); background: var(--primary-light); box-shadow: 0 0 0 1px var(--primary); }
 .rate-radio {
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
   border: 2px solid var(--outline-strong);
   background: var(--surface);
@@ -717,18 +717,18 @@ td { font-variant-numeric: tabular-nums; }
   border-radius: 50%;
   background: var(--primary);
 }
-.rate-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
-.rate-courier { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
-.rate-days { color: var(--text-secondary); font-size: 12px; }
+.rate-info { display: flex; flex-direction: row; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; min-width: 0; flex: 1 1 auto; }
+.rate-courier { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.rate-days { color: var(--text-secondary); font-size: 11.5px; white-space: nowrap; }
 .rate-price {
   margin-left: auto;
-  font-size: 16px;
+  font-size: 14.5px;
   font-weight: 700;
   color: var(--on-surface);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.rate-price small { font-size: 11px; font-weight: 500; color: var(--text-secondary); }
+.rate-price small { font-size: 10.5px; font-weight: 500; color: var(--text-secondary); }
 .rate-best { font-size: 10.5px; padding: 1px 6px; }
 
 /* ============================================================

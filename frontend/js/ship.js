@@ -72,7 +72,7 @@ async function prefill() {
       };
       fillDestination(o.destination);
       orderItems = o.items || [];
-      showOrderSummary(`Shopify order <strong>${esc(o.name)}</strong> — ${esc(o.customer || '')}`, orderItems);
+      showOrderSummary(`Shopify order <strong>${esc(o.name)}</strong> — ${esc(o.customer || '')}`);
       if (o.total_weight_lb) {
         document.querySelector('.p-weight').value = o.total_weight_lb;
       }
@@ -90,8 +90,7 @@ async function prefill() {
       fillDestination(inv.destination);
       orderItems = inv.items || [];
       showOrderSummary(
-        `BackOffice invoice <strong>${esc(inv.invoice_number)}</strong> — ${esc(inv.business_name || '')}`,
-        orderItems
+        `BackOffice invoice <strong>${esc(inv.invoice_number)}</strong> — ${esc(inv.business_name || '')}`
       );
       seedParcels(inv.no_boxes, inv.total_weight);
       if ((inv.tracking_no || '').trim() && !params.get('reship_ack')) {
@@ -140,19 +139,10 @@ function fillDestination(d) {
   });
 }
 
-function showOrderSummary(html, items) {
+function showOrderSummary(html) {
   const el = document.getElementById('order-summary');
   el.style.display = '';
-  let itemsHtml = '';
-  if (items && items.length) {
-    itemsHtml = `<div class="table-wrap mt-16"><table>
-      <thead><tr><th>Item</th><th>SKU</th><th>Qty</th><th>Value</th></tr></thead>
-      <tbody>${items.map((i) => `<tr>
-        <td class="wrap">${esc(i.description)}</td><td class="mono">${esc(i.sku || '')}</td>
-        <td>${i.quantity}</td><td>${money(i.value)}</td>
-      </tr>`).join('')}</tbody></table></div>`;
-  }
-  el.innerHTML = `<h2>${html}</h2>${itemsHtml}`;
+  el.innerHTML = `<h2>${html}</h2>`;
 }
 
 /* ---------- Parcels ---------- */

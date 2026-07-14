@@ -231,7 +231,7 @@ def _group_boxes_snapshot(rows, live_state=None, errors=None):
         else:
             box["status"] = "purchasing" if row["status"] in ("rated", "error") else row["status"]
         if sid in errors and box["status"] in ("purchasing", "failed"):
-            box["error"] = errors[sid][:200]
+            box["error"] = errors[sid][:600]
         boxes.append(box)
     return boxes
 
