@@ -403,7 +403,8 @@ function showGroupResult(g) {
 }
 
 function showResult(s) {
-  // Keep the address + boxes columns visible; the result fills the right column.
+  // Keep the address + rate columns visible; the result fills the wide middle
+  // column under the boxes, where there's the most space.
   const panel = document.getElementById('panel-result');
   panel.style.display = '';
   const numbers = s.tracking_list && s.tracking_list.length

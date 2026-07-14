@@ -298,7 +298,7 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 /* Keep each column compact so the packer never scrolls the page. */
 #order-summary { padding: 14px 24px; }
 #order-summary h2 { margin-bottom: 0; }
-.ship-grid .rate-list { max-height: 46vh; overflow-y: auto; padding-right: 2px; }
+.ship-grid .rate-list { max-height: none; }
 .ship-grid #panel-result .row.mb-16 > .fixed { flex: 1 1 auto; }
 
 /* Denser cards/fields inside the columns so everything fits without overflow. */
