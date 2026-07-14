@@ -198,6 +198,7 @@ function addParcelRow(weight = '', length = '', width = '', height = '') {
       div.remove();
       document.querySelectorAll('.parcel-row .parcel-num')
         .forEach((el, i) => { el.textContent = i + 1; });
+      syncRemoveButtons();
     }
   });
   div.querySelector('.p-weight').addEventListener('keydown', (e) => {
@@ -207,6 +208,16 @@ function addParcelRow(weight = '', length = '', width = '', height = '') {
     }
   });
   document.getElementById('parcel-list').appendChild(div);
+  syncRemoveButtons();
+}
+
+// The remove button is a no-op with a single box, so hide it then — it also
+// frees the horizontal room that otherwise crowds the last dimension field.
+function syncRemoveButtons() {
+  const rows = document.querySelectorAll('.parcel-row');
+  rows.forEach((row) => {
+    row.querySelector('.remove-parcel').style.display = rows.length > 1 ? '' : 'none';
+  });
 }
 
 function seedParcels(noBoxes, totalWeight) {
