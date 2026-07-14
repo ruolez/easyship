@@ -296,7 +296,8 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 }
 .ship-grid .ship-col { min-width: 0; }
 /* Keep each column compact so the packer never scrolls the page. */
-#order-summary .table-wrap { max-height: 20vh; overflow-y: auto; }
+#order-summary { padding: 14px 24px; }
+#order-summary h2 { margin-bottom: 0; }
 .ship-grid .rate-list { max-height: 46vh; overflow-y: auto; padding-right: 2px; }
 .ship-grid #panel-result .row.mb-16 > .fixed { flex: 1 1 auto; }
 
