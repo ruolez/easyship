@@ -285,15 +285,21 @@ document.getElementById('get-rates').addEventListener('click', async () => {
   }
 });
 
+function providerLabel(name) {
+  return name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
+}
+
 function renderRates() {
   const list = document.getElementById('rate-list');
   selectedRate = null;
   document.getElementById('buy-label').disabled = true;
+  // Only tag rates with their provider when more than one is quoting.
+  const multiProvider = new Set(rates.map((r) => r.provider)).size > 1;
   list.innerHTML = rates.map((r, i) => `
     <div class="rate-row" data-idx="${i}" tabindex="0" role="radio" aria-checked="false">
       <span class="rate-radio"></span>
       <span class="rate-info">
-        <span class="rate-courier">${esc(r.courier_name)}${r.value_for_money_rank === 1 ? ' <span class="chip static ok rate-best">Best value</span>' : ''}</span>
+        <span class="rate-courier">${esc(r.courier_name)}${r.value_for_money_rank === 1 ? ' <span class="chip static ok rate-best">Best value</span>' : ''}${multiProvider && r.provider ? ` <span class="chip static rate-provider">${esc(providerLabel(r.provider))}</span>` : ''}</span>
         <span class="rate-days">${r.min_delivery_time ?? '?'}–${r.max_delivery_time ?? '?'} business days</span>
       </span>
       <span class="rate-price">${money(r.total_charge)} <small>${esc(r.currency || 'USD')}</small></span>
@@ -357,7 +363,11 @@ document.getElementById('buy-label').addEventListener('click', async () => {
   try {
     await api(`/api/shipments/group/${groupId}/buy`, {
       method: 'POST',
-      body: { courier_service_id: selectedRate.courier_service_id, rate: selectedRate },
+      body: {
+        provider: selectedRate.provider,
+        courier_service_id: selectedRate.courier_service_id,
+        rate: selectedRate,
+      },
     });
   } catch (err) {
     snackbar(err.message, 'error');

@@ -8,14 +8,14 @@ from flask import Blueprint, current_app, jsonify, request, send_file, session
 
 import config
 import db
-import easyship_client as easyship
+import providers
 from auth import admin_required, login_required
-from easyship_client import EasyshipError
+from providers import labels
+from providers.base import LabelStatus, ProviderError
 from util import api_error, audit, central_time
 
 bp = Blueprint("shipments", __name__, url_prefix="/api/shipments")
 
-LABEL_READY_STATES = {"generated", "printed", "shipping_document_generated"}
 LABEL_MIMETYPES = {"pdf": "application/pdf", "png": "image/png", "zpl": "text/plain"}
 
 LIST_SELECT = """
@@ -55,6 +55,8 @@ def _row_to_json(row):
         "destination": row["destination"],
         "parcels": row["parcels"],
         "items": row["items"],
+        "provider": row.get("provider") or "easyship",
+        "provider_shipment_id": row["easyship_shipment_id"],
         "easyship_shipment_id": row["easyship_shipment_id"],
         "courier_name": row["courier_name"],
         "shipping_cost": float(row["shipping_cost"]) if row["shipping_cost"] is not None else None,
@@ -131,73 +133,73 @@ def get_rates():
         )
         row_ids.append(row["id"])
 
-    try:
-        es_list = easyship.create_shipments(destination, parcels, items)
-    except EasyshipError as e:
+    # Rate against every enabled provider; each returns per-box drafts + rates.
+    draft_ids_by_provider = {}
+    all_rates = []
+    had_rates = False
+    provider_errors = []
+    for provider in providers.enabled_providers():
+        try:
+            drafts, rates = provider.create_draft_shipments(destination, parcels, items)
+        except ProviderError as e:
+            provider_errors.append(f"{provider.label}: {e}")
+            continue
+        draft_ids_by_provider[provider.name] = [d.provider_shipment_id for d in drafts]
+        excluded = provider.get_excluded_service_ids()
+        for r in rates:
+            had_rates = True
+            if r.provider_service_id not in excluded:
+                all_rates.append(r.to_ui())
+
+    if not draft_ids_by_provider:
+        message = "; ".join(provider_errors) or "No shipping provider is enabled"
         for rid in row_ids:
             db.execute(
                 "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
-                (str(e), rid),
+                (message, rid),
             )
-        return api_error(str(e), 502)
+        return api_error(message, 502)
 
-    for rid, es in zip(row_ids, es_list):
-        sid = es["easyship_shipment_id"]
+    # Stash each provider's per-box draft ids so a chosen rate can be bought later.
+    for i, rid in enumerate(row_ids):
+        drafts_for_box = {name: ids[i] for name, ids in draft_ids_by_provider.items() if i < len(ids)}
         db.execute(
-            """UPDATE shipments SET easyship_shipment_id=%s, easyship_shipment_ids=%s,
-               status='rated', error_message=NULL, updated_at=now() WHERE id=%s""",
-            (sid, json.dumps([sid]), rid),
+            """UPDATE shipments SET provider_drafts=%s, status='rated',
+               error_message=NULL, updated_at=now() WHERE id=%s""",
+            (json.dumps(drafts_for_box), rid),
         )
+    # With a single provider quoting there is no ship-time choice, so record its
+    # active shipment id now — a rated row then resumes/voids exactly as before.
+    if len(draft_ids_by_provider) == 1:
+        (only_name, only_ids), = draft_ids_by_provider.items()
+        for i, rid in enumerate(row_ids):
+            if i < len(only_ids):
+                sid = only_ids[i]
+                db.execute(
+                    """UPDATE shipments SET provider=%s, easyship_shipment_id=%s,
+                       easyship_shipment_ids=%s, updated_at=now() WHERE id=%s""",
+                    (only_name, sid, json.dumps([sid]), rid),
+                )
 
-    rates = combine_rates(es_list)
-    if not rates:
+    if not all_rates:
+        if had_rates:
+            return api_error(
+                "Every available courier service is excluded — adjust exclusions in Settings.", 422
+            )
         message = "No rates available for this shipment. Check the address and parcel details."
-        if len(es_list) > 1:
+        if box_total > 1:
             message = ("No single courier returned rates for every box. "
                        "Check each box's weight and dimensions.")
         return api_error(message, 422)
 
-    excluded = easyship.get_excluded_service_ids()
-    if excluded:
-        visible = [r for r in rates if r["courier_service_id"] not in excluded]
-        if not visible:
-            return api_error(
-                "Every available courier service is excluded — adjust exclusions in Settings.", 422
-            )
-        rates = visible
+    all_rates.sort(key=lambda r: r["total_charge"])
     return jsonify({
         "group_id": group_id,
         "shipment_id": row_ids[0],
         "shipment_ids": row_ids,
         "box_count": box_total,
-        "rates": rates,
+        "rates": all_rates,
     })
-
-
-def combine_rates(es_list):
-    """One quote list across per-box shipments: only couriers that can serve
-    EVERY box, price = sum across boxes."""
-    rate_maps = [
-        {r["courier_service"]["id"]: r for r in (s.get("rates") or [])}
-        for s in es_list
-    ]
-    common = set(rate_maps[0])
-    for m in rate_maps[1:]:
-        common &= set(m)
-    combined = []
-    for cid in common:
-        rs = [m[cid] for m in rate_maps]
-        combined.append({
-            "courier_service_id": cid,
-            "courier_name": rs[0]["courier_service"].get("name"),
-            "umbrella_name": rs[0]["courier_service"].get("umbrella_name"),
-            "total_charge": round(sum(r.get("total_charge") or 0 for r in rs), 2),
-            "currency": rs[0].get("currency"),
-            "min_delivery_time": max((r.get("min_delivery_time") or 0) for r in rs) or None,
-            "max_delivery_time": max((r.get("max_delivery_time") or 0) for r in rs) or None,
-            "value_for_money_rank": rs[0].get("value_for_money_rank"),
-        })
-    return sorted(combined, key=lambda r: r["total_charge"])
 
 
 # ============================================================ group buy
@@ -217,7 +219,7 @@ def _set_group_progress(primary_id, state, boxes=None, message=None, extra=None)
 
 
 def _group_boxes_snapshot(rows, live_state=None, errors=None):
-    """Per-box status list built from DB rows plus in-flight Easyship state."""
+    """Per-box status list built from DB rows plus in-flight provider state."""
     live_state = live_state or {}
     errors = errors or {}
     boxes = []
@@ -227,13 +229,13 @@ def _group_boxes_snapshot(rows, live_state=None, errors=None):
         if row["status"] in ("label_created", "fulfilled"):
             box.update(status="ready", tracking=row["tracking_number"])
         elif sid in live_state and live_state[sid]:
-            ls = live_state[sid].get("label_state")
-            if ls in LABEL_READY_STATES:
-                numbers = easyship.extract_tracking_numbers(live_state[sid])
+            status = live_state[sid].label_status
+            if status == LabelStatus.READY:
+                numbers = live_state[sid].tracking_numbers
                 box.update(status="ready", tracking=numbers[0] if numbers else None)
-            elif ls == "failed":
+            elif status == LabelStatus.FAILED:
                 box["status"] = "failed"
-            elif ls in (None, "not_created"):
+            elif status == LabelStatus.NOT_CREATED:
                 box["status"] = "purchasing"
             else:
                 box["status"] = "generating"
@@ -249,15 +251,16 @@ def _group_boxes_snapshot(rows, live_state=None, errors=None):
 @login_required
 def group_buy(group_id):
     data = request.get_json(silent=True) or {}
-    courier_service_id = data.get("courier_service_id")
     rows = _group_rows(group_id)
     if not rows:
         return api_error("Shipment group not found", 404)
     primary = rows[0]
-    courier_service_id = courier_service_id or primary["courier_service_id"]
+    courier_service_id = data.get("courier_service_id") or primary["courier_service_id"]
     if not courier_service_id:
         return api_error("courier_service_id is required")
     rate = data.get("rate") or primary["rate"] or {}
+    provider_name = (data.get("provider") or (rate or {}).get("provider")
+                     or primary["provider"] or "easyship")
 
     progress = primary["progress"] or {}
     if progress.get("state") == "buying":
@@ -265,61 +268,91 @@ def group_buy(group_id):
         if datetime.now(timezone.utc) - primary["updated_at"] < timedelta(minutes=5):
             return api_error("Label purchase already in progress", 409)
 
-    targets = [r for r in rows if r["status"] in ("rated", "error") and r["easyship_shipment_id"]]
+    def _draft_id(row):
+        return (row["provider_drafts"] or {}).get(provider_name) or row["easyship_shipment_id"]
+
+    targets = [r for r in rows if r["status"] in ("rated", "error") and _draft_id(r)]
     if not targets:
         return api_error("Nothing to purchase — all boxes already have labels or were voided")
 
     for r in rows:
-        db.execute(
-            "UPDATE shipments SET courier_service_id=%s, rate=%s, updated_at=now() WHERE id=%s",
-            (courier_service_id, json.dumps(rate), r["id"]),
-        )
+        draft_id = _draft_id(r)
+        if draft_id:
+            db.execute(
+                """UPDATE shipments SET provider=%s, courier_service_id=%s, rate=%s,
+                   easyship_shipment_id=%s, easyship_shipment_ids=%s, updated_at=now() WHERE id=%s""",
+                (provider_name, courier_service_id, json.dumps(rate),
+                 draft_id, json.dumps([draft_id]), r["id"]),
+            )
+        else:
+            db.execute(
+                "UPDATE shipments SET provider=%s, courier_service_id=%s, rate=%s, updated_at=now() WHERE id=%s",
+                (provider_name, courier_service_id, json.dumps(rate), r["id"]),
+            )
+
+    _cancel_other_drafts(rows, provider_name)
+    rows = _group_rows(group_id)
     _set_group_progress(primary["id"], "buying", boxes=_group_boxes_snapshot(rows))
 
     app = current_app._get_current_object()
     threading.Thread(
         target=_group_buy_worker,
-        args=(app, group_id, courier_service_id, rate, session["user_id"]),
+        args=(app, group_id, provider_name, courier_service_id, rate, session["user_id"]),
         daemon=True,
     ).start()
     return jsonify({"started": True, "box_count": len(rows)})
 
 
-def _group_buy_worker(app, group_id, courier_service_id, rate, user_id):
+def _cancel_other_drafts(rows, chosen_provider):
+    """After a rate is picked, best-effort cancel the drafts created in the
+    other providers so no unused shipments linger. No-op with one provider."""
+    by_provider = {}
+    for r in rows:
+        for name, sid in (r["provider_drafts"] or {}).items():
+            if name != chosen_provider and sid:
+                by_provider.setdefault(name, []).append(sid)
+    if not by_provider:
+        return
+    app = current_app._get_current_object()
+
+    def worker():
+        with app.app_context():
+            for name, ids in by_provider.items():
+                try:
+                    providers.get_provider(name).cancel_all(ids)
+                except Exception:
+                    pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _group_buy_worker(app, group_id, provider_name, courier_service_id, rate, user_id):
     with app.app_context():
         primary_id = None
         try:
             rows = _group_rows(group_id)
             primary_id = rows[0]["id"]
-            _group_buy_impl(group_id, courier_service_id, rate, user_id)
+            _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id)
         except Exception as e:  # never leave the group stuck in 'buying'
             if primary_id:
                 _set_group_progress(primary_id, "error", message=str(e))
 
 
-def _per_box_cost(es, courier_service_id, rate, box_total):
-    for r in es.get("rates") or []:
-        if (r.get("courier_service") or {}).get("id") == courier_service_id:
-            return r.get("total_charge")
+def _split_cost(rate, box_total):
+    """Fallback per-box charge when the provider didn't attribute a cost to the
+    box: split the chosen rate's total evenly."""
     total = rate.get("total_charge")
     if total and box_total:
         return round(float(total) / box_total, 2)
     return None
 
 
-def _finalize_row(row, es, courier_service_id, rate, box_total):
+def _finalize_row(provider, row, state, rate, box_total):
     """A box's label is ready: save its label file and complete its row."""
-    numbers = easyship.extract_tracking_numbers(es)
+    numbers = state.tracking_numbers
     tracking = numbers[0] if numbers else None
-    docs = easyship.extract_label_documents(es)
-    if not docs:
-        try:
-            docs = easyship.extract_label_documents(
-                easyship.get_shipment(row["easyship_shipment_id"], pdf_4x6=True)
-            )
-        except EasyshipError:
-            pass
-    label_bytes, label_format = easyship.merge_label_documents(docs)
+    docs = provider.fetch_labels(state)
+    label_bytes, label_format = labels.merge_label_documents(docs)
     label_path = None
     if label_bytes:
         os.makedirs(config.LABELS_DIR, exist_ok=True)
@@ -327,8 +360,8 @@ def _finalize_row(row, es, courier_service_id, rate, box_total):
         with open(label_path, "wb") as f:
             f.write(label_bytes)
 
-    courier = es.get("courier_service") or {}
     weight = sum(float(p.get("weight") or 0) for p in row["parcels"] or [])
+    cost = state.cost if state.cost is not None else _split_cost(rate, box_total)
     db.execute(
         """UPDATE shipments SET
              courier_name=%s, courier_umbrella_name=%s,
@@ -338,9 +371,9 @@ def _finalize_row(row, es, courier_service_id, rate, box_total):
              status='label_created', error_message=NULL, updated_at=now()
            WHERE id=%s""",
         (
-            courier.get("name") or rate.get("courier_name"),
-            courier.get("umbrella_name") or rate.get("umbrella_name"),
-            _per_box_cost(es, courier_service_id, rate, box_total),
+            state.courier_name or rate.get("courier_name"),
+            state.courier_umbrella_name or rate.get("umbrella_name"),
+            cost,
             round(weight, 2),
             tracking,
             json.dumps(numbers) if numbers else None,
@@ -351,7 +384,8 @@ def _finalize_row(row, es, courier_service_id, rate, box_total):
     )
 
 
-def _group_buy_impl(group_id, courier_service_id, rate, user_id):
+def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
+    provider = providers.get_provider(provider_name)
     rows = _group_rows(group_id)
     primary_id = rows[0]["id"]
     box_total = len(rows)
@@ -362,10 +396,10 @@ def _group_buy_impl(group_id, courier_service_id, rate, user_id):
     state = {}
     box_errors = {}
     last_error = None
-    results = easyship.buy_labels(sids, courier_service_id)
+    results = provider.buy_labels(sids, courier_service_id)
     for sid in sids:
         res = results.get(sid)
-        if isinstance(res, EasyshipError):
+        if isinstance(res, ProviderError):
             last_error = res
             box_errors[sid] = str(res)
             state[sid] = None
@@ -381,15 +415,15 @@ def _group_buy_impl(group_id, courier_service_id, rate, user_id):
             if sid in finalized:
                 continue
             s = state.get(sid)
-            if s and s.get("label_state") in LABEL_READY_STATES:
-                _finalize_row(row, s, courier_service_id, rate, box_total)
+            if s and s.label_status == LabelStatus.READY:
+                _finalize_row(provider, row, s, rate, box_total)
                 finalized.add(sid)
 
     def pending():
         return [
             sid for sid in sids
             if sid not in finalized and not (
-                state.get(sid) and state[sid].get("label_state") == "failed"
+                state.get(sid) and state[sid].label_status == LabelStatus.FAILED
             )
         ]
 
@@ -410,9 +444,9 @@ def _group_buy_impl(group_id, courier_service_id, rate, user_id):
 
     while pending() and time.monotonic() < deadline:
         time.sleep(3)
-        refreshed = easyship.get_shipments(pending())
+        refreshed = provider.poll_shipments(pending(), courier_service_id)
         for sid, res in refreshed.items():
-            if isinstance(res, EasyshipError):
+            if isinstance(res, ProviderError):
                 last_error = res
             else:
                 state[sid] = res
@@ -423,13 +457,13 @@ def _group_buy_impl(group_id, courier_service_id, rate, user_id):
         now = time.monotonic()
         rebuy_ids = [
             sid for sid in pending()
-            if (not state.get(sid) or state[sid].get("label_state") in (None, "not_created"))
+            if (not state.get(sid) or state[sid].label_status == LabelStatus.NOT_CREATED)
             and now >= rebuy_next.get(sid, 0)
         ]
         if rebuy_ids:
-            for sid, res in easyship.buy_labels(rebuy_ids, courier_service_id).items():
+            for sid, res in provider.buy_labels(rebuy_ids, courier_service_id).items():
                 rebuy_next[sid] = time.monotonic() + rebuy_interval_s
-                if isinstance(res, EasyshipError):
+                if isinstance(res, ProviderError):
                     last_error = res
                     box_errors[sid] = str(res)
                 else:
@@ -444,13 +478,13 @@ def _group_buy_impl(group_id, courier_service_id, rate, user_id):
     incomplete = [r for r in rows if r["status"] not in ("label_created", "fulfilled")]
     if incomplete:
         failed = [sid for sid in sids
-                  if state.get(sid) and state[sid].get("label_state") == "failed"]
+                  if state.get(sid) and state[sid].label_status == LabelStatus.FAILED]
         if failed:
-            message = f"Label generation failed at Easyship for {len(failed)} of {box_total} box(es)"
+            message = f"Label generation failed at {provider.label} for {len(failed)} of {box_total} box(es)"
             progress_state = "error"
         else:
             message = (
-                f"{last_error or 'Easyship did not finish in time.'} "
+                f"{last_error or (provider.label + ' did not finish in time.')} "
                 f"{len(incomplete)} of {box_total} label(s) not confirmed — click Resume/Print "
                 "label again to finish; completed boxes are never re-charged."
             )
@@ -503,8 +537,8 @@ def _group_label_bytes(group_id):
         if row["label_path"] and os.path.exists(row["label_path"]):
             with open(row["label_path"], "rb") as f:
                 data = f.read()
-            docs.append((data, easyship.sniff_label_format(data, row["label_format"] or "pdf")))
-    return easyship.merge_label_documents(docs)
+            docs.append((data, labels.sniff_label_format(data, row["label_format"] or "pdf")))
+    return labels.merge_label_documents(docs)
 
 
 @bp.get("/group/<group_id>/label")
@@ -770,15 +804,16 @@ def get_label(shipment_id):
 @bp.get("/<int:shipment_id>/easyship")
 @admin_required
 def easyship_raw(shipment_id):
-    """Diagnostic: the raw shipment object as Easyship returns it right now."""
+    """Diagnostic: the raw shipment object as the provider returns it right now."""
     row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
     if not row:
         return api_error("Shipment not found", 404)
     if not row["easyship_shipment_id"]:
-        return api_error("Shipment was never sent to Easyship")
+        return api_error("Shipment was never sent to a provider")
+    provider = providers.get_provider(row.get("provider") or "easyship")
     try:
-        return jsonify(easyship.get_shipment(row["easyship_shipment_id"]))
-    except EasyshipError as e:
+        return jsonify(provider.get_raw_shipment(row["easyship_shipment_id"]))
+    except ProviderError as e:
         return api_error(str(e), 502)
 
 
@@ -819,10 +854,11 @@ def void(shipment_id):
     primary = rows[0]
 
     if row["status"] != "voided":
+        provider = providers.get_provider(primary.get("provider") or "easyship")
         all_ids = []
         for r in rows:
             all_ids += r["easyship_shipment_ids"] or ([r["easyship_shipment_id"]] if r["easyship_shipment_id"] else [])
-        cancel_errors = easyship.cancel_all(all_ids)
+        cancel_errors = provider.cancel_all(all_ids)
         if cancel_errors:
             return api_error("; ".join(cancel_errors), 502)
 

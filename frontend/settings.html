@@ -27,37 +27,9 @@
 
     <!-- ================= Shipping ================= -->
     <section class="tab-panel" data-panel="shipping">
-      <div class="card" id="card-easyship">
-        <h2>Easyship API</h2>
-        <div class="row mb-16">
-          <div class="field fixed" style="min-width:220px">
-            <label>Mode</label>
-            <select id="easyship_mode">
-              <option value="sandbox">Sandbox (test)</option>
-              <option value="production">Production (live — labels cost money)</option>
-            </select>
-          </div>
-          <div class="fixed"><button class="btn btn-outlined" id="test-easyship">Test connection</button></div>
-          <div class="fixed" id="easyship-test-result"></div>
-        </div>
-        <div class="row">
-          <div class="field">
-            <label>Sandbox access token</label>
-            <input type="password" id="easyship_sandbox_token" autocomplete="off">
-          </div>
-          <div class="field">
-            <label>Production access token</label>
-            <input type="password" id="easyship_production_token" autocomplete="off">
-          </div>
-        </div>
-        <div class="row mt-16">
-          <div class="field fixed" style="min-width:260px">
-            <label>Default item category (customs)</label>
-            <select id="default_item_category"></select>
-            <span class="hint">Applied to shipment items — Easyship requires one per item</span>
-          </div>
-        </div>
-      </div>
+      <!-- Shipping-provider cards are rendered from GET /api/providers so new
+           platforms appear here with no markup changes. -->
+      <div id="providers-container"></div>
 
       <div class="card" id="card-origin">
         <h2>Origin address (ship from)</h2>
@@ -80,17 +52,6 @@
         </div>
       </div>
 
-      <div class="card" id="card-services">
-        <h2>Shipping services
-          <button class="btn btn-outlined btn-small" id="reload-services" style="margin-left:auto">Reload</button>
-        </h2>
-        <p class="hint mb-16">Checked services are hidden from the rate list on the shipping page. Fetched live from your Easyship account (current mode).</p>
-        <div id="services-list"><p class="text-secondary">Loading services…</p></div>
-        <div class="row mt-16">
-          <div class="fixed"><button class="btn btn-primary" id="save-services">Save exclusions</button></div>
-          <div class="fixed" id="services-status"></div>
-        </div>
-      </div>
     </section>
 
     <!-- ================= Printing ================= -->

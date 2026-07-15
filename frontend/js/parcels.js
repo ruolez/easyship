@@ -127,7 +127,7 @@ function render() {
         ? `<span class="chip static ${['label_created', 'fulfilled'].includes(s.status) ? 'ok' : 'warn'}">${s.box_number}/${s.box_total}</span>`
         : '1';
       const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id
-        && s.easyship_shipment_id && s.group_id;
+        && s.provider_shipment_id && s.group_id;
       return `<tr>
         <td><strong>${esc(ref)}</strong></td>
         <td>${esc(s.created_by)}</td>

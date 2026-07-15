@@ -1,18 +1,20 @@
-const SETTING_IDS = [
-  'easyship_mode', 'easyship_sandbox_token', 'easyship_production_token',
-  'default_item_category',
+// Non-provider settings. Provider fields (tokens, mode, enabled, custom
+// fields) are appended after the provider cards render, so new platforms need
+// no edits here.
+const BASE_SETTING_IDS = [
   'origin_company', 'origin_contact', 'origin_address1', 'origin_address2',
   'origin_city', 'origin_state', 'origin_zip', 'origin_phone', 'origin_email',
   'placeholder_email', 'print_mode', 'printer_host', 'printer_port',
   'label_timeout_seconds', 'countdown_seconds',
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
 ];
+let SETTING_IDS = [...BASE_SETTING_IDS];
 
 initNav('settings').then(async () => {
   const isAdmin = window.currentUser && window.currentUser.role === 'admin';
   initTabs(isAdmin);
   if (!isAdmin) return;
-  await loadCategories();
+  await renderProviders();
   await loadSettings();
   updatePrintModeUI();
   watchDirty();
@@ -20,7 +22,6 @@ initNav('settings').then(async () => {
   await loadDbs();
   await loadBoxes();
   await loadUsers();
-  loadServices();
 });
 
 /* ---------- Tabs ---------- */
@@ -128,34 +129,129 @@ window.deleteBox = async (id) => {
   loadBoxes();
 };
 
-async function loadCategories() {
-  const select = document.getElementById('default_item_category');
+/* ---------- Shipping providers (rendered from descriptors) ---------- */
+async function renderProviders() {
+  const container = document.getElementById('providers-container');
+  let list;
   try {
-    const categories = await api('/api/settings/easyship-categories');
-    select.innerHTML = categories
-      .map((c) => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`)
-      .join('');
-  } catch {
-    select.innerHTML = '<option value="dry_food_supplements">Dry Food Supplements</option>';
+    list = await api('/api/providers');
+  } catch (err) {
+    container.innerHTML = `<div class="card"><p class="text-secondary">Could not load providers: ${esc(err.message)}</p></div>`;
+    return;
+  }
+  container.innerHTML = list.map(providerCardHtml).join('');
+  // Register every provider field as a persistable setting.
+  list.forEach((p) => {
+    SETTING_IDS.push(p.enabled_key);
+    if (p.modes && p.modes.length) SETTING_IDS.push(p.mode_key);
+    p.fields.forEach((f) => SETTING_IDS.push(f.key));
+  });
+  for (const p of list) {
+    wireProviderCard(p);
+    for (const f of p.fields) {
+      if (f.type === 'select' && f.options_endpoint) await loadFieldOptions(f);
+    }
+    if (p.supports && p.supports.service_exclusions) loadServices(p);
   }
 }
 
-/* ---------- Shipping services (rate exclusions) ---------- */
-async function loadServices() {
-  const list = document.getElementById('services-list');
+function fieldHtml(f) {
+  const hint = f.hint ? `<span class="hint">${esc(f.hint)}</span>` : '';
+  if (f.type === 'secret') {
+    return `<div class="field"><label>${esc(f.label)}</label>
+      <input type="password" id="${esc(f.key)}" autocomplete="off">${hint}</div>`;
+  }
+  if (f.type === 'select') {
+    return `<div class="field fixed" style="min-width:260px"><label>${esc(f.label)}</label>
+      <select id="${esc(f.key)}"></select>${hint}</div>`;
+  }
+  return `<div class="field"><label>${esc(f.label)}</label><input id="${esc(f.key)}">${hint}</div>`;
+}
+
+function providerCardHtml(p) {
+  const modeField = p.modes && p.modes.length ? `
+    <div class="field fixed" style="min-width:220px">
+      <label>Mode</label>
+      <select id="${esc(p.mode_key)}">
+        ${p.modes.map((m) => `<option value="${esc(m.value)}">${esc(m.label)}</option>`).join('')}
+      </select>
+    </div>` : '';
+  const testBtn = p.test_endpoint ? `
+    <div class="fixed"><button class="btn btn-outlined" data-test="${esc(p.name)}">Test connection</button></div>
+    <div class="fixed" id="test-result-${esc(p.name)}"></div>` : '';
+  const services = p.supports && p.supports.service_exclusions ? `
+    <div class="card" data-services="${esc(p.name)}">
+      <h2>${esc(p.label)} shipping services
+        <button class="btn btn-outlined btn-small" data-reload-services="${esc(p.name)}" style="margin-left:auto">Reload</button>
+      </h2>
+      <p class="hint mb-16">Checked services are hidden from the rate list on the shipping page. Fetched live from your ${esc(p.label)} account (current mode).</p>
+      <div id="services-list-${esc(p.name)}"><p class="text-secondary">Loading services…</p></div>
+      <div class="row mt-16">
+        <div class="fixed"><button class="btn btn-primary" data-save-services="${esc(p.name)}">Save exclusions</button></div>
+        <div class="fixed" id="services-status-${esc(p.name)}"></div>
+      </div>
+    </div>` : '';
+  return `
+    <div class="card" data-provider="${esc(p.name)}">
+      <h2>${esc(p.label)} API
+        <label class="svc-selectall" style="margin-left:auto"><input type="checkbox" id="${esc(p.enabled_key)}"> Enabled</label>
+      </h2>
+      <div class="row mb-16">
+        ${modeField}${testBtn}
+      </div>
+      <div class="row">${p.fields.map(fieldHtml).join('')}</div>
+    </div>
+    ${services}`;
+}
+
+function wireProviderCard(p) {
+  if (p.test_endpoint) {
+    const btn = document.querySelector(`[data-test="${p.name}"]`);
+    btn.addEventListener('click', () => {
+      const modeEl = document.getElementById(p.mode_key);
+      const mode = modeEl ? (modeEl.value || (p.modes[0] && p.modes[0].value)) : undefined;
+      const tokenField = p.fields.find((f) => f.type === 'secret' && f.mode === mode);
+      const token = tokenField ? document.getElementById(tokenField.key).value : undefined;
+      testResult(`test-result-${p.name}`, api(p.test_endpoint, { method: 'POST', body: { mode, token } }));
+    });
+  }
+  if (p.supports && p.supports.service_exclusions) {
+    document.querySelector(`[data-reload-services="${p.name}"]`)
+      .addEventListener('click', () => loadServices(p));
+    document.querySelector(`[data-save-services="${p.name}"]`)
+      .addEventListener('click', () => saveServices(p));
+    document.getElementById(`services-list-${p.name}`)
+      .addEventListener('change', onServiceToggle);
+  }
+}
+
+async function loadFieldOptions(f) {
+  const select = document.getElementById(f.key);
+  try {
+    const options = await api(f.options_endpoint);
+    select.innerHTML = options
+      .map((o) => `<option value="${esc(o.slug ?? o.value)}">${esc(o.name ?? o.label)}</option>`)
+      .join('');
+  } catch {
+    select.innerHTML = '';
+  }
+}
+
+/* ---------- Shipping services (rate exclusions), per provider ---------- */
+async function loadServices(p) {
+  const list = document.getElementById(`services-list-${p.name}`);
   list.innerHTML = '<p class="text-secondary">Loading services…</p>';
   try {
-    const res = await api('/api/settings/courier-services');
-    renderServices(res.services || [], new Set(res.excluded || []));
+    const res = await api(p.services_endpoint);
+    renderServices(list, res.services || [], new Set(res.excluded || []));
   } catch (err) {
     list.innerHTML = `<p class="text-secondary">Could not load services: ${esc(err.message)}</p>`;
   }
 }
 
-function renderServices(services, excluded) {
-  const list = document.getElementById('services-list');
+function renderServices(list, services, excluded) {
   if (!services.length) {
-    list.innerHTML = '<p class="text-secondary">No services returned. Check the Easyship token and mode above.</p>';
+    list.innerHTML = '<p class="text-secondary">No services returned. Check the token and mode above.</p>';
     return;
   }
   const groups = new Map();
@@ -195,7 +291,7 @@ function syncGroupToggle(group) {
   toggle.indeterminate = checked > 0 && checked < boxes.length;
 }
 
-document.getElementById('services-list').addEventListener('change', (e) => {
+function onServiceToggle(e) {
   const group = e.target.closest('.svc-group');
   if (!group) return;
   if (e.target.classList.contains('svc-group-toggle')) {
@@ -203,42 +299,40 @@ document.getElementById('services-list').addEventListener('change', (e) => {
   } else if (e.target.classList.contains('svc-exclude')) {
     syncGroupToggle(group);
   }
-});
+}
 
-async function saveServices() {
-  const excluded = [...document.querySelectorAll('.svc-exclude:checked')].map((el) => el.value);
-  const status = document.getElementById('services-status');
-  status.textContent = '';
+async function saveServices(p) {
+  const listEl = document.getElementById(`services-list-${p.name}`);
+  const excluded = [...listEl.querySelectorAll('.svc-exclude:checked')].map((el) => el.value);
+  document.getElementById(`services-status-${p.name}`).textContent = '';
   try {
-    await api('/api/settings/excluded-services', { method: 'POST', body: { excluded } });
+    await api(p.excluded_endpoint, { method: 'POST', body: { excluded } });
     snackbar(`Saved — ${excluded.length} service${excluded.length === 1 ? '' : 's'} hidden`, 'success');
   } catch (err) {
     snackbar(err.message, 'error');
   }
 }
 
-document.getElementById('reload-services').addEventListener('click', loadServices);
-document.getElementById('save-services').addEventListener('click', saveServices);
-
 async function loadSettings() {
   const settings = await api('/api/settings');
   SETTING_IDS.forEach((id) => {
     const el = document.getElementById(id);
-    if (el) el.value = settings[id] || '';
+    if (!el) return;
+    if (el.type === 'checkbox') el.checked = settings[id] === 'true';
+    else el.value = settings[id] || '';
+    // A select with no matching saved value falls back to its first option.
+    if (el.tagName === 'SELECT' && !el.value) el.selectedIndex = 0;
   });
-  const catEl = document.getElementById('default_item_category');
-  if (!settings.default_item_category) catEl.value = 'dry_food_supplements';
-  else catEl.value = settings.default_item_category;
-  if (!catEl.value) catEl.selectedIndex = 0;
 }
 
 document.getElementById('save-settings').addEventListener('click', async () => {
   const body = {};
   SETTING_IDS.forEach((id) => {
     const el = document.getElementById(id);
-    if (el) body[id] = el.value;
+    if (!el) return;
+    body[id] = el.type === 'checkbox' ? (el.checked ? 'true' : '') : el.value;
   });
-  body.origin_state = body.origin_state.toUpperCase();
+  if (body.origin_state) body.origin_state = body.origin_state.toUpperCase();
   try {
     await api('/api/settings', { method: 'PUT', body });
     snackbar('Settings saved', 'success');
@@ -261,19 +355,6 @@ function testResult(elId, promise) {
       el.innerHTML = `<span class="chip static err">✕ ${esc(err.message)}</span>`;
     });
 }
-
-document.getElementById('test-easyship').addEventListener('click', () => {
-  const modeEl = document.getElementById('easyship_mode');
-  const mode = modeEl.value || 'sandbox';
-  modeEl.value = mode;
-  testResult('easyship-test-result', api('/api/settings/test/easyship', {
-    method: 'POST',
-    body: {
-      mode,
-      token: document.getElementById(`easyship_${mode}_token`).value,
-    },
-  }));
-});
 
 document.getElementById('test-printer').addEventListener('click', () => {
   testResult('printer-test-result', api('/api/settings/test/printer', {

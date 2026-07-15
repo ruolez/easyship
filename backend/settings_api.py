@@ -4,18 +4,19 @@ from werkzeug.security import generate_password_hash
 
 import config
 import db
+import providers
 from auth import admin_required, login_required
+from providers.base import ProviderError
 from util import api_error, audit
 
 bp = Blueprint("settings", __name__, url_prefix="/api")
 
 MASK = "••••••••"
 
-SETTING_KEYS = [
-    "easyship_mode",
-    "easyship_sandbox_token",
-    "easyship_production_token",
-    "default_item_category",
+# Non-provider settings. Provider-specific keys (tokens, mode, enabled flag,
+# custom fields) come from each provider's descriptor, so a new platform needs
+# no edits here.
+BASE_SETTING_KEYS = [
     "origin_company",
     "origin_contact",
     "origin_address1",
@@ -38,22 +39,60 @@ SETTING_KEYS = [
     "shipper_password",
 ]
 
-SECRET_KEYS = {"easyship_sandbox_token", "easyship_production_token", "shipper_password"}
+BASE_SECRET_KEYS = {"shipper_password"}
+
+
+def _provider_setting_keys():
+    """(all persistable keys, secret keys) contributed by registered providers."""
+    keys, secrets = [], set()
+    for d in providers.descriptors():
+        keys.append(d["enabled_key"])
+        if d.get("modes"):
+            keys.append(d["mode_key"])
+        for f in d["fields"]:
+            keys.append(f["key"])
+            if f.get("type") == "secret":
+                secrets.add(f["key"])
+    return keys, secrets
+
+
+def _setting_keys():
+    pkeys, _ = _provider_setting_keys()
+    return BASE_SETTING_KEYS + pkeys
+
+
+def _secret_keys():
+    _, psecrets = _provider_setting_keys()
+    return BASE_SECRET_KEYS | psecrets
+
+
+def _aggregate_mode():
+    """Nav-badge environment: sandbox if any enabled provider is in a test mode."""
+    for p in providers.enabled_providers():
+        if p.is_test_mode():
+            return "sandbox"
+    return "production"
+
+
+def _provider_or_404(name):
+    return providers.get_provider(name) if name in providers.registered_names() else None
 
 
 @bp.get("/settings")
 @admin_required
 def get_settings():
+    secret_keys = _secret_keys()
     out = {}
-    for key in SETTING_KEYS:
+    for key in _setting_keys():
         value = db.get_setting(key)
-        if key in SECRET_KEYS:
+        if key in secret_keys:
             out[key] = MASK if value else ""
         else:
             out[key] = value or ""
-    if not out["easyship_mode"]:
-        out["easyship_mode"] = "sandbox"
-    if not out["print_mode"]:
+    for d in providers.descriptors():
+        if d.get("modes") and not out.get(d["mode_key"]):
+            out[d["mode_key"]] = d["modes"][0]["value"]
+    if not out.get("print_mode"):
         out["print_mode"] = "browser"
     return jsonify(out)
 
@@ -62,20 +101,23 @@ def get_settings():
 @admin_required
 def put_settings():
     data = request.get_json(silent=True) or {}
+    keys = set(_setting_keys())
+    secret_keys = _secret_keys()
     for key, value in data.items():
-        if key not in SETTING_KEYS:
+        if key not in keys:
             continue
-        if key in SECRET_KEYS and value == MASK:
+        if key in secret_keys and value == MASK:
             continue
         db.set_setting(key, (value or "").strip())
-    audit("settings.update", {"keys": [k for k in data if k in SETTING_KEYS]})
+    audit("settings.update", {"keys": [k for k in data if k in keys]})
     return jsonify({"ok": True})
 
 
 @bp.get("/settings/easyship-mode")
 @login_required
 def easyship_mode():
-    return jsonify({"mode": db.get_setting("easyship_mode") or "sandbox"})
+    # Kept for the nav badge; now reports the aggregate environment.
+    return jsonify({"mode": _aggregate_mode()})
 
 
 @bp.get("/settings/client")
@@ -83,11 +125,18 @@ def easyship_mode():
 def client_settings():
     """Non-secret settings any logged-in user's UI needs."""
     return jsonify({
-        "mode": db.get_setting("easyship_mode") or "sandbox",
+        "mode": _aggregate_mode(),
         "placeholder_email": db.get_setting("placeholder_email") or "",
         "print_mode": db.get_setting("print_mode") or "browser",
         "countdown_seconds": int(db.get_setting("countdown_seconds") or 5),
     })
+
+
+@bp.get("/providers")
+@admin_required
+def list_providers():
+    """Provider descriptors that drive the Settings shipping section."""
+    return jsonify(providers.descriptors())
 
 
 @bp.post("/settings/test/printer")
@@ -146,72 +195,90 @@ FALLBACK_CATEGORIES = [
 ]
 
 
+def _item_categories(provider):
+    """Live categories with a static fallback so the customs dropdown always fills."""
+    if provider:
+        try:
+            categories = provider.list_item_categories()
+            if categories:
+                return categories
+        except Exception:
+            pass
+    return [{"slug": s, "name": s.replace("_", " ").title()} for s in FALLBACK_CATEGORIES]
+
+
+@bp.get("/providers/<name>/item-categories")
+@login_required
+def provider_item_categories(name):
+    return jsonify(_item_categories(_provider_or_404(name)))
+
+
+@bp.get("/providers/<name>/services")
+@admin_required
+def provider_services(name):
+    provider = _provider_or_404(name)
+    if not provider:
+        return api_error("Unknown provider", 404)
+    excluded = sorted(provider.get_excluded_service_ids())
+    try:
+        services = provider.list_courier_services()
+    except Exception as e:
+        return api_error(f"Could not fetch services from {provider.label}: {e}")
+    return jsonify({"services": services, "excluded": excluded})
+
+
+@bp.post("/providers/<name>/excluded-services")
+@admin_required
+def provider_excluded_services(name):
+    provider = _provider_or_404(name)
+    if not provider:
+        return api_error("Unknown provider", 404)
+    data = request.get_json(silent=True) or {}
+    ids = data.get("excluded")
+    if not isinstance(ids, list):
+        return api_error("excluded must be a list of service id values")
+    clean = provider.set_excluded_service_ids(ids)
+    audit("settings.excluded_services", {"provider": name, "count": len(clean)})
+    return jsonify({"ok": True, "excluded": clean})
+
+
+@bp.post("/providers/<name>/test")
+@admin_required
+def provider_test(name):
+    provider = _provider_or_404(name)
+    if not provider:
+        return api_error("Unknown provider", 404)
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(provider.test_connection(mode=data.get("mode"), token=data.get("token")))
+    except ProviderError as e:
+        return api_error(str(e))
+
+
+# ---------- Back-compat aliases (Easyship) ----------
+
 @bp.get("/settings/easyship-categories")
 @login_required
 def easyship_categories():
-    try:
-        import easyship_client
-        categories = easyship_client.list_item_categories()
-        if categories:
-            return jsonify(categories)
-    except Exception:
-        pass
-    return jsonify([{"slug": s, "name": s.replace("_", " ").title()} for s in FALLBACK_CATEGORIES])
+    return jsonify(_item_categories(_provider_or_404("easyship")))
 
 
 @bp.get("/settings/courier-services")
 @admin_required
 def courier_services():
-    import easyship_client
-    excluded = sorted(easyship_client.get_excluded_service_ids())
-    try:
-        services = easyship_client.list_courier_services()
-    except Exception as e:
-        return api_error(f"Could not fetch services from Easyship: {e}")
-    return jsonify({"services": services, "excluded": excluded})
+    return provider_services("easyship")
 
 
 @bp.post("/settings/excluded-services")
 @admin_required
 def save_excluded_services():
-    data = request.get_json(silent=True) or {}
-    ids = data.get("excluded")
-    if not isinstance(ids, list):
-        return api_error("excluded must be a list of courier_service_id values")
-    import easyship_client
-    clean = easyship_client.set_excluded_service_ids(ids)
-    audit("settings.excluded_services", {"count": len(clean)})
-    return jsonify({"ok": True, "excluded": clean})
+    return provider_excluded_services("easyship")
 
 
 @bp.post("/settings/test/easyship")
 @admin_required
 def test_easyship():
-    data = request.get_json(silent=True) or {}
-    mode = data.get("mode") or db.get_setting("easyship_mode", "sandbox")
-    token_key = f"easyship_{mode}_token"
-    token = data.get("token")
-    if not token or token == MASK:
-        token = db.get_setting(token_key)
-    if not token:
-        return api_error(f"No {mode} token configured")
-    # NB: the /account endpoint 500s unconditionally on Easyship's side (even with
-    # no token), so we validate the token against /item_categories instead — a
-    # lightweight authenticated endpoint that returns 401 on a bad/missing token.
-    try:
-        resp = requests.get(
-            f"{config.EASYSHIP_BASE_URLS[mode]}/item_categories",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"perPage": 1},
-            timeout=15,
-        )
-    except requests.RequestException as e:
-        return api_error(f"Connection failed: {e}")
-    if resp.status_code == 200:
-        return jsonify({"ok": True, "mode": mode, "account": "connected"})
-    if resp.status_code in (401, 403):
-        return api_error(f"Token rejected ({resp.status_code}) — check the {mode} token")
-    return api_error(f"Easyship returned {resp.status_code}: {resp.text[:300]}")
+    return provider_test("easyship")
 
 
 # ---------- Box sizes ----------
