@@ -276,6 +276,10 @@ def group_buy(group_id):
         return api_error("Nothing to purchase — all boxes already have labels or were voided")
 
     for r in rows:
+        # Never rewrite a finalized box — its easyship_shipment_id already holds
+        # the purchased label/transaction id, which a Resume must not clobber.
+        if r["status"] in ("label_created", "fulfilled"):
+            continue
         draft_id = _draft_id(r)
         if draft_id:
             db.execute(
@@ -362,11 +366,16 @@ def _finalize_row(provider, row, state, rate, box_total):
 
     weight = sum(float(p.get("weight") or 0) for p in row["parcels"] or [])
     cost = state.cost if state.cost is not None else _split_cost(rate, box_total)
+    # Persist the provider's post-purchase id. For Easyship this is unchanged
+    # (the shipment id); for Shippo it's the transaction id, which void needs to
+    # issue the refund against.
+    active_id = state.provider_shipment_id
     db.execute(
         """UPDATE shipments SET
              courier_name=%s, courier_umbrella_name=%s,
              shipping_cost=%s, total_weight_lb=%s,
              tracking_number=%s, tracking_numbers=%s, label_path=%s, label_format=%s,
+             easyship_shipment_id=%s, easyship_shipment_ids=%s,
              label_created_at=now(),
              status='label_created', error_message=NULL, updated_at=now()
            WHERE id=%s""",
@@ -379,6 +388,8 @@ def _finalize_row(provider, row, state, rate, box_total):
             json.dumps(numbers) if numbers else None,
             label_path,
             label_format or "pdf",
+            active_id,
+            json.dumps([active_id]) if active_id else None,
             row["id"],
         ),
     )

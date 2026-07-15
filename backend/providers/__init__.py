@@ -15,7 +15,9 @@ _INSTANCES = {}
 def _load_registry():
     if not _REGISTRY:
         from .easyship import EasyshipProvider
+        from .shippo import ShippoProvider
         _REGISTRY["easyship"] = EasyshipProvider
+        _REGISTRY["shippo"] = ShippoProvider
     return _REGISTRY
 
 

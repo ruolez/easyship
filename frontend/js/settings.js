@@ -162,8 +162,11 @@ function fieldHtml(f) {
       <input type="password" id="${esc(f.key)}" autocomplete="off">${hint}</div>`;
   }
   if (f.type === 'select') {
+    // Inline options render immediately; otherwise loadFieldOptions fills from options_endpoint.
+    const opts = (f.options || [])
+      .map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
     return `<div class="field fixed" style="min-width:260px"><label>${esc(f.label)}</label>
-      <select id="${esc(f.key)}"></select>${hint}</div>`;
+      <select id="${esc(f.key)}">${opts}</select>${hint}</div>`;
   }
   return `<div class="field"><label>${esc(f.label)}</label><input id="${esc(f.key)}">${hint}</div>`;
 }
