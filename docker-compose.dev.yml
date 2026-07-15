@@ -1,0 +1,19 @@
+# Local development overlay. Restores the live-code bind mount and gunicorn
+# --reload so backend edits take effect without a rebuild. NOT auto-loaded —
+# invoke explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  backend:
+    volumes:
+      - ./backend:/app
+      - labels:/data/labels
+    # --reload cannot be combined with --preload; run a simple single worker.
+    command:
+      - sh
+      - "-c"
+      - "exec gunicorn --bind 0.0.0.0:5000 --workers 1 --threads 4 --timeout 300 --reload 'app:create_app()'"
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
