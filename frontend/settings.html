@@ -17,6 +17,7 @@
     </div>
 
     <nav class="tabs" id="settings-tabs">
+      <button class="tab" data-tab="providers">Providers</button>
       <button class="tab" data-tab="shipping">Shipping</button>
       <button class="tab" data-tab="printing">Printing</button>
       <button class="tab" data-tab="boxes">Boxes</button>
@@ -25,12 +26,21 @@
       <button class="tab" data-tab="account">My account</button>
     </nav>
 
+    <!-- ================= Providers ================= -->
+    <section class="tab-panel" data-panel="providers">
+      <div class="card" id="card-provider-picker">
+        <div class="field fixed" style="min-width:260px">
+          <label>Configure provider</label>
+          <select id="provider-config-select"></select>
+        </div>
+      </div>
+      <!-- One card per provider, rendered from GET /api/providers; the picker
+           above shows only the selected provider's card. -->
+      <div id="providers-container"></div>
+    </section>
+
     <!-- ================= Shipping ================= -->
     <section class="tab-panel" data-panel="shipping">
-      <!-- Shipping-provider cards are rendered from GET /api/providers so new
-           platforms appear here with no markup changes. -->
-      <div id="providers-container"></div>
-
       <div class="card" id="card-origin">
         <h2>Origin address (ship from)</h2>
         <div class="row">

@@ -104,6 +104,30 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
   flex: 0 0 auto;
 }
 .sidebar .brand .mark svg { width: 17px; height: 17px; stroke: #fff; }
+.sidebar .nav-provider {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 16px 12px;
+}
+.sidebar .nav-provider label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 600;
+  color: var(--chrome-text);
+}
+.sidebar .nav-provider select {
+  width: 100%;
+  background: var(--chrome-hover);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sidebar .nav-provider select:focus { outline: none; border-color: var(--primary); }
 .sidebar nav { display: flex; flex-direction: column; gap: 2px; padding: 6px 12px; }
 .sidebar nav a {
   display: flex;
@@ -231,6 +255,7 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
   .sidebar { width: var(--sidebar-rail-w); }
   .sidebar .brand { justify-content: center; padding: 18px 0 14px; }
   .sidebar .brand .label, .sidebar nav a .label, .sidebar .user-line .name { display: none; }
+  .sidebar .nav-provider { display: none; }
   .sidebar nav { padding: 6px 10px; }
   .sidebar nav a { justify-content: center; padding: 10px 0; }
   .sidebar nav a.active::before { left: -10px; }

@@ -264,6 +264,7 @@ document.getElementById('get-rates').addEventListener('click', async () => {
       method: 'POST',
       body: {
         ...orderContext,
+        provider: (window.activeProvider && window.activeProvider()) || '',
         destination: collectDestination(),
         parcels: collectParcels(),
         items: orderItems,

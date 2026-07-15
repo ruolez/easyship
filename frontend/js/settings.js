@@ -25,7 +25,7 @@ initNav('settings').then(async () => {
 });
 
 /* ---------- Tabs ---------- */
-const ADMIN_TABS = ['shipping', 'printing', 'boxes', 'integrations', 'users'];
+const ADMIN_TABS = ['providers', 'shipping', 'printing', 'boxes', 'integrations', 'users'];
 
 function initTabs(isAdmin) {
   const buttons = [...document.querySelectorAll('#settings-tabs .tab')];
@@ -153,6 +153,23 @@ async function renderProviders() {
     }
     if (p.supports && p.supports.service_exclusions) loadServices(p);
   }
+  wireProviderPicker(list);
+}
+
+/* Show one provider's config card at a time, chosen from the picker dropdown. */
+function wireProviderPicker(list) {
+  const picker = document.getElementById('provider-config-select');
+  if (!picker || !list.length) return;
+  picker.innerHTML = list.map((p) => `<option value="${esc(p.name)}">${esc(p.label)}</option>`).join('');
+  const showOnly = (name) => {
+    list.forEach((p) => {
+      document.querySelectorAll(`[data-provider="${p.name}"], [data-services="${p.name}"]`)
+        .forEach((el) => { el.style.display = p.name === name ? '' : 'none'; });
+    });
+  };
+  picker.value = list[0].name;
+  showOnly(list[0].name);
+  picker.addEventListener('change', () => showOnly(picker.value));
 }
 
 function fieldHtml(f) {

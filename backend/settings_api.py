@@ -139,6 +139,17 @@ def list_providers():
     return jsonify(providers.descriptors())
 
 
+@bp.get("/providers/enabled")
+@login_required
+def enabled_providers():
+    """The shipping platforms a packer can choose from — drives the nav
+    'Shipping with' selector and its environment badge."""
+    return jsonify([
+        {"name": p.name, "label": p.label, "test": p.is_test_mode()}
+        for p in providers.enabled_providers()
+    ])
+
+
 @bp.post("/settings/test/printer")
 @admin_required
 def test_printer():

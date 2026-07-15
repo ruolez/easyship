@@ -133,12 +133,26 @@ def get_rates():
         )
         row_ids.append(row["id"])
 
-    # Rate against every enabled provider; each returns per-box drafts + rates.
+    # The packer picks one provider up front; rate against just that one. Fall
+    # back to every enabled provider when none is specified (manual/legacy).
+    requested_provider = (data.get("provider") or "").strip()
+    active_providers = providers.enabled_providers()
+    if requested_provider:
+        chosen = [p for p in active_providers if p.name == requested_provider]
+        if not chosen:
+            for rid in row_ids:
+                db.execute(
+                    "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
+                    (f"Selected shipping provider '{requested_provider}' is not enabled", rid),
+                )
+            return api_error(f"Selected shipping provider '{requested_provider}' is not enabled", 400)
+        active_providers = chosen
+
     draft_ids_by_provider = {}
     all_rates = []
     had_rates = False
     provider_errors = []
-    for provider in providers.enabled_providers():
+    for provider in active_providers:
         try:
             drafts, rates = provider.create_draft_shipments(destination, parcels, items)
         except ProviderError as e:

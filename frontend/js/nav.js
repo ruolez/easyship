@@ -35,6 +35,10 @@ async function initNav(activePage) {
     <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
     <aside class="sidebar" id="sidebar">
       <div class="brand"><span class="mark">${NAV_ICONS.logo}</span><span class="label">EasyShip</span></div>
+      <div class="nav-provider" id="nav-provider" style="display:none">
+        <label for="provider-select">Shipping with</label>
+        <select id="provider-select"></select>
+      </div>
       <nav>
         ${NAV_ITEMS.map((i) => `
           <a href="${i.href}" title="${i.label}" class="${i.page === activePage ? 'active' : ''}">
@@ -70,17 +74,63 @@ async function initNav(activePage) {
   } catch {
     return; // api() already redirected to login
   }
-  try {
-    const mode = await api('/api/settings/easyship-mode');
-    const badge = document.getElementById('mode-badge');
-    if (mode.mode === 'sandbox') {
-      badge.className = 'badge-sandbox';
-      badge.textContent = 'SANDBOX';
-    } else {
-      badge.className = 'badge-production';
-      badge.textContent = 'PRODUCTION';
-    }
-  } catch {
-    // mode endpoint unavailable — leave badge empty
+  await initProviderSelector();
+}
+
+const PROVIDER_KEY = 'easyship.provider';
+
+/** The provider the packer is shipping with (persisted per station). */
+function activeProvider() {
+  return localStorage.getItem(PROVIDER_KEY) || '';
+}
+window.activeProvider = activeProvider;
+
+function setModeBadge(isTest) {
+  const badge = document.getElementById('mode-badge');
+  if (!badge) return;
+  if (isTest === null) {
+    badge.className = '';
+    badge.textContent = '';
+  } else if (isTest) {
+    badge.className = 'badge-sandbox';
+    badge.textContent = 'SANDBOX';
+  } else {
+    badge.className = 'badge-production';
+    badge.textContent = 'PRODUCTION';
   }
+}
+
+async function initProviderSelector() {
+  const wrap = document.getElementById('nav-provider');
+  const select = document.getElementById('provider-select');
+  let providers = [];
+  try {
+    providers = await api('/api/providers/enabled');
+  } catch {
+    // endpoint unavailable — leave the selector hidden and the badge empty
+  }
+  if (!providers.length) {
+    setModeBadge(null);
+    return;
+  }
+  // Keep the stored choice if it's still enabled, otherwise fall back.
+  let active = localStorage.getItem(PROVIDER_KEY);
+  if (!providers.some((p) => p.name === active)) {
+    active = providers[0].name;
+    localStorage.setItem(PROVIDER_KEY, active);
+  }
+  select.innerHTML = providers
+    .map((p) => `<option value="${esc(p.name)}">${esc(p.label)}</option>`).join('');
+  select.value = active;
+  wrap.style.display = '';
+
+  const applyBadge = () => {
+    const p = providers.find((x) => x.name === select.value);
+    setModeBadge(p ? p.test : null);
+  };
+  applyBadge();
+  select.addEventListener('change', () => {
+    localStorage.setItem(PROVIDER_KEY, select.value);
+    applyBadge();
+  });
 }
