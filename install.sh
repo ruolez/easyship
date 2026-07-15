@@ -33,6 +33,54 @@ get_env() {
     grep -E "^$1=" "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true
 }
 
+set_env() {
+    local key="$1" val="$2" file="$INSTALL_DIR/.env"
+    if grep -qE "^${key}=" "$file" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+    else
+        echo "${key}=${val}" >> "$file"
+    fi
+}
+
+# Scale per-container memory limits to the host's RAM and write them into .env,
+# where docker-compose.yml picks them up via ${..} substitution. Idempotent —
+# re-run on every install/update so a resized VM is re-tuned automatically.
+configure_resources() {
+    local total reserve budget nginx remaining postgres backend shared eff
+    total="$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)"
+    if [ -z "$total" ] || [ "$total" -le 0 ]; then
+        warn "Could not detect host RAM — keeping default resource limits."
+        return
+    fi
+
+    # Reserve 20% (min 768 MB) for the kernel and reclaimable page cache; the
+    # remaining budget is split so the sum of all limits stays under total RAM,
+    # guaranteeing no container can OOM the VM.
+    reserve=$(( total / 5 ))
+    [ "$reserve" -lt 768 ] && reserve=768
+    budget=$(( total - reserve ))
+    [ "$budget" -lt 512 ] && budget=512
+
+    nginx=128
+    remaining=$(( budget - nginx ))
+    postgres=$(( remaining * 45 / 100 ))
+    backend=$(( remaining - postgres ))
+    [ "$postgres" -lt 256 ] && postgres=256
+    [ "$backend" -lt 256 ] && backend=256
+
+    # Postgres internals track its container limit: shared_buffers ~25%,
+    # effective_cache_size ~60% (standard rules of thumb).
+    shared=$(( postgres / 4 ));   [ "$shared" -lt 128 ] && shared=128
+    eff=$(( postgres * 60 / 100 )); [ "$eff" -lt 256 ] && eff=256
+
+    set_env NGINX_MEM_LIMIT    "${nginx}M"
+    set_env BACKEND_MEM_LIMIT  "${backend}M"
+    set_env POSTGRES_MEM_LIMIT "${postgres}M"
+    set_env PG_SHARED_BUFFERS  "${shared}MB"
+    set_env PG_EFFECTIVE_CACHE "${eff}MB"
+    ok "Resource limits for ${total} MB host: backend=${backend}M, postgres=${postgres}M, nginx=${nginx}M (reserved ${reserve}M for OS/cache)"
+}
+
 server_ip() {
     hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost"
 }
@@ -124,6 +172,9 @@ EOF
     info "Generating self-signed TLS certificate..."
     bash "$INSTALL_DIR/nginx/gen-certs.sh"
 
+    info "Tuning container resource limits to this host..."
+    configure_resources
+
     info "Building and starting containers (first build takes a few minutes)..."
     compose up -d --build
 
@@ -166,6 +217,9 @@ do_update() {
         echo "APP_HTTPS_PORT=${DEFAULT_HTTPS_PORT}" >> "$INSTALL_DIR/.env"
         info "Added APP_HTTPS_PORT=${DEFAULT_HTTPS_PORT} to .env (USB scale requires https)"
     fi
+
+    info "Re-tuning container resource limits to this host..."
+    configure_resources
 
     info "Rebuilding and restarting containers (database and labels are kept)..."
     compose up -d --build

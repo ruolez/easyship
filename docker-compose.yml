@@ -29,9 +29,10 @@ services:
       resources:
         limits:
           cpus: "0.50"
-          memory: 128M
+          # Overridden by install.sh, which scales limits to the host's RAM.
+          memory: ${NGINX_MEM_LIMIT:-128M}
         reservations:
-          memory: 32M
+          memory: 16M
 
   backend:
     build: ./backend
@@ -58,9 +59,9 @@ services:
       resources:
         limits:
           cpus: "1.50"
-          memory: 1024M
+          memory: ${BACKEND_MEM_LIMIT:-1024M}
         reservations:
-          memory: 256M
+          memory: 128M
 
   postgres:
     image: postgres:16-alpine
@@ -77,9 +78,9 @@ services:
       - "-c"
       - "max_connections=50"
       - "-c"
-      - "shared_buffers=256MB"
+      - "shared_buffers=${PG_SHARED_BUFFERS:-256MB}"
       - "-c"
-      - "effective_cache_size=768MB"
+      - "effective_cache_size=${PG_EFFECTIVE_CACHE:-768MB}"
       - "-c"
       - "work_mem=8MB"
       - "-c"
@@ -97,9 +98,9 @@ services:
       resources:
         limits:
           cpus: "1.00"
-          memory: 1024M
+          memory: ${POSTGRES_MEM_LIMIT:-1024M}
         reservations:
-          memory: 256M
+          memory: 128M
 
 volumes:
   pgdata:
