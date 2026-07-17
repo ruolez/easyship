@@ -10,15 +10,20 @@ let orderItems = [];
 let clientSettings = { placeholder_email: '', print_mode: 'browser', countdown_seconds: 5 };
 let savedBoxes = [];
 let lastLabelUrl = null;
+let providerLabels = {};
 
 initNav('scan');
 init();
 
 async function init() {
-  [clientSettings, savedBoxes] = await Promise.all([
+  const [settings, boxes, providers] = await Promise.all([
     api('/api/settings/client').catch(() => clientSettings),
     api('/api/boxes').catch(() => []),
+    api('/api/providers/enabled').catch(() => []),
   ]);
+  clientSettings = settings;
+  savedBoxes = boxes;
+  providerLabels = Object.fromEntries(providers.map((p) => [p.name, p.label]));
   addParcelRow();
   await prefill();
   applyPlaceholderEmail();
@@ -287,7 +292,8 @@ document.getElementById('get-rates').addEventListener('click', async () => {
 });
 
 function providerLabel(name) {
-  return name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
+  if (!name) return '';
+  return providerLabels[name] || name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 function renderRates() {

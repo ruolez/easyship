@@ -16,8 +16,10 @@ def _load_registry():
     if not _REGISTRY:
         from .easyship import EasyshipProvider
         from .shippo import ShippoProvider
+        from .easypost import EasyPostProvider
         _REGISTRY["easyship"] = EasyshipProvider
         _REGISTRY["shippo"] = ShippoProvider
+        _REGISTRY["easypost"] = EasyPostProvider
     return _REGISTRY
 
 
