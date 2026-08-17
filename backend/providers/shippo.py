@@ -218,17 +218,35 @@ def _label_status(txn):
     return LabelStatus.NOT_CREATED
 
 
+def _transaction_error(txn):
+    """Shippo's own reason for a failed transaction, e.g. carrier rejections
+    or address problems, from its messages[] list."""
+    parts = []
+    for m in txn.get("messages") or []:
+        if isinstance(m, dict):
+            text = m.get("text") or m.get("message") or ""
+            code = m.get("code") or ""
+            source = m.get("source") or ""
+            prefix = " ".join(x for x in (source, code) if x)
+            parts.append(f"{prefix}: {text}" if prefix and text else (text or prefix))
+        elif m:
+            parts.append(str(m))
+    return " | ".join(p for p in parts if p) or None
+
+
 def _to_state(txn, rate=None):
     sl = (rate or {}).get("servicelevel") or {}
     tracking = txn.get("tracking_number")
     amount = (rate or {}).get("amount")
+    status = _label_status(txn)
     return ShipmentState(
         provider_shipment_id=txn.get("object_id"),
-        label_status=_label_status(txn),
+        label_status=status,
         tracking_numbers=[tracking] if tracking else [],
         courier_name=sl.get("display_name") or sl.get("name"),
         courier_umbrella_name=(rate or {}).get("provider"),
         cost=float(amount) if amount else None,
+        error_message=_transaction_error(txn) if status == LabelStatus.FAILED else None,
         raw=txn,
     )
 

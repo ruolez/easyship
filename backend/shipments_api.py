@@ -421,6 +421,17 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
     state = {}
     box_errors = {}
     last_error = None
+    def record_state(sid, res):
+        """Store a box's live state, keeping the provider's failure reason so
+        the UI can show why a label was rejected instead of a bare 'failed'."""
+        state[sid] = res
+        if res.label_status == LabelStatus.FAILED and res.error_message:
+            box_errors[sid] = res.error_message
+            current_app.logger.warning(
+                "%s label failed for shipment %s: %s", provider.label, sid, res.error_message)
+        elif res.label_status != LabelStatus.FAILED:
+            box_errors.pop(sid, None)
+
     results = provider.buy_labels(sids, courier_service_id)
     for sid in sids:
         res = results.get(sid)
@@ -428,8 +439,10 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
             last_error = res
             box_errors[sid] = str(res)
             state[sid] = None
+            current_app.logger.warning(
+                "%s buy_labels error for shipment %s: %s", provider.label, sid, res)
         else:
-            state[sid] = res
+            record_state(sid, res)
 
     finalized = set()
 
@@ -474,7 +487,7 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
             if isinstance(res, ProviderError):
                 last_error = res
             else:
-                state[sid] = res
+                record_state(sid, res)
 
         # A purchase request that was lost (rate limit / gateway) leaves the
         # shipment at not_created — polling alone would wait forever, so
@@ -492,8 +505,7 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
                     last_error = res
                     box_errors[sid] = str(res)
                 else:
-                    state[sid] = res
-                    box_errors.pop(sid, None)
+                    record_state(sid, res)
 
         maybe_finalize()
         _set_group_progress(primary_id, "buying",
@@ -505,7 +517,10 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
         failed = [sid for sid in sids
                   if state.get(sid) and state[sid].label_status == LabelStatus.FAILED]
         if failed:
+            reasons = sorted({box_errors[sid] for sid in failed if box_errors.get(sid)})
             message = f"Label generation failed at {provider.label} for {len(failed)} of {box_total} box(es)"
+            if reasons:
+                message += ": " + " | ".join(reasons)
             progress_state = "error"
         else:
             message = (

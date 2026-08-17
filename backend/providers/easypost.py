@@ -243,19 +243,30 @@ def _label_status(shipment):
     return LabelStatus.NOT_CREATED
 
 
+def _shipment_error(shipment):
+    parts = []
+    for m in shipment.get("messages") or []:
+        if isinstance(m, dict) and m.get("message"):
+            prefix = " ".join(x for x in (m.get("carrier"), m.get("type")) if x)
+            parts.append(f"{prefix}: {m['message']}" if prefix else m["message"])
+    return " | ".join(parts) or None
+
+
 def _to_state(shipment, rate=None):
     selected = shipment.get("selected_rate") or rate or {}
     tracking = shipment.get("tracking_code")
     amount = selected.get("rate")
     carrier = selected.get("carrier")
     service = selected.get("service")
+    status = _label_status(shipment)
     return ShipmentState(
         provider_shipment_id=shipment.get("id"),
-        label_status=_label_status(shipment),
+        label_status=status,
         tracking_numbers=[tracking] if tracking else [],
         courier_name=(f"{carrier} {service}".strip() if carrier else None),
         courier_umbrella_name=carrier,
         cost=float(amount) if amount else None,
+        error_message=_shipment_error(shipment) if status == LabelStatus.FAILED else None,
         raw=shipment,
     )
 

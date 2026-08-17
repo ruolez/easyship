@@ -83,6 +83,7 @@ class ShipmentState:
     courier_name: str | None = None
     courier_umbrella_name: str | None = None
     cost: float | None = None  # per-box charge for the chosen service, if known
+    error_message: str | None = None  # provider's reason when label_status is FAILED
     raw: dict = field(default_factory=dict)  # provider payload, for label fetch/diagnostics
 
 
