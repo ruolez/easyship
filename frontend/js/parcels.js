@@ -3,6 +3,26 @@ initNav('parcels');
 let clientSettings = { print_mode: 'browser' };
 api('/api/settings/client').then((s) => { clientSettings = s; }).catch(() => {});
 
+const COPY_ICON = '<svg viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+
+function copyable(text, label) {
+  if (!text) return '';
+  return `<span class="copy-wrap">${esc(text)}<button class="copy-btn" data-copy="${esc(text)}" title="Copy ${label}" aria-label="Copy ${label}">${COPY_ICON}</button></span>`;
+}
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.copy-btn');
+  if (!btn) return;
+  try {
+    await navigator.clipboard.writeText(btn.dataset.copy);
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1200);
+    snackbar('Copied', 'success');
+  } catch {
+    snackbar('Copy failed — clipboard not available', 'error');
+  }
+});
+
 function formatAddress(d) {
   if (!d) return '';
   const parts = [
@@ -128,21 +148,25 @@ function render() {
         : '1';
       const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id
         && s.provider_shipment_id && s.group_id;
+      const numbers = (s.tracking_numbers || []).length ? s.tracking_numbers : (s.tracking_number ? [s.tracking_number] : []);
+      const trackingCell = numbers.length
+        ? `<span class="copy-wrap"><span class="mono">${esc(numbers[0])}</span>${numbers.length > 1 ? `<span class="chip static warn">+${numbers.length - 1}</span>` : ''}<button class="copy-btn" data-copy="${esc(numbers.join('\n'))}" title="Copy tracking number${numbers.length > 1 ? 's' : ''}" aria-label="Copy tracking">${COPY_ICON}</button></span>`
+        : '';
       return `<tr>
-        <td><strong>${esc(ref)}</strong></td>
-        <td>${esc(s.created_by)}</td>
-        <td class="ellip" style="max-width:150px" title="${esc(s.service_name)}">${esc(s.service_name)}</td>
-        <td class="ellip" style="max-width:140px" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
-        <td class="num">${boxesCell}</td>
-        <td class="num">${s.total_weight_lb ?? ''}</td>
-        <td class="ellip" style="max-width:170px" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}</td>
+        <td><strong>${copyable(ref, 'order number')}</strong></td>
+        <td class="col-narrow">${esc(s.created_by)}</td>
+        <td class="ellip store" title="${esc(s.service_name)}">${esc(s.service_name)}</td>
+        <td class="ellip address" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
+        <td class="num col-narrow">${boxesCell}</td>
+        <td class="num col-narrow">${s.total_weight_lb ?? ''}</td>
+        <td class="ellip service" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}</td>
         <td>${esc(s.courier_umbrella_name || '')}</td>
         <td class="num">${money(s.shipping_cost)}</td>
-        <td class="mono ellip" style="max-width:140px" title="${esc((s.tracking_numbers || []).join(', '))}">${esc(s.tracking_number || '')}${(s.tracking_numbers || []).length > 1 ? ` <span class="chip static warn">+${s.tracking_numbers.length - 1}</span>` : ''}</td>
+        <td title="${esc(numbers.join(', '))}">${trackingCell}</td>
         <td><span class="status status-${esc(s.status)}" title="${esc(s.error_message || '')}">${esc(s.status.replace('_', ' '))}</span></td>
         <td>${esc((s.label_created_at || '').split(' ')[0] || '')}</td>
         <td>${esc(s.created_at)}</td>
-        <td style="white-space:nowrap">
+        <td class="actions">
           ${canResume ? `<button class="btn btn-text btn-small" onclick="resumeBuy('${esc(s.group_id)}')">Resume labels</button>` : ''}
           ${s.has_label ? `<a class="btn btn-text btn-small" href="/api/shipments/${s.id}/label" target="_blank">Label</a>` : ''}
           ${s.has_label ? `<button class="btn btn-text btn-small" onclick="reprint(${s.id})" title="Send to printer">🖨</button>` : ''}

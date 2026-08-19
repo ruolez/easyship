@@ -6,6 +6,8 @@ const NAV_ICONS = {
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>',
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>',
+  collapse: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>',
+  expand: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>',
 };
 
 const NAV_ITEMS = [
@@ -24,7 +26,7 @@ async function initNav(activePage) {
     mount.id = 'appbar';
     document.body.prepend(mount);
   }
-  document.body.classList.add('with-sidebar');
+  document.body.classList.add('with-sidebar', 'sidebar-rail');
   const active = NAV_ITEMS.find((i) => i.page === activePage);
 
   mount.outerHTML = `
@@ -34,11 +36,16 @@ async function initNav(activePage) {
     </div>
     <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
     <aside class="sidebar" id="sidebar">
-      <div class="brand"><span class="mark">${NAV_ICONS.logo}</span><span class="label">EasyShip</span></div>
+      <div class="brand">
+        <span class="mark">${NAV_ICONS.logo}</span><span class="label">EasyShip</span>
+        <button class="rail-toggle" id="rail-toggle" title="Collapse menu" aria-label="Collapse menu">${NAV_ICONS.collapse}</button>
+      </div>
+      <button class="rail-expand" id="rail-expand" title="Expand menu" aria-label="Expand menu">${NAV_ICONS.expand}</button>
       <div class="nav-provider" id="nav-provider" style="display:none">
         <label for="provider-select">Shipping with</label>
         <select id="provider-select"></select>
       </div>
+      <button class="nav-provider-mini" id="nav-provider-mini" style="display:none" title="Shipping with"></button>
       <nav>
         ${NAV_ITEMS.map((i) => `
           <a href="${i.href}" title="${i.label}" class="${i.page === activePage ? 'active' : ''}">
@@ -61,6 +68,8 @@ async function initNav(activePage) {
   hamburger.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
   backdrop.addEventListener('click', () => document.body.classList.remove('sidebar-open'));
 
+  initRailToggle();
+
   document.getElementById('logout-btn').addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' });
     location.href = '/login.html';
@@ -77,6 +86,31 @@ async function initNav(activePage) {
   await initProviderSelector();
 }
 
+/* Desktop sidebar is an icon rail by default; expanding it overlays the page
+   and it collapses again on its own (click outside, Escape, or a nav click),
+   so wide tables keep the room. */
+function setSidebarExpanded(open) {
+  document.body.classList.toggle('sidebar-expanded', open);
+}
+
+function initRailToggle() {
+  const sidebar = document.getElementById('sidebar');
+  document.getElementById('rail-toggle').addEventListener('click', () => setSidebarExpanded(false));
+  document.getElementById('rail-expand').addEventListener('click', () => setSidebarExpanded(true));
+  document.getElementById('nav-provider-mini').addEventListener('click', () => {
+    setSidebarExpanded(true);
+    document.getElementById('provider-select').focus();
+  });
+  document.addEventListener('click', (e) => {
+    if (document.body.classList.contains('sidebar-expanded') && !sidebar.contains(e.target)) {
+      setSidebarExpanded(false);
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setSidebarExpanded(false);
+  });
+}
+
 const PROVIDER_KEY = 'easyship.provider';
 
 /** The provider the packer is shipping with (persisted per station). */
@@ -85,19 +119,18 @@ function activeProvider() {
 }
 window.activeProvider = activeProvider;
 
+/* Only test mode is called out — production is the normal state and needs no label. */
 function setModeBadge(isTest) {
   const badge = document.getElementById('mode-badge');
   if (!badge) return;
-  if (isTest === null) {
-    badge.className = '';
-    badge.textContent = '';
-  } else if (isTest) {
-    badge.className = 'badge-sandbox';
-    badge.textContent = 'SANDBOX';
-  } else {
-    badge.className = 'badge-production';
-    badge.textContent = 'PRODUCTION';
-  }
+  badge.className = isTest ? 'badge-sandbox' : '';
+  badge.textContent = isTest ? 'SANDBOX' : '';
+  document.getElementById('nav-provider-mini').classList.toggle('test', !!isTest);
+}
+
+function providerInitials(label) {
+  const words = label.trim().split(/\s+/);
+  return (words.length > 1 ? words[0][0] + words[1][0] : label.slice(0, 2)).toUpperCase();
 }
 
 async function initProviderSelector() {
@@ -124,9 +157,13 @@ async function initProviderSelector() {
   select.value = active;
   wrap.style.display = '';
 
+  const mini = document.getElementById('nav-provider-mini');
+  mini.style.display = '';
   const applyBadge = () => {
     const p = providers.find((x) => x.name === select.value);
     setModeBadge(p ? p.test : null);
+    mini.textContent = p ? providerInitials(p.label) : '';
+    mini.title = p ? `Shipping with ${p.label}${p.test ? ' (sandbox)' : ''}` : 'Shipping with';
   };
   applyBadge();
   select.addEventListener('change', () => {
