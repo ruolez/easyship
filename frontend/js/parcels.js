@@ -59,7 +59,6 @@ const SORT_VALUE = {
   cost: (s) => s.shipping_cost ?? -1,
   tracking: (s) => s.tracking_number || '',
   status: (s) => s.status || '',
-  shipped: (s) => s.label_created_at || '',
   created: (s) => s.created_at || '',
 };
 
@@ -111,7 +110,7 @@ async function load() {
   const tbody = document.getElementById('parcels-body');
   const empty = document.getElementById('empty');
   empty.style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="14"><span class="spinner"></span> Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="13"><span class="spinner"></span> Loading…</td></tr>';
   try {
     allRows = await api(`/api/shipments?${params}`);
     const uniq = (vals) => [...new Set(vals.filter(Boolean))].sort();
@@ -164,8 +163,7 @@ function render() {
         <td class="num">${money(s.shipping_cost)}</td>
         <td title="${esc(numbers.join(', '))}">${trackingCell}</td>
         <td><span class="status status-${esc(s.status)}" title="${esc(s.error_message || '')}">${esc(s.status.replace('_', ' '))}</span></td>
-        <td>${esc((s.label_created_at || '').split(' ')[0] || '')}</td>
-        <td>${esc(s.created_at)}</td>
+        <td class="created">${esc(s.created_at)}</td>
         <td class="actions">
           ${canResume ? `<button class="btn btn-text btn-small" onclick="resumeBuy('${esc(s.group_id)}')">Resume labels</button>` : ''}
           ${s.has_label ? `<a class="btn btn-text btn-small" href="/api/shipments/${s.id}/label" target="_blank">Label</a>` : ''}

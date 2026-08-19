@@ -977,6 +977,7 @@ table.compact th, table.compact td { padding: 9px 8px; }
 .parcels-table td.ellip.store { max-width: 130px; }
 .parcels-table td.ellip.address { max-width: 150px; }
 .parcels-table td.ellip.service { max-width: 160px; }
+.parcels-table td.created { padding-right: 16px; }
 .parcels-table th.actions, .parcels-table td.actions {
   position: sticky;
   right: 0;
