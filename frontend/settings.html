@@ -62,6 +62,15 @@
         </div>
       </div>
 
+      <div class="card" id="card-tag-rules">
+        <h2>Shopify order tag rules</h2>
+        <p class="hint mb-16">When an order carries one of these tags, the Ship page pre-selects the courier service and/or sets the signature requirement sent to the carrier. Packers can still change either before buying. Service names match across providers (e.g. “UPS Ground” matches “UPS® Ground”).</p>
+        <input type="hidden" id="order_tag_rules">
+        <div id="tag-rules-list"></div>
+        <button class="btn btn-text" id="add-tag-rule">+ Add rule</button>
+        <datalist id="service-names"></datalist>
+      </div>
+
     </section>
 
     <!-- ================= Printing ================= -->

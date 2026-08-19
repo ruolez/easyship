@@ -106,9 +106,12 @@ class ShippingProvider(ABC):
 
     # ---- rating / drafting (POST /rates) ----
     @abstractmethod
-    def create_draft_shipments(self, destination, parcels, items):
+    def create_draft_shipments(self, destination, parcels, items, options=None):
         """Returns (list[DraftShipment] in box order, list[Rate] valid for every
-        box). Hides per-box shipment creation and cross-box rate intersection."""
+        box, list[str] warnings). Hides per-box shipment creation and cross-box
+        rate intersection. `options` carries shipment-level choices such as
+        {"signature": "none" | "signature" | "adult"}; a provider that cannot
+        honor one must say so in a warning rather than silently drop it."""
 
     @abstractmethod
     def get_excluded_service_ids(self):

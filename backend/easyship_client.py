@@ -287,23 +287,57 @@ def set_excluded_service_ids(ids):
     return clean
 
 
-def create_shipments(destination, parcels, items):
+# Easyship's delivery_confirmation values are UPS-specific and only enabled for
+# some accounts — see create_shipments for the fallback when it's rejected.
+DELIVERY_CONFIRMATION = {
+    "adult": "ups_delivery_confirmation_adult_signature_required",
+    "signature": "ups_delivery_confirmation_signature_required",
+}
+
+
+def _signature_rejected(error):
+    text = str(error).lower()
+    return error.status in (400, 422) and (
+        "delivery_confirmation" in text or "additional_services" in text)
+
+
+def create_shipments(destination, parcels, items, options=None):
     """One Easyship shipment PER BOX, created in parallel. Couriers like USPS
     don't support true multi-parcel shipments — separate shipments give every
     box its own label and tracking number, and parallel requests keep it fast.
-    Returns shipments in box order."""
+    Returns (shipments in box order, warnings)."""
+    signature = (options or {}).get("signature") or "none"
+    confirmation = DELIVERY_CONFIRMATION.get(signature)
+    try:
+        return _create_shipments(destination, parcels, items, confirmation), []
+    except EasyshipError as e:
+        if not confirmation or not _signature_rejected(e):
+            raise
+    # The account can't use delivery_confirmation — rate without it and make
+    # sure the packer knows the label will NOT carry the signature requirement.
+    shipments = _create_shipments(destination, parcels, items, None)
+    return shipments, [
+        f"Easyship rejected the {signature} signature option — labels from Easyship "
+        "will not require a signature. Use another provider or add it at the carrier."
+    ]
+
+
+def _create_shipments(destination, parcels, items, confirmation):
     auth = _auth()
     origin = origin_address()
     dest = build_destination(destination)
     bodies = []
     for i, parcel in enumerate(parcels):
-        bodies.append({
+        body = {
             "origin_address": origin,
             "destination_address": dest,
             "incoterms": "DDU",
             # order items ride on box 1 for customs; other boxes get a stub
             "parcels": build_parcels([parcel], items if i == 0 else []),
-        })
+        }
+        if confirmation:
+            body["shipping_settings"] = {"additional_services": {"delivery_confirmation": confirmation}}
+        bodies.append(body)
 
     if len(bodies) == 1:
         data = _request("POST", "/shipments", json_body=bodies[0], timeout=60, auth=auth)

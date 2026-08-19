@@ -45,6 +45,13 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+function signatureChip(options) {
+  const sig = (options || {}).signature;
+  if (sig === 'adult') return ' <span class="chip static warn" title="Adult signature (21+) required">21+</span>';
+  if (sig === 'signature') return ' <span class="chip static warn" title="Signature required">✍</span>';
+  return '';
+}
+
 function formatAddress(d) {
   if (!d) return '';
   const parts = [
@@ -180,7 +187,7 @@ function render() {
         <td class="ellip address" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
         <td class="num col-narrow">${boxesCell}</td>
         <td class="num col-narrow">${s.total_weight_lb ?? ''}</td>
-        <td class="ellip service" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}</td>
+        <td class="ellip service" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}${signatureChip(s.options)}</td>
         <td>${esc(s.courier_umbrella_name || '')}</td>
         <td class="num">${money(s.shipping_cost)}</td>
         <td title="${esc(numbers.join(', '))}">${trackingCell}</td>

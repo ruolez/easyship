@@ -45,6 +45,7 @@ Default login: **admin** / value of `ADMIN_INITIAL_PASSWORD` in `.env` (change i
    - `read_orders`, `read_customers`, `read_products`, `read_inventory`
    - `read_merchant_managed_fulfillment_orders`, `write_merchant_managed_fulfillment_orders`
 5. **Users** — create logins for warehouse staff. Every label records who bought it.
+6. **Shopify order tag rules** (Shipping tab, optional) — map an order tag to a preferred courier service and/or a signature requirement (signature / adult 21+). Tagged orders show the tags, the order note and the matched rule on the Ship page; the preferred rate is pre-selected and the signature requirement is sent to the provider (Easyship `delivery_confirmation`, Shippo `signature_confirmation`, EasyPost `delivery_confirmation`). Packers can override both before buying. Easyship only enables signature options for some accounts — if it rejects the option, rating falls back without it and the packer is warned.
 
 ## Workflow
 

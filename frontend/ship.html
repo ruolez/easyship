@@ -66,6 +66,14 @@
       <div class="fixed">
         <button class="btn btn-primary" id="get-rates">Get rates</button>
       </div>
+      <div class="field fixed" id="signature-field" style="min-width:190px">
+        <label for="signature">Signature</label>
+        <select id="signature">
+          <option value="none">Not required</option>
+          <option value="signature">Signature required</option>
+          <option value="adult">Adult signature (21+)</option>
+        </select>
+      </div>
       <div class="fixed" id="rates-spinner" style="display:none"><span class="spinner"></span> Getting rates…</div>
     </div>
 

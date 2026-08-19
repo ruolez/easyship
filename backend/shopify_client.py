@@ -43,6 +43,7 @@ query openOrders($query: String!) {
       name
       createdAt
       displayFulfillmentStatus
+      tags
       totalPriceSet { shopMoney { amount } }
       customer { displayName }
       shippingAddress { name company city provinceCode zip }
@@ -60,6 +61,8 @@ query orderDetail($id: ID!) {
     name
     email
     displayFulfillmentStatus
+    tags
+    note
     fulfillments(first: 25) {
       status
       trackingInfo { number }
@@ -163,6 +166,7 @@ def list_open_orders(store_id):
             ])),
             "item_count": node.get("subtotalLineItemsQuantity") or 0,
             "total": (node.get("totalPriceSet") or {}).get("shopMoney", {}).get("amount"),
+            "tags": node.get("tags") or [],
         })
     return orders
 
@@ -226,6 +230,8 @@ def get_order(store_id, order_gid):
         "id": order["id"],
         "name": order["name"],
         "customer": (order.get("customer") or {}).get("displayName") or addr.get("name"),
+        "tags": order.get("tags") or [],
+        "note": (order.get("note") or "").strip(),
         "destination": {
             "company": addr.get("company"),
             "contact": addr.get("name"),

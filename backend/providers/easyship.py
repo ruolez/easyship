@@ -91,10 +91,10 @@ class EasyshipProvider(ShippingProvider):
     modes = ("sandbox", "production")
 
     # ---- rating / drafting ----
-    def create_draft_shipments(self, destination, parcels, items):
-        es_list = ec.create_shipments(destination, parcels, items)
+    def create_draft_shipments(self, destination, parcels, items, options=None):
+        es_list, warnings = ec.create_shipments(destination, parcels, items, options)
         drafts = [DraftShipment(es["easyship_shipment_id"]) for es in es_list]
-        return drafts, _combine_rates(es_list)
+        return drafts, _combine_rates(es_list), warnings
 
     def get_excluded_service_ids(self):
         return ec.get_excluded_service_ids()

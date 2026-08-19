@@ -207,6 +207,9 @@ def _combine_rates(shipments):
     return sorted(combined, key=lambda r: r.total_charge)
 
 
+SIGNATURE_CONFIRMATION = {"adult": "ADULT", "signature": "STANDARD"}
+
+
 def _label_status(txn):
     status = (txn.get("status") or "").upper()
     if status == "SUCCESS":
@@ -271,13 +274,15 @@ class ShippoProvider(ShippingProvider):
     modes = ()
 
     # ---- rating / drafting ----
-    def create_draft_shipments(self, destination, parcels, items):
+    def create_draft_shipments(self, destination, parcels, items, options=None):
         auth = _auth()
         address_from = _origin_address()
         address_to = _dest_address(destination)
+        signature = SIGNATURE_CONFIRMATION.get((options or {}).get("signature") or "none")
         bodies = [
             {"address_from": address_from, "address_to": address_to,
-             "parcels": [_build_parcel(p)], "async": False}
+             "parcels": [_build_parcel(p)], "async": False,
+             **({"extra": {"signature_confirmation": signature}} if signature else {})}
             for p in parcels
         ]
         shipments = [None] * len(bodies)
@@ -301,7 +306,7 @@ class ShippoProvider(ShippingProvider):
                 if errors:
                     raise errors[0]
         drafts = [DraftShipment(s["object_id"]) for s in shipments]
-        return drafts, _combine_rates(shipments)
+        return drafts, _combine_rates(shipments), []
 
     def get_excluded_service_ids(self):
         raw = db.get_setting(EXCLUDED_KEY)

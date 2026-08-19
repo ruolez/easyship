@@ -1,3 +1,5 @@
+import json
+
 import requests
 from flask import Blueprint, jsonify, request, session
 from werkzeug.security import generate_password_hash
@@ -5,6 +7,7 @@ from werkzeug.security import generate_password_hash
 import config
 import db
 import providers
+import tag_rules
 from auth import admin_required, login_required
 from providers.base import ProviderError
 from util import api_error, audit
@@ -33,6 +36,7 @@ BASE_SETTING_KEYS = [
     "printer_dpi",
     "label_timeout_seconds",
     "countdown_seconds",
+    "order_tag_rules",
     "shipper_host",
     "shipper_port",
     "shipper_db",
@@ -109,6 +113,8 @@ def put_settings():
             continue
         if key in secret_keys and value == MASK:
             continue
+        if key == tag_rules.RULES_KEY:
+            value = json.dumps(tag_rules.parse_rules(value)) if (value or "").strip() else ""
         db.set_setting(key, (value or "").strip())
     audit("settings.update", {"keys": [k for k in data if k in keys]})
     return jsonify({"ok": True})

@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify, request
 
+import tag_rules
 from auth import login_required
 from shopify_client import ShopifyError, find_order_by_number, get_order, list_open_orders
 from util import api_error
@@ -18,7 +19,7 @@ def lookup():
         order_gid = find_order_by_number(store_id, number)
         if not order_gid:
             return api_error(f"Order {number} not found", 404)
-        return jsonify(get_order(store_id, order_gid))
+        return jsonify(_with_tag_rules(get_order(store_id, order_gid)))
     except ShopifyError as e:
         return api_error(str(e), 502)
 
@@ -42,6 +43,13 @@ def order_detail(order_gid):
     if not store_id:
         return api_error("store_id is required")
     try:
-        return jsonify(get_order(store_id, order_gid))
+        return jsonify(_with_tag_rules(get_order(store_id, order_gid)))
     except ShopifyError as e:
         return api_error(str(e), 502)
+
+
+def _with_tag_rules(order):
+    """What the order's tags imply for shipping, resolved server-side so the
+    rules never need to leave Settings."""
+    order["tag_rules"] = tag_rules.resolve(tag_rules.load_rules(), order.get("tags"))
+    return order

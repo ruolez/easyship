@@ -5,7 +5,7 @@ const BASE_SETTING_IDS = [
   'origin_company', 'origin_contact', 'origin_address1', 'origin_address2',
   'origin_city', 'origin_state', 'origin_zip', 'origin_phone', 'origin_email',
   'placeholder_email', 'print_mode', 'printer_host', 'printer_port', 'printer_dpi',
-  'label_timeout_seconds', 'countdown_seconds',
+  'label_timeout_seconds', 'countdown_seconds', 'order_tag_rules',
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
 ];
 let SETTING_IDS = [...BASE_SETTING_IDS];
@@ -17,6 +17,8 @@ initNav('settings').then(async () => {
   await renderProviders();
   await loadSettings();
   updatePrintModeUI();
+  renderTagRules();
+  loadServiceNames();
   watchDirty();
   await loadStores();
   await loadDbs();
@@ -71,8 +73,94 @@ window.addEventListener('beforeunload', (e) => {
 document.getElementById('discard-settings').addEventListener('click', async () => {
   await loadSettings();
   updatePrintModeUI();
+  renderTagRules();
   setDirty(false);
 });
+
+/* ---------- Shopify order tag rules ----------
+   Stored as JSON in the hidden #order_tag_rules input so they ride along with
+   the regular Save / Discard flow. */
+const SIGNATURE_OPTIONS = [
+  ['none', 'No signature requirement'],
+  ['signature', 'Signature required'],
+  ['adult', 'Adult signature (21+)'],
+];
+
+function readTagRules() {
+  try {
+    const rules = JSON.parse(document.getElementById('order_tag_rules').value || '[]');
+    return Array.isArray(rules) ? rules : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTagRules(rules) {
+  document.getElementById('order_tag_rules').value = JSON.stringify(rules);
+  setDirty(true);
+}
+
+function renderTagRules() {
+  const rules = readTagRules();
+  const list = document.getElementById('tag-rules-list');
+  if (!rules.length) {
+    list.innerHTML = '<p class="text-secondary mb-16">No rules yet — orders ship with the packer’s own choices.</p>';
+    return;
+  }
+  list.innerHTML = rules.map((r, i) => `
+    <div class="row tag-rule" data-idx="${i}">
+      <div class="field fixed" style="min-width:180px"><label>Order tag</label><input class="tr-tag" value="${esc(r.tag || '')}" placeholder="adult-signature"></div>
+      <div class="field"><label>Preferred service (optional)</label><input class="tr-service" list="service-names" value="${esc(r.service || '')}" placeholder="Any — packer chooses"></div>
+      <div class="field fixed" style="min-width:220px"><label>Signature</label>
+        <select class="tr-signature">${SIGNATURE_OPTIONS.map(([v, l]) => `<option value="${v}" ${r.signature === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      </div>
+      <div class="fixed" style="align-self:flex-end"><button class="btn btn-danger btn-small tr-remove" title="Remove rule">Remove</button></div>
+    </div>`).join('');
+}
+
+function syncTagRulesFromDom() {
+  const rules = [...document.querySelectorAll('#tag-rules-list .tag-rule')].map((row) => ({
+    tag: row.querySelector('.tr-tag').value.trim(),
+    service: row.querySelector('.tr-service').value.trim(),
+    signature: row.querySelector('.tr-signature').value,
+  }));
+  writeTagRules(rules);
+}
+
+document.getElementById('tag-rules-list').addEventListener('input', syncTagRulesFromDom);
+document.getElementById('tag-rules-list').addEventListener('change', syncTagRulesFromDom);
+document.getElementById('tag-rules-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tr-remove');
+  if (!btn) return;
+  const rules = readTagRules();
+  rules.splice(Number(btn.closest('.tag-rule').dataset.idx), 1);
+  writeTagRules(rules);
+  renderTagRules();
+});
+document.getElementById('add-tag-rule').addEventListener('click', () => {
+  writeTagRules([...readTagRules(), { tag: '', service: '', signature: 'none' }]);
+  renderTagRules();
+  const rows = document.querySelectorAll('#tag-rules-list .tr-tag');
+  if (rows.length) rows[rows.length - 1].focus();
+});
+
+/* Service-name suggestions for the rule editor: every courier service the
+   enabled providers expose, deduped by name. */
+async function loadServiceNames() {
+  let descriptors = [];
+  try { descriptors = await api('/api/providers'); } catch { return; }
+  const names = new Set();
+  await Promise.all(descriptors
+    .filter((p) => p.enabled && p.supports && p.supports.service_exclusions && p.services_endpoint)
+    .map(async (p) => {
+      try {
+        const res = await api(p.services_endpoint);
+        (res.services || []).forEach((s) => { if (s.name) names.add(s.name); });
+      } catch { /* provider offline — suggestions just stay shorter */ }
+    }));
+  document.getElementById('service-names').innerHTML =
+    [...names].sort().map((n) => `<option value="${esc(n)}"></option>`).join('');
+}
 
 /* ---------- Print mode: show only what the selected mode needs ---------- */
 const PRINT_HINTS = {

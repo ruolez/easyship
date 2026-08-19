@@ -36,6 +36,7 @@ BASE_URL = "https://api.easypost.com/v2"
 EXCLUDED_KEY = "easypost_excluded_service_ids"
 MASK = "••••••••"
 LABEL_FORMATS = ("PDF", "ZPL", "PNG")
+DELIVERY_CONFIRMATION = {"adult": "ADULT_SIGNATURE", "signature": "SIGNATURE"}
 
 ORIGIN_REQUIRED = {
     "origin_company": "Company",
@@ -291,19 +292,23 @@ class EasyPostProvider(ShippingProvider):
     modes = ()
 
     # ---- rating / drafting ----
-    def create_draft_shipments(self, destination, parcels, items):
+    def create_draft_shipments(self, destination, parcels, items, options=None):
         auth = _auth()
         label_format = _label_format()
         address_from = _origin_address()
         address_to = _dest_address(destination)
+        # label_size 4x6 is required for a 4x6 PDF — without it USPS PDFs
+        # render as a full 8.5x11 page. ZPL is 4x6 regardless.
+        shipment_options = {"label_format": label_format, "label_size": "4x6"}
+        confirmation = DELIVERY_CONFIRMATION.get((options or {}).get("signature") or "none")
+        if confirmation:
+            shipment_options["delivery_confirmation"] = confirmation
         bodies = [
             {"shipment": {
                 "from_address": address_from,
                 "to_address": address_to,
                 "parcel": _build_parcel(p),
-                # label_size 4x6 is required for a 4x6 PDF — without it USPS PDFs
-                # render as a full 8.5x11 page. ZPL is 4x6 regardless.
-                "options": {"label_format": label_format, "label_size": "4x6"},
+                "options": shipment_options,
             }}
             for p in parcels
         ]
@@ -328,7 +333,7 @@ class EasyPostProvider(ShippingProvider):
                 if errors:
                     raise errors[0]
         drafts = [DraftShipment(s["id"]) for s in shipments]
-        return drafts, _combine_rates(shipments)
+        return drafts, _combine_rates(shipments), []
 
     def get_excluded_service_ids(self):
         raw = db.get_setting(EXCLUDED_KEY)

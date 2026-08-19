@@ -11,6 +11,7 @@ let clientSettings = { placeholder_email: '', print_mode: 'browser', countdown_s
 let savedBoxes = [];
 let lastLabelUrl = null;
 let providerLabels = {};
+let preferredService = ''; // courier service a tag rule asked for
 
 initNav('scan');
 init();
@@ -77,7 +78,9 @@ async function prefill() {
       };
       fillDestination(o.destination);
       orderItems = o.items || [];
-      showOrderSummary(`Shopify order <strong>${esc(o.name)}</strong> — ${esc(o.customer || '')}`);
+      showOrderSummary(`Shopify order <strong>${esc(o.name)}</strong> — ${esc(o.customer || '')}`,
+        orderExtras(o));
+      applyTagRules(o.tag_rules);
       if (o.total_weight_lb) {
         document.querySelector('.p-weight').value = o.total_weight_lb;
       }
@@ -144,10 +147,39 @@ function fillDestination(d) {
   });
 }
 
-function showOrderSummary(html) {
+function showOrderSummary(html, extrasHtml = '') {
   const el = document.getElementById('order-summary');
   el.style.display = '';
-  el.innerHTML = `<h2>${html}</h2>`;
+  el.innerHTML = `<h2>${html}</h2>${extrasHtml}`;
+}
+
+/* Tags, the customer/staff note, and what the tag rules decided — shown right
+   under the order heading so the packer sees them before rating. */
+function orderExtras(o) {
+  const parts = [];
+  if ((o.tags || []).length) {
+    parts.push(`<div class="order-tags">${o.tags.map((t) => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>`);
+  }
+  if (o.note) {
+    parts.push(`<div class="order-note"><strong>Note:</strong> ${esc(o.note)}</div>`);
+  }
+  const rules = o.tag_rules || {};
+  if ((rules.matched || []).length) {
+    const what = [];
+    if (rules.signature === 'adult') what.push('Adult signature (21+) required');
+    else if (rules.signature === 'signature') what.push('Signature required');
+    if (rules.service) what.push(`Preferred service: ${esc(rules.service)}`);
+    const tags = rules.matched.map((r) => `<span class="tag-chip">${esc(r.tag)}</span>`).join('');
+    parts.push(`<div class="rule-banner">${tags} <span>${what.join(' · ') || 'Tag rule matched'}</span></div>`);
+  }
+  return parts.length ? `<div class="order-extras">${parts.join('')}</div>` : '';
+}
+
+function applyTagRules(rules) {
+  if (!rules) return;
+  preferredService = rules.service || '';
+  const sel = document.getElementById('signature');
+  if (sel && rules.signature) sel.value = rules.signature;
 }
 
 /* ---------- Parcels ---------- */
@@ -273,6 +305,8 @@ document.getElementById('get-rates').addEventListener('click', async () => {
         destination: collectDestination(),
         parcels: collectParcels(),
         items: orderItems,
+        options: { signature: document.getElementById('signature').value },
+        preferred_service: preferredService,
       },
     });
     localShipmentId = res.shipment_id;
@@ -280,6 +314,7 @@ document.getElementById('get-rates').addEventListener('click', async () => {
     boxCount = res.box_count || 1;
     rates = res.rates;
     renderRates();
+    renderRateWarnings(res.warnings || []);
     document.getElementById('panel-rates').style.display = '';
     document.getElementById('panel-rates').scrollIntoView({ behavior: 'smooth' });
   } catch (err) {
@@ -303,10 +338,10 @@ function renderRates() {
   // Only tag rates with their provider when more than one is quoting.
   const multiProvider = new Set(rates.map((r) => r.provider)).size > 1;
   list.innerHTML = rates.map((r, i) => `
-    <div class="rate-row" data-idx="${i}" tabindex="0" role="radio" aria-checked="false">
+    <div class="rate-row${r.preferred ? ' preferred' : ''}" data-idx="${i}" tabindex="0" role="radio" aria-checked="false">
       <span class="rate-radio"></span>
       <span class="rate-info">
-        <span class="rate-courier">${esc(r.courier_name)}${r.value_for_money_rank === 1 ? ' <span class="chip static ok rate-best">Best value</span>' : ''}${multiProvider && r.provider ? ` <span class="chip static rate-provider">${esc(providerLabel(r.provider))}</span>` : ''}</span>
+        <span class="rate-courier">${esc(r.courier_name)}${r.preferred ? ' <span class="chip static warn rate-best" title="Chosen by an order tag rule">Tag rule</span>' : ''}${r.value_for_money_rank === 1 ? ' <span class="chip static ok rate-best">Best value</span>' : ''}${multiProvider && r.provider ? ` <span class="chip static rate-provider">${esc(providerLabel(r.provider))}</span>` : ''}</span>
         <span class="rate-days">${r.min_delivery_time ?? '?'}–${r.max_delivery_time ?? '?'} business days</span>
       </span>
       <span class="rate-price">${money(r.total_charge)} <small>${esc(r.currency || 'USD')}</small></span>
@@ -329,8 +364,26 @@ function renderRates() {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(row); }
     });
   });
-  const first = list.querySelector('.rate-row');
-  if (first) first.focus();
+  // A tag rule's preferred service is pre-selected (the packer can still pick
+  // another rate); otherwise land on the first rate for keyboard selection.
+  const preferred = list.querySelector('.rate-row.preferred');
+  if (preferred) select(preferred);
+  else {
+    const first = list.querySelector('.rate-row');
+    if (first) first.focus();
+  }
+}
+
+function renderRateWarnings(warnings) {
+  let el = document.getElementById('rate-warnings');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'rate-warnings';
+    el.className = 'rate-warnings';
+    document.getElementById('rate-list').before(el);
+  }
+  el.innerHTML = warnings.map((w) => `<div class="rule-banner warn">⚠ ${esc(w)}</div>`).join('');
+  el.style.display = warnings.length ? '' : 'none';
 }
 
 /* ---------- Buy ---------- */

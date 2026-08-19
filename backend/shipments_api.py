@@ -9,6 +9,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file, session
 import config
 import db
 import providers
+import tag_rules
 from auth import admin_required, login_required
 from providers import labels
 from providers.base import LabelStatus, ProviderError
@@ -38,6 +39,7 @@ def _row_to_json(row):
         "box_number": row.get("box_number") or 1,
         "box_total": row.get("box_total") or 1,
         "courier_service_id": row["courier_service_id"],
+        "options": row.get("options") or {},
         "rate": row["rate"],
         "source": row["source"],
         "service_name": row.get("store_name") or row.get("db_name")
@@ -100,6 +102,8 @@ def get_rates():
     for i, p in enumerate(parcels):
         if not p.get("weight") or float(p["weight"]) <= 0:
             return api_error(f"Box {i + 1} needs a weight greater than 0")
+    options = {"signature": tag_rules.normalize_signature((data.get("options") or {}).get("signature"))}
+    preferred_service = (data.get("preferred_service") or "").strip()
 
     # One local row PER BOX — each box is its own parcel with its own label
     # and tracking number, linked by a group id.
@@ -112,8 +116,8 @@ def get_rates():
                  (group_id, box_number, box_total,
                   source, shopify_store_id, shopify_order_id, shopify_order_name,
                   backoffice_db_id, backoffice_invoice_id, backoffice_invoice_number,
-                  destination, parcels, items, status, created_by)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s)
+                  destination, parcels, items, options, status, created_by)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s)
                RETURNING id""",
             (
                 group_id, i + 1, box_total,
@@ -127,6 +131,7 @@ def get_rates():
                 json.dumps(destination),
                 json.dumps([parcel]),
                 json.dumps(items if i == 0 else []),
+                json.dumps(options),
                 session["user_id"],
             ),
             returning=True,
@@ -152,18 +157,24 @@ def get_rates():
     all_rates = []
     had_rates = False
     provider_errors = []
+    warnings = []
     for provider in active_providers:
         try:
-            drafts, rates = provider.create_draft_shipments(destination, parcels, items)
+            drafts, rates, provider_warnings = provider.create_draft_shipments(
+                destination, parcels, items, options)
         except ProviderError as e:
             provider_errors.append(f"{provider.label}: {e}")
             continue
+        warnings.extend(provider_warnings)
         draft_ids_by_provider[provider.name] = [d.provider_shipment_id for d in drafts]
         excluded = provider.get_excluded_service_ids()
         for r in rates:
             had_rates = True
             if r.provider_service_id not in excluded:
-                all_rates.append(r.to_ui())
+                ui = r.to_ui()
+                ui["preferred"] = bool(
+                    preferred_service and tag_rules.service_matches(preferred_service, r.courier_name))
+                all_rates.append(ui)
 
     if not draft_ids_by_provider:
         message = "; ".join(provider_errors) or "No shipping provider is enabled"
@@ -207,12 +218,16 @@ def get_rates():
         return api_error(message, 422)
 
     all_rates.sort(key=lambda r: r["total_charge"])
+    if preferred_service and not any(r["preferred"] for r in all_rates):
+        warnings.append(f"Preferred service \"{preferred_service}\" was not offered for this shipment.")
     return jsonify({
         "group_id": group_id,
         "shipment_id": row_ids[0],
         "shipment_ids": row_ids,
         "box_count": box_total,
         "rates": all_rates,
+        "options": options,
+        "warnings": warnings,
     })
 
 

@@ -66,7 +66,7 @@ async function loadShopifyOrders() {
     tbody.innerHTML = orders
       .map(
         (o) => `<tr>
-          <td><strong>${esc(o.name)}</strong></td>
+          <td><strong>${esc(o.name)}</strong>${(o.tags || []).length ? `<div class="order-tags">${o.tags.map((t) => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}</td>
           <td>${esc(o.created_at)}</td>
           <td>${esc(o.customer)}</td>
           <td class="ellip" style="max-width:260px" title="${esc(o.ship_to)}">${esc(o.ship_to)}</td>
