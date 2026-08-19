@@ -1,4 +1,9 @@
-initNav('scan');
+initNav('scan').then(() => {
+  // The Orders page is admin-only; packers only see the manual-shipment link.
+  const isAdmin = window.currentUser && window.currentUser.role === 'admin';
+  document.getElementById('orders-link').style.display = isAdmin ? '' : 'none';
+  document.getElementById('orders-link-alt').style.display = isAdmin ? 'none' : '';
+});
 
 const sourceSelect = document.getElementById('source-select');
 const numberInput = document.getElementById('order-number');

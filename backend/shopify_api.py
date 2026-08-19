@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 import tag_rules
-from auth import login_required
+from auth import admin_required, login_required
 from shopify_client import ShopifyError, find_order_by_number, get_order, list_open_orders
 from util import api_error
 
@@ -25,8 +25,10 @@ def lookup():
 
 
 @bp.get("/orders")
-@login_required
+@admin_required
 def orders():
+    """The open-orders list behind the Orders page (admin only); packers reach
+    orders through Scan, which uses /lookup and the order detail route."""
     store_id = request.args.get("store_id", type=int)
     if not store_id:
         return api_error("store_id is required")

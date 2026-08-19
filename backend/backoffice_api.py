@@ -117,7 +117,7 @@ def test_db(db_id):
 # ---------- Invoices ----------
 
 @bp.get("/backoffice/<int:db_id>/invoices")
-@login_required
+@admin_required
 def invoices(db_id):
     days = request.args.get("days", default=14, type=int)
     q = (request.args.get("q") or "").strip()

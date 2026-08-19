@@ -12,7 +12,7 @@ const NAV_ICONS = {
 
 const NAV_ITEMS = [
   { page: 'scan', href: '/index.html', label: 'Scan', icon: 'scan' },
-  { page: 'orders', href: '/orders.html', label: 'Orders', icon: 'orders' },
+  { page: 'orders', href: '/orders.html', label: 'Orders', icon: 'orders', adminOnly: true },
   { page: 'parcels', href: '/parcels.html', label: 'Parcels', icon: 'parcels' },
   { page: 'settings', href: '/settings.html', label: 'Settings', icon: 'settings' },
 ];
@@ -48,7 +48,7 @@ async function initNav(activePage) {
       <button class="nav-provider-mini" id="nav-provider-mini" style="display:none" title="Shipping with"></button>
       <nav>
         ${NAV_ITEMS.map((i) => `
-          <a href="${i.href}" title="${i.label}" class="${i.page === activePage ? 'active' : ''}">
+          <a href="${i.href}" title="${i.label}" data-page="${i.page}" class="${i.page === activePage ? 'active' : ''}"${i.adminOnly ? ' style="display:none"' : ''}>
             ${NAV_ICONS[i.icon]}<span class="label">${i.label}</span>
           </a>`).join('')}
       </nav>
@@ -80,6 +80,12 @@ async function initNav(activePage) {
     document.getElementById('nav-username').textContent = me.username;
     document.getElementById('nav-avatar').textContent = me.username.slice(0, 2);
     window.currentUser = me;
+    const isAdmin = me.role === 'admin';
+    NAV_ITEMS.filter((i) => i.adminOnly).forEach((i) => {
+      const link = document.querySelector(`.sidebar nav a[data-page="${i.page}"]`);
+      if (link) link.style.display = isAdmin ? '' : 'none';
+      if (!isAdmin && i.page === activePage) location.replace('/index.html');
+    });
   } catch {
     return; // api() already redirected to login
   }
