@@ -49,9 +49,11 @@ async function loadSources() {
   numberInput.focus();
 }
 
-/* Reflect the auto-detect toggle: dim the manual dropdown when detection is on. */
+/* Reflect the auto-detect toggle: the manual store picker only shows when
+   detection is off (progressive disclosure — one fewer control to read). */
 function applyAutoDetect() {
   sourceSelect.disabled = autoDetectToggle.checked;
+  document.getElementById('source-field').style.display = autoDetectToggle.checked ? 'none' : '';
 }
 
 /* Resolve a scanned number to a source via configured prefixes.
@@ -180,7 +182,7 @@ async function initAutoMode() {
 
 async function renderAutoPreset() {
   const wrap = document.getElementById('auto-preset');
-  if (!autoToggle.checked) { wrap.style.display = 'none'; return; }
+  if (!autoToggle.checked) { wrap.style.display = 'none'; renderAutoStatus(); return; }
   wrap.style.display = '';
   const provider = window.activeProvider ? window.activeProvider() : '';
   const status = document.getElementById('auto-status');
@@ -244,15 +246,27 @@ function saveAutoService() {
 
 function renderAutoStatus() {
   const status = document.getElementById('auto-status');
+  const pill = document.getElementById('scan-mode-pill');
   const svc = currentServicePreset();
   const box = autoBoxes.find((b) => String(b.id) === String(readAutoPreset().box_id));
+  if (!autoToggle.checked) {
+    pill.style.display = 'none';
+    return;
+  }
+  pill.style.display = '';
   if (!window.activeProvider || !window.activeProvider()) {
     status.innerHTML = '<span class="chip static err">Select a shipping provider in the sidebar</span>';
+    pill.className = 'scan-mode-pill off';
+    pill.textContent = 'Auto Mode · needs setup';
   } else if (autoReady()) {
-    status.innerHTML = `<span class="chip static ok">Auto: ${esc(svc.service_name || 'service')} · ${esc(box ? box.name : 'box')}</span> `
-      + 'Scanned orders are weighed, rated, bought and printed automatically. Esc on the Ship page switches back to manual.';
+    status.innerHTML = `<span class="chip static ok">✓ Ready</span> <span>${esc(svc.service_name || 'service')} · ${esc(box ? box.name : 'box')}. `
+      + 'Scanned orders are weighed, rated, bought and printed. Esc on the Ship page switches back to manual.</span>';
+    pill.className = 'scan-mode-pill';
+    pill.textContent = `Auto · ${svc.service_name || 'service'}`;
   } else {
-    status.innerHTML = '<span class="chip static warn">Choose a service and a box to enable Auto Mode</span>';
+    status.innerHTML = '<span class="chip static warn">Choose a service and a box</span><span>Auto Mode stays off until both are set.</span>';
+    pill.className = 'scan-mode-pill off';
+    pill.textContent = 'Auto Mode · needs setup';
   }
 }
 

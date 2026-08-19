@@ -10,36 +10,53 @@
   <header id="appbar"></header>
   <div class="container">
     <div class="scan-hero">
-      <div class="card">
-        <h2>Ship an order</h2>
-        <label class="auto-detect-toggle mb-16">
-          <input type="checkbox" id="auto-detect">
-          <span>Auto-detect store from order number</span>
-        </label>
-        <label class="auto-detect-toggle mb-16">
-          <input type="checkbox" id="auto-mode">
-          <span>Auto Mode — weigh, rate, buy and print without clicks</span>
-        </label>
-        <div id="auto-preset" class="auto-preset mb-16" style="display:none">
-          <div class="row">
-            <div class="field" id="auto-carrier-field"><label>Carrier</label><select id="auto-carrier"></select></div>
-            <div class="field" id="auto-service-field"><label>Service</label><select id="auto-service"></select></div>
-            <div class="field" id="auto-service-name-field" style="display:none"><label>Service name</label><input id="auto-service-name" placeholder="e.g. UPS Ground"></div>
-            <div class="field"><label>Box</label><select id="auto-box"></select></div>
+      <div class="card scan-card">
+        <div class="scan-head">
+          <div>
+            <h1>Scan an order</h1>
+            <p class="scan-sub">Scan or type the order / invoice number, then press <kbd>Enter</kbd></p>
           </div>
-          <div class="hint mt-16" id="auto-status"></div>
+          <span class="scan-mode-pill" id="scan-mode-pill" style="display:none"></span>
         </div>
-        <div class="field mb-16">
-          <label>Store / Database</label>
-          <select id="source-select"></select>
+
+        <div class="scan-input-group">
+          <span class="scan-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 7v10"/><path d="M12 7v10"/><path d="M16 7v10"/></svg></span>
+          <input id="order-number" autocomplete="off" placeholder="Scan order…" aria-label="Order or invoice number">
+          <button class="btn btn-primary" id="lookup-btn">Look up</button>
         </div>
-        <div class="field mb-16">
-          <label>Order / Invoice number <span class="hint">— scan or type, then <kbd>Enter</kbd></span></label>
-          <input id="order-number" autocomplete="off" placeholder="Scan order…">
-        </div>
-        <div class="row">
-          <div class="fixed"><button class="btn btn-primary" id="lookup-btn">Look up order</button></div>
-          <div class="fixed" id="lookup-status"></div>
+        <div class="scan-status" id="lookup-status"></div>
+
+        <div class="station-settings">
+          <div class="station-title">Station settings</div>
+
+          <div class="setting-row">
+            <label class="switch">
+              <input type="checkbox" id="auto-detect">
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="switch-text"><strong>Auto-detect store</strong><small>Pick the store from the order number prefix</small></span>
+            </label>
+            <div class="field setting-inline" id="source-field">
+              <label for="source-select">Store / Database</label>
+              <select id="source-select"></select>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <label class="switch">
+              <input type="checkbox" id="auto-mode">
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="switch-text"><strong>Auto Mode</strong><small>Weigh, rate, buy and print without clicks</small></span>
+            </label>
+          </div>
+          <div id="auto-preset" class="auto-preset" style="display:none">
+            <div class="auto-preset-grid">
+              <div class="field" id="auto-carrier-field"><label>Carrier</label><select id="auto-carrier"></select></div>
+              <div class="field" id="auto-service-field"><label>Service</label><select id="auto-service"></select></div>
+              <div class="field" id="auto-service-name-field" style="display:none"><label>Service name</label><input id="auto-service-name" placeholder="e.g. UPS Ground"></div>
+              <div class="field"><label>Box</label><select id="auto-box"></select></div>
+            </div>
+            <div class="auto-status" id="auto-status"></div>
+          </div>
         </div>
       </div>
     </div>
