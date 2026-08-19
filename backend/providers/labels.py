@@ -12,7 +12,9 @@ def sniff_label_format(data, declared="pdf"):
         return "pdf"
     if data.startswith(b"\x89PNG"):
         return "png"
-    if data[:3] == b"^XA" or data[:16].lstrip()[:3] == b"^XA":
+    head = data[:256].lstrip()
+    # ZPL streams open with ^XA, but some couriers prefix a graphic download (~DG).
+    if head[:3] == b"^XA" or (head[:3] == b"~DG" and b"^XA" in data[:65536]):
         return "zpl"
     return declared if declared in ("pdf", "png", "zpl") else "pdf"
 
@@ -82,3 +84,72 @@ def merge_label_documents(docs):
         except Exception:
             return docs[0]  # never drop the whole job if conversion fails
     return docs[0]
+
+
+# ---------------------------------------------------------------- ZPL conversion
+
+LABEL_WIDTH_IN = 4
+LABEL_HEIGHT_IN = 6
+_INK_THRESHOLD = 160  # gray level below which a pixel prints black
+
+
+def _render_pdf_pages(data, dpi):
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(data)
+    try:
+        return [page.render(scale=dpi / 72.0).to_pil() for page in pdf]
+    finally:
+        pdf.close()
+
+
+def _fit_to_label(img, width_px, height_px):
+    """Scale a rendered label page onto the printer's label area, keeping
+    aspect ratio. Pages that are not label-shaped (a 4x6 label printed on a
+    letter sheet) get their white margins trimmed first so the label itself,
+    not the empty page, fills the media."""
+    from PIL import Image, ImageOps
+
+    gray = img.convert("L")
+    label_aspect = width_px / height_px
+    if abs(gray.width / gray.height - label_aspect) > 0.1:
+        bbox = ImageOps.invert(gray).point(lambda p: 255 if p > 255 - _INK_THRESHOLD else 0).getbbox()
+        if bbox:
+            gray = gray.crop(bbox)
+    scale = min(width_px / gray.width, height_px / gray.height)
+    new_size = (max(1, round(gray.width * scale)), max(1, round(gray.height * scale)))
+    if new_size != gray.size:
+        gray = gray.resize(new_size, Image.LANCZOS)
+    canvas = Image.new("L", (width_px, height_px), 255)
+    canvas.paste(gray, ((width_px - gray.width) // 2, (height_px - gray.height) // 2))
+    return canvas
+
+
+def _image_to_zpl(img, width_px, height_px):
+    page = _fit_to_label(img, width_px, height_px)
+    # ^GF bits are 1 = black; PIL's "1" mode is 1 = white, so threshold inverted.
+    bitmap = page.point(lambda p: 255 if p < _INK_THRESHOLD else 0).convert("1")
+    bytes_per_row = (width_px + 7) // 8
+    raw = bitmap.tobytes()
+    total = bytes_per_row * height_px
+    return (
+        f"^XA^PW{width_px}^LL{height_px}^LH0,0^FO0,0"
+        f"^GFA,{total},{total},{bytes_per_row},{raw.hex().upper()}^FS^XZ"
+    )
+
+
+def to_zpl(data, fmt, dpi=203):
+    """Render any label document as ZPL for a Zebra printer: ZPL passes
+    through, PDF pages and PNG images are rasterized at the printer's DPI and
+    embedded as ^GFA bitmaps, one ^XA…^XZ label per page."""
+    fmt = sniff_label_format(data, fmt)
+    if fmt == "zpl":
+        return data
+    from PIL import Image
+
+    if fmt == "pdf":
+        pages = _render_pdf_pages(data, dpi)
+    else:
+        pages = [Image.open(io.BytesIO(data))]
+    width_px, height_px = LABEL_WIDTH_IN * dpi, LABEL_HEIGHT_IN * dpi
+    return "\n".join(_image_to_zpl(p, width_px, height_px) for p in pages).encode("ascii")

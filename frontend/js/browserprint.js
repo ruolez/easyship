@@ -49,12 +49,19 @@
     }
   }
 
+  // The server renders the stored label (PDF, PNG or native ZPL) as ZPL, so
+  // any provider/label-format combination prints on the Zebra.
   async function printLabelUrl(url) {
-    const res = await fetch(url, { credentials: 'same-origin' });
-    if (!res.ok) throw new Error(`Could not load label (HTTP ${res.status})`);
+    const zplUrl = url + (url.includes('?') ? '&' : '?') + 'format=zpl';
+    const res = await fetch(zplUrl, { credentials: 'same-origin' });
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).error || ''; } catch { /* non-JSON error body */ }
+      throw new Error(detail || `Could not load label (HTTP ${res.status})`);
+    }
     const text = await res.text();
-    if (!text.trimStart().startsWith('^XA')) {
-      throw new Error('Label is not ZPL — set Easyship dashboard → Printing Options to ZPL 4x6');
+    if (!text.includes('^XA')) {
+      throw new Error('Server did not return a ZPL label');
     }
     await printZpl(text);
   }

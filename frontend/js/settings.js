@@ -4,7 +4,7 @@
 const BASE_SETTING_IDS = [
   'origin_company', 'origin_contact', 'origin_address1', 'origin_address2',
   'origin_city', 'origin_state', 'origin_zip', 'origin_phone', 'origin_email',
-  'placeholder_email', 'print_mode', 'printer_host', 'printer_port',
+  'placeholder_email', 'print_mode', 'printer_host', 'printer_port', 'printer_dpi',
   'label_timeout_seconds', 'countdown_seconds',
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
 ];
@@ -77,14 +77,15 @@ document.getElementById('discard-settings').addEventListener('click', async () =
 /* ---------- Print mode: show only what the selected mode needs ---------- */
 const PRINT_HINTS = {
   browser: 'After purchase the label opens in this browser’s print dialog — works with any printer, one click per label.',
-  network: 'The server sends labels straight to a thermal printer on the network — no dialog. Set your Easyship dashboard → Printing Options to ZPL, 4x6.',
-  browserprint: 'Labels print silently through the Zebra Browser Print app on each packing station. The app must be running with the Zebra set as its default printer; the first print asks to accept this website inside the app. Requires Easyship dashboard → Printing Options set to ZPL, 4x6. Test from the packing station, not the server.',
+  network: 'The server sends labels straight to a Zebra (ZPL) printer on the network — no dialog. Any provider label format works: PDF and PNG labels are converted to 4x6 ZPL at the printer DPI; native ZPL is sent as-is.',
+  browserprint: 'Labels print silently through the Zebra Browser Print app on each packing station. The app must be running with the Zebra set as its default printer; the first print asks to accept this website inside the app. Any provider label format works — labels are converted to 4x6 ZPL at the printer DPI. Test from the packing station, not the server.',
 };
 
 function updatePrintModeUI() {
   const mode = document.getElementById('print_mode').value || 'browser';
   document.getElementById('print-network').style.display = mode === 'network' ? '' : 'none';
   document.getElementById('print-browserprint').style.display = mode === 'browserprint' ? '' : 'none';
+  document.getElementById('print-dpi').style.display = mode === 'browser' ? 'none' : '';
   document.getElementById('print-hint').textContent = PRINT_HINTS[mode] || '';
 }
 

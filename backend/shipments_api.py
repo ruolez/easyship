@@ -587,6 +587,8 @@ def group_label(group_id):
     data, fmt = _group_label_bytes(group_id)
     if not data:
         return api_error("No labels stored for this shipment", 404)
+    if request.args.get("format") == "zpl":
+        return _zpl_response(data, fmt, f"labels-{group_id[:8]}")
     import io
     response = send_file(
         io.BytesIO(data),
@@ -605,10 +607,10 @@ def _print_group(group_id):
         return None
     try:
         import printer
-        data, _fmt = _group_label_bytes(group_id)
+        data, fmt = _group_label_bytes(group_id)
         if not data:
             return "error: no label files stored"
-        printer.network_print(data)
+        printer.print_label(data, fmt)
         return "ok"
     except Exception as e:
         return f"error: {e}"
@@ -619,10 +621,10 @@ def _print_group(group_id):
 def group_print(group_id):
     try:
         import printer
-        data, _fmt = _group_label_bytes(group_id)
+        data, fmt = _group_label_bytes(group_id)
         if not data:
             return api_error("No labels stored for this shipment", 404)
-        printer.network_print(data)
+        printer.print_label(data, fmt)
     except Exception as e:
         return api_error(str(e))
     audit("label.print", {"group_id": group_id})
@@ -813,6 +815,20 @@ def get_shipment(shipment_id):
     return jsonify(_row_to_json(row))
 
 
+def _zpl_response(data, fmt, name):
+    """The label rendered as ZPL (any source format), for Zebra Browser Print."""
+    import io
+    import printer
+    try:
+        zpl = labels.to_zpl(data, fmt, dpi=printer.printer_dpi())
+    except Exception as e:
+        return api_error(f"Could not convert {fmt.upper()} label to ZPL — {e}", 500)
+    response = send_file(io.BytesIO(zpl), mimetype="text/plain",
+                         download_name=f"{name}.zpl", as_attachment=False)
+    response.headers["Content-Disposition"] = f'inline; filename="{name}.zpl"'
+    return response
+
+
 @bp.get("/<int:shipment_id>/label")
 @login_required
 def get_label(shipment_id):
@@ -822,15 +838,11 @@ def get_label(shipment_id):
     if not os.path.exists(row["label_path"]):
         return api_error("Label file missing from storage", 410)
     with open(row["label_path"], "rb") as f:
-        head = f.read(16)
-    if head.startswith(b"%PDF"):
-        fmt = "pdf"
-    elif head.startswith(b"\x89PNG"):
-        fmt = "png"
-    elif head[:3] == b"^XA":
-        fmt = "zpl"
-    else:
-        fmt = row["label_format"] if row["label_format"] in LABEL_MIMETYPES else "pdf"
+        data = f.read()
+    fmt = labels.sniff_label_format(
+        data, row["label_format"] if row["label_format"] in LABEL_MIMETYPES else "pdf")
+    if request.args.get("format") == "zpl":
+        return _zpl_response(data, fmt, f"label-{shipment_id}")
     response = send_file(
         row["label_path"],
         mimetype=LABEL_MIMETYPES.get(fmt, "application/pdf"),

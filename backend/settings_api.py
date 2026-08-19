@@ -30,6 +30,7 @@ BASE_SETTING_KEYS = [
     "print_mode",
     "printer_host",
     "printer_port",
+    "printer_dpi",
     "label_timeout_seconds",
     "countdown_seconds",
     "shipper_host",

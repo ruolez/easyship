@@ -35,7 +35,7 @@ from providers.base import (
 BASE_URL = "https://api.easypost.com/v2"
 EXCLUDED_KEY = "easypost_excluded_service_ids"
 MASK = "••••••••"
-LABEL_FORMATS = ("PDF", "ZPL", "PNG", "EPL2")
+LABEL_FORMATS = ("PDF", "ZPL", "PNG")
 
 ORIGIN_REQUIRED = {
     "origin_company": "Company",
@@ -302,7 +302,7 @@ class EasyPostProvider(ShippingProvider):
                 "to_address": address_to,
                 "parcel": _build_parcel(p),
                 # label_size 4x6 is required for a 4x6 PDF — without it USPS PDFs
-                # render as a full 8.5x11 page. ZPL/EPL2 are 4x6 regardless.
+                # render as a full 8.5x11 page. ZPL is 4x6 regardless.
                 "options": {"label_format": label_format, "label_size": "4x6"},
             }}
             for p in parcels
@@ -391,7 +391,6 @@ class EasyPostProvider(ShippingProvider):
         by_format = {
             "PDF": pl.get("label_pdf_url"),
             "ZPL": pl.get("label_zpl_url"),
-            "EPL2": pl.get("label_epl2_url"),
             "PNG": pl.get("label_url"),
         }
         url = by_format.get(_label_format()) or pl.get("label_url") or pl.get("label_pdf_url")

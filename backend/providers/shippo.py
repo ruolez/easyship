@@ -321,6 +321,8 @@ class ShippoProvider(ShippingProvider):
     def buy_labels(self, provider_shipment_ids, service_id):
         auth = _auth()
         label_type = db.get_setting("shippo_label_file_type") or "PDF_4x6"
+        if label_type.upper() == "ZPL":  # Shippo's name for it; older settings stored "ZPL"
+            label_type = "ZPLII"
 
         def work(shipment_id):
             rate = self._resolve_rate(shipment_id, service_id, auth)
@@ -473,7 +475,7 @@ class ShippoProvider(ShippingProvider):
                  "options": [
                      {"value": "PDF_4x6", "label": "PDF 4x6"},
                      {"value": "PNG", "label": "PNG"},
-                     {"value": "ZPL", "label": "ZPL"},
+                     {"value": "ZPLII", "label": "ZPL"},
                      {"value": "PDF", "label": "PDF (letter)"},
                  ]},
             ],
