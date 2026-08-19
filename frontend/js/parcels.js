@@ -10,16 +10,38 @@ function copyable(text, label) {
   return `<span class="copy-wrap">${esc(text)}<button class="copy-btn" data-copy="${esc(text)}" title="Copy ${label}" aria-label="Copy ${label}">${COPY_ICON}</button></span>`;
 }
 
+// navigator.clipboard only exists on secure origins (https / localhost); the
+// app is usually reached over plain http on the LAN, so fall back to the
+// selection-based copy command there.
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch { /* fall through to execCommand */ }
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+
 document.addEventListener('click', async (e) => {
   const btn = e.target.closest('.copy-btn');
   if (!btn) return;
-  try {
-    await navigator.clipboard.writeText(btn.dataset.copy);
+  if (await copyText(btn.dataset.copy)) {
     btn.classList.add('copied');
     setTimeout(() => btn.classList.remove('copied'), 1200);
     snackbar('Copied', 'success');
-  } catch {
-    snackbar('Copy failed — clipboard not available', 'error');
+  } else {
+    snackbar('Copy failed — select the text and copy manually', 'error');
   }
 });
 
