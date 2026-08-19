@@ -47,5 +47,19 @@ class ResolveTest(unittest.TestCase):
         self.assertEqual(tag_rules.resolve(self.rules, None)["signature"], "none")
 
 
+class PreferredByTest(unittest.TestCase):
+    def test_tag_rule_outranks_preset_id(self):
+        self.assertEqual(
+            tag_rules.preferred_by("UPS® Ground", "svc-1", "UPS Ground", "svc-1"), "tag_rule")
+
+    def test_preset_id_matches_when_no_rule_name(self):
+        self.assertEqual(tag_rules.preferred_by("UPS® Ground", 42, "", "42"), "preset")
+        self.assertEqual(tag_rules.preferred_by("UPS® Ground", "svc-1", "", "svc-2"), None)
+
+    def test_empty_inputs_never_match(self):
+        self.assertEqual(tag_rules.preferred_by("UPS® Ground", "", "", ""), None)
+        self.assertEqual(tag_rules.preferred_by("UPS® Ground", "svc-1", "", ""), None)
+
+
 if __name__ == "__main__":
     unittest.main()

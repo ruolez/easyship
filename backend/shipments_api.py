@@ -104,6 +104,7 @@ def get_rates():
             return api_error(f"Box {i + 1} needs a weight greater than 0")
     options = {"signature": tag_rules.normalize_signature((data.get("options") or {}).get("signature"))}
     preferred_service = (data.get("preferred_service") or "").strip()
+    preferred_service_id = str(data.get("preferred_service_id") or "").strip()
 
     # One local row PER BOX — each box is its own parcel with its own label
     # and tracking number, linked by a group id.
@@ -172,8 +173,10 @@ def get_rates():
             had_rates = True
             if r.provider_service_id not in excluded:
                 ui = r.to_ui()
-                ui["preferred"] = bool(
-                    preferred_service and tag_rules.service_matches(preferred_service, r.courier_name))
+                by = tag_rules.preferred_by(
+                    r.courier_name, r.provider_service_id, preferred_service, preferred_service_id)
+                ui["preferred"] = bool(by)
+                ui["preferred_by"] = by
                 all_rates.append(ui)
 
     if not draft_ids_by_provider:
@@ -218,8 +221,11 @@ def get_rates():
         return api_error(message, 422)
 
     all_rates.sort(key=lambda r: r["total_charge"])
-    if preferred_service and not any(r["preferred"] for r in all_rates):
-        warnings.append(f"Preferred service \"{preferred_service}\" was not offered for this shipment.")
+    if (preferred_service or preferred_service_id) and not any(r["preferred"] for r in all_rates):
+        if preferred_service:
+            warnings.append(f"Preferred service \"{preferred_service}\" was not offered for this shipment.")
+        else:
+            warnings.append("The Auto Mode preset service was not offered for this shipment.")
     return jsonify({
         "group_id": group_id,
         "shipment_id": row_ids[0],

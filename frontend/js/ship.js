@@ -12,8 +12,9 @@ let savedBoxes = [];
 let lastLabelUrl = null;
 let providerLabels = {};
 let preferredService = ''; // courier service a tag rule asked for
+let preferredServiceId = ''; // Auto Mode preset service id (when no tag rule names one)
 
-initNav('scan');
+const navReady = initNav('scan');
 init();
 
 async function init() {
@@ -26,9 +27,10 @@ async function init() {
   savedBoxes = boxes;
   providerLabels = Object.fromEntries(providers.map((p) => [p.name, p.label]));
   addParcelRow();
-  await prefill();
+  const loaded = await prefill();
   applyPlaceholderEmail();
   focusNextField();
+  if (params.get('auto') === '1') Auto.start(loaded);
 }
 
 function applyPlaceholderEmail() {
@@ -38,13 +40,17 @@ function applyPlaceholderEmail() {
   }
 }
 
+const REQUIRED_DESTINATION_IDS = ['d-address1', 'd-city', 'd-state', 'd-zip'];
+
+function firstMissingDestinationField() {
+  return REQUIRED_DESTINATION_IDS.map((id) => document.getElementById(id))
+    .find((el) => !el.value.trim()) || null;
+}
+
 function focusNextField() {
   // Land the cursor where the user must type next to get a label out.
-  const required = ['d-address1', 'd-city', 'd-state', 'd-zip'];
-  for (const id of required) {
-    const el = document.getElementById(id);
-    if (!el.value.trim()) { el.focus(); return; }
-  }
+  const missing = firstMissingDestinationField();
+  if (missing) { missing.focus(); return; }
   // Always land in the weight field — even when a weight was auto-calculated
   // (e.g. from Shopify items), the packer confirms the real total on the scale.
   // The prefilled value is selected so typing replaces it, Enter accepts it.
@@ -108,7 +114,9 @@ async function prefill() {
     }
   } catch (err) {
     snackbar(`Could not load order: ${err.message}`, 'error');
+    return false;
   }
+  return true;
 }
 
 /* Warn that this order was already processed. Continue resolves and the flow
@@ -241,7 +249,10 @@ function addParcelRow(weight = '', length = '', width = '', height = '') {
   div.querySelector('.p-weight').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      document.getElementById('get-rates').click();
+      if (Auto.weightEntered()) return; // Auto Mode continues its own chain
+      getRates();
+    } else if (e.key !== 'Tab') {
+      Auto.weightTyped();
     }
   });
   document.getElementById('parcel-list').appendChild(div);
@@ -290,7 +301,14 @@ function collectDestination() {
 }
 
 /* ---------- Rates ---------- */
-document.getElementById('get-rates').addEventListener('click', async () => {
+document.getElementById('get-rates').addEventListener('click', () => {
+  if (Auto.weightEntered()) return; // Auto Mode continues its own chain
+  getRates();
+});
+
+/* Rate the shipment as entered. Resolves true when rates rendered, false on
+   any error (already shown to the user). Shared by the button and Auto Mode. */
+async function getRates() {
   const btn = document.getElementById('get-rates');
   const spinner = document.getElementById('rates-spinner');
   btn.disabled = true;
@@ -307,6 +325,7 @@ document.getElementById('get-rates').addEventListener('click', async () => {
         items: orderItems,
         options: { signature: document.getElementById('signature').value },
         preferred_service: preferredService,
+        preferred_service_id: preferredServiceId,
       },
     });
     localShipmentId = res.shipment_id;
@@ -317,14 +336,16 @@ document.getElementById('get-rates').addEventListener('click', async () => {
     renderRateWarnings(res.warnings || []);
     document.getElementById('panel-rates').style.display = '';
     document.getElementById('panel-rates').scrollIntoView({ behavior: 'smooth' });
+    return true;
   } catch (err) {
     snackbar(err.message, 'error');
     setStep(2);
+    return false;
   } finally {
     btn.disabled = false;
     spinner.style.display = 'none';
   }
-});
+}
 
 function providerLabel(name) {
   if (!name) return '';
@@ -341,7 +362,7 @@ function renderRates() {
     <div class="rate-row${r.preferred ? ' preferred' : ''}" data-idx="${i}" tabindex="0" role="radio" aria-checked="false">
       <span class="rate-radio"></span>
       <span class="rate-info">
-        <span class="rate-courier">${esc(r.courier_name)}${r.preferred ? ' <span class="chip static warn rate-best" title="Chosen by an order tag rule">Tag rule</span>' : ''}${r.value_for_money_rank === 1 ? ' <span class="chip static ok rate-best">Best value</span>' : ''}${multiProvider && r.provider ? ` <span class="chip static rate-provider">${esc(providerLabel(r.provider))}</span>` : ''}</span>
+        <span class="rate-courier">${esc(r.courier_name)}${r.preferred ? (r.preferred_by === 'preset' ? ' <span class="chip static warn rate-best" title="Your Auto Mode preset service">Auto preset</span>' : ' <span class="chip static warn rate-best" title="Chosen by an order tag rule">Tag rule</span>') : ''}${r.value_for_money_rank === 1 ? ' <span class="chip static ok rate-best">Best value</span>' : ''}${multiProvider && r.provider ? ` <span class="chip static rate-provider">${esc(providerLabel(r.provider))}</span>` : ''}</span>
         <span class="rate-days">${r.min_delivery_time ?? '?'}–${r.max_delivery_time ?? '?'} business days</span>
       </span>
       <span class="rate-price">${money(r.total_charge)} <small>${esc(r.currency || 'USD')}</small></span>
@@ -414,8 +435,13 @@ function renderBuyProgress(progress) {
 
 let buyPollTimer = null;
 
-document.getElementById('buy-label').addEventListener('click', async () => {
-  if (!selectedRate || !groupId) return;
+document.getElementById('buy-label').addEventListener('click', () => { buyLabel(); });
+
+/* Buy the selected rate and follow the purchase to its end. Resolves
+   {state: 'done'|'retry'|'error'|'failed', message} — 'failed' when the buy
+   request itself was rejected. Shared by the button and Auto Mode. */
+async function buyLabel() {
+  if (!selectedRate || !groupId) return { state: 'failed', message: 'No rate selected' };
   const btn = document.getElementById('buy-label');
   const spinner = document.getElementById('buy-spinner');
   btn.disabled = true;
@@ -433,29 +459,34 @@ document.getElementById('buy-label').addEventListener('click', async () => {
     snackbar(err.message, 'error');
     btn.disabled = false;
     spinner.style.display = 'none';
-    return;
+    return { state: 'failed', message: err.message };
   }
-  buyPollTimer = setInterval(async () => {
-    let g;
-    try {
-      g = await api(`/api/shipments/group/${groupId}`);
-    } catch { return; } // transient poll failure — keep polling
-    const progress = g.progress || {};
-    renderBuyProgress(progress);
-    const allDone = g.shipments.every((r) => ['label_created', 'fulfilled'].includes(r.status));
-    if (progress.state === 'done' && allDone) {
-      clearInterval(buyPollTimer);
-      spinner.style.display = 'none';
-      setStep(4);
-      showGroupResult(g);
-    } else if (progress.state === 'retry' || progress.state === 'error') {
-      clearInterval(buyPollTimer);
-      spinner.style.display = 'none';
-      snackbar(progress.message || 'Label purchase did not complete', 'error');
-      if (progress.state === 'retry') btn.disabled = false;
-    }
-  }, 1500);
-});
+  return new Promise((resolve) => {
+    buyPollTimer = setInterval(async () => {
+      let g;
+      try {
+        g = await api(`/api/shipments/group/${groupId}`);
+      } catch { return; } // transient poll failure — keep polling
+      const progress = g.progress || {};
+      renderBuyProgress(progress);
+      const allDone = g.shipments.every((r) => ['label_created', 'fulfilled'].includes(r.status));
+      if (progress.state === 'done' && allDone) {
+        clearInterval(buyPollTimer);
+        spinner.style.display = 'none';
+        setStep(4);
+        showGroupResult(g);
+        resolve({ state: 'done', message: '' });
+      } else if (progress.state === 'retry' || progress.state === 'error') {
+        clearInterval(buyPollTimer);
+        spinner.style.display = 'none';
+        const message = progress.message || 'Label purchase did not complete';
+        snackbar(message, 'error');
+        if (progress.state === 'retry') btn.disabled = false;
+        resolve({ state: progress.state, message });
+      }
+    }, 1500);
+  });
+}
 
 function showGroupResult(g) {
   const primary = g.shipments[0];
@@ -526,6 +557,7 @@ function showResult(s) {
   // pauses the countdown so the packer can reprint first.
   const printFailed = typeof s.printed === 'string' && s.printed.startsWith('error');
   if (s.has_label && !printFailed) startAutoAdvance();
+  Auto.onResult(s, printFailed);
 }
 
 /* ---------- Auto-advance countdown ---------- */
@@ -609,3 +641,188 @@ window.retryWriteback = async () => {
 /* Step highlighting on focus */
 document.getElementById('panel-destination').addEventListener('focusin', () => setStep(1));
 document.getElementById('panel-parcels').addEventListener('focusin', () => setStep(2));
+
+/* ============================================================ Auto Mode
+   Scan page sets ?auto=1 when the station has Auto Mode on with a preset
+   (localStorage easyship.autoPreset). From there: preset box → wait for a
+   stable scale weight → rate → buy the preset/tag-rule service → print.
+   Every step that isn't certain drops back to the manual form. */
+const Auto = (() => {
+  const SETTLE_MS = 800; // a stable reading must hold this long before we trust it
+  let stage = 'idle'; // idle|weigh|rating|choose|buying|done|cancelled|failed
+  let unsubscribe = null;
+  let settleTimer = null;
+  let lastLb = null;
+  let preset = null;
+  let printOutcome = null; // set by showResult, which can run before the buy promise settles
+
+  const banner = () => document.getElementById('auto-banner');
+  const weightField = () => document.querySelector('.p-weight');
+
+  function setStage(next, title, detail = '', tone = '') {
+    stage = next;
+    const el = banner();
+    el.style.display = '';
+    el.className = `card auto-banner${tone ? ' ' + tone : ''}`;
+    document.getElementById('auto-stage').textContent = title;
+    document.getElementById('auto-detail').textContent = detail;
+    document.getElementById('auto-cancel').style.display =
+      ['weigh', 'rating', 'choose'].includes(next) ? '' : 'none';
+  }
+
+  function setDetail(detail) {
+    document.getElementById('auto-detail').textContent = detail;
+  }
+
+  function stopScale() {
+    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    clearTimeout(settleTimer);
+    settleTimer = null;
+    lastLb = null;
+  }
+
+  function fail(message) {
+    stopScale();
+    setStage('failed', 'Auto Mode stopped', message, 'err');
+    snackbar(message, 'error');
+    focusNextField();
+  }
+
+  function loadPreset(provider) {
+    try {
+      const all = JSON.parse(localStorage.getItem('easyship.autoPreset') || '{}');
+      const svc = (all.byProvider || {})[provider];
+      if (!all.box_id || !svc || !(svc.service_id || svc.service_name)) return null;
+      return { box_id: Number(all.box_id), ...svc };
+    } catch {
+      return null;
+    }
+  }
+
+  async function start(orderLoaded) {
+    await navReady; // the provider must be resolved — never auto-rate against every provider
+    const provider = (window.activeProvider && window.activeProvider()) || '';
+    preset = loadPreset(provider);
+    if (!orderLoaded) return fail('Order could not be loaded — finish manually');
+    if (!provider) return fail('No shipping provider selected — finish manually');
+    if (!preset) return fail('No Auto Mode preset for this provider on this station — set it on the Scan page');
+    if (firstMissingDestinationField()) return fail('Destination is incomplete — finish manually');
+    const rows = document.querySelectorAll('.parcel-row');
+    if (rows.length !== 1) return fail('Multi-box order — ship manually');
+    const box = savedBoxes.find((b) => b.id === preset.box_id);
+    if (!box) return fail('Auto Mode preset box no longer exists — finish manually');
+
+    const boxSelect = rows[0].querySelector('.p-box');
+    boxSelect.value = String(box.id);
+    boxSelect.dispatchEvent(new Event('change'));
+    if (preferredService) {
+      // A tag rule named a service — it outranks the station preset.
+      preferredServiceId = '';
+    } else if (preset.service_id) {
+      preferredServiceId = String(preset.service_id);
+    } else {
+      preferredService = preset.service_name;
+    }
+    weigh();
+  }
+
+  function weigh() {
+    const field = weightField();
+    if (field) { field.focus(); if (field.value) field.select(); }
+    const connected = window.Scale && window.Scale.connected;
+    setStage('weigh', 'Auto Mode — waiting for weight',
+      connected ? 'Place the package on the scale, or type the weight and press Enter'
+        : 'Scale not connected — connect it, or type the weight and press Enter', 'warn');
+    if (window.Scale && window.Scale.subscribe) unsubscribe = window.Scale.subscribe(onReading);
+  }
+
+  function onReading({ status, lb }) {
+    if (stage !== 'weigh') return;
+    if (status === 4 && lb > 0) {
+      const v = lb.toFixed(1);
+      if (v !== lastLb) {
+        lastLb = v;
+        clearTimeout(settleTimer);
+        settleTimer = setTimeout(() => {
+          const field = weightField();
+          if (!field) return;
+          field.value = lastLb;
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          proceedFromWeight();
+        }, SETTLE_MS);
+      }
+      return;
+    }
+    clearTimeout(settleTimer);
+    settleTimer = null;
+    lastLb = null;
+    if (status === 3) setDetail('Weighing…');
+    else if (status === 5) setDetail('Scale below zero — re-zero it');
+    else if (status === -1) setDetail('Scale unplugged — reconnect it, or type the weight and press Enter');
+    else if (status >= 6) setDetail('Scale fault — type the weight and press Enter');
+    else setDetail('Place the package on the scale, or type the weight and press Enter');
+  }
+
+  function weightTyped() {
+    if (stage !== 'weigh' || !unsubscribe) return;
+    stopScale();
+    setDetail('Manual weight — press Enter to continue');
+  }
+
+  function weightEntered() {
+    if (stage !== 'weigh') return false;
+    proceedFromWeight();
+    return true;
+  }
+
+  async function proceedFromWeight() {
+    if (stage !== 'weigh') return;
+    const field = weightField();
+    const lb = parseFloat(field && field.value);
+    if (!(lb > 0)) { setDetail('Weight must be greater than 0'); return; }
+    stopScale();
+    setStage('rating', 'Auto Mode — getting rates', `Using ${lb.toFixed(1)} lb · ${preset.service_name || 'preset service'}`);
+    const ok = await getRates();
+    if (stage !== 'rating') return; // cancelled while the request was in flight
+    if (!ok) return fail('Could not get rates — finish manually');
+    if (!selectedRate || !selectedRate.preferred) {
+      setStage('choose', 'Auto Mode paused', 'Preset service not offered for this shipment — choose a rate and print', 'warn');
+      return;
+    }
+    setStage('buying', 'Auto Mode — buying label',
+      `${selectedRate.courier_name} · ${money(selectedRate.total_charge)}`);
+    const result = await buyLabel();
+    if (result.state === 'done') {
+      setStage('done', 'Auto Mode — label bought', 'Printing…', 'ok');
+      applyPrintOutcome();
+    } else {
+      fail(result.message || 'Label purchase did not complete');
+    }
+  }
+
+  function onResult(s, printFailed) {
+    printOutcome = { printFailed };
+    if (stage === 'done') applyPrintOutcome();
+  }
+
+  function applyPrintOutcome() {
+    if (!printOutcome) return;
+    if (printOutcome.printFailed) setStage('done', 'Auto Mode — label bought', 'Print failed — use Print again', 'err');
+    else setDetail(clientSettings.print_mode === 'browser' ? 'Confirm the print dialog' : 'Printed — returning to Scan');
+  }
+
+  function cancel() {
+    if (!['weigh', 'rating', 'choose'].includes(stage)) return;
+    stopScale();
+    stage = 'cancelled';
+    banner().style.display = 'none';
+    snackbar('Auto Mode off for this order — continue manually');
+    focusNextField();
+  }
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cancel(); });
+  const cancelBtn = document.getElementById('auto-cancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', cancel);
+
+  return { start, weightEntered, weightTyped, onResult, cancel, get stage() { return stage; } };
+})();

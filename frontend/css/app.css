@@ -408,6 +408,33 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 }
 .rule-banner.warn { background: var(--warning-light); border-left-color: var(--warning); }
 .rate-warnings { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+
+/* ---------- Auto Mode presets (scan page) ---------- */
+.auto-preset { padding: 12px 14px; border: 1px dashed var(--outline-strong); border-radius: 8px; background: var(--surface-sunken); }
+.auto-preset .row > .field { min-width: 150px; }
+
+/* ---------- Auto Mode banner (ship page) ---------- */
+.auto-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-left: 4px solid var(--primary);
+  background: var(--primary-light);
+}
+.auto-banner.warn { border-left-color: var(--warning); background: var(--warning-light); }
+.auto-banner.ok { border-left-color: var(--success); background: var(--success-light); }
+.auto-banner.err { border-left-color: var(--error); background: var(--error-light); }
+.auto-banner #auto-detail { flex: 1; }
+.auto-banner .auto-pulse {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--primary); flex: 0 0 auto;
+  animation: auto-pulse 1.2s ease-in-out infinite;
+}
+.auto-banner.warn .auto-pulse { background: var(--warning); }
+.auto-banner.ok .auto-pulse, .auto-banner.err .auto-pulse { animation: none; }
+.auto-banner.ok .auto-pulse { background: var(--success); }
+.auto-banner.err .auto-pulse { background: var(--error); }
+@keyframes auto-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .tag-rule { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--outline); }
 .tag-rule:last-child { border-bottom: none; }
 .rate-row.preferred { border-color: var(--warning); }

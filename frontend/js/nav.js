@@ -175,5 +175,6 @@ async function initProviderSelector() {
   select.addEventListener('change', () => {
     localStorage.setItem(PROVIDER_KEY, select.value);
     applyBadge();
+    window.dispatchEvent(new CustomEvent('easyship:provider', { detail: select.value }));
   });
 }

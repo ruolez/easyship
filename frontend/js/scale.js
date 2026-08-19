@@ -11,6 +11,7 @@
   let device = null;
   let activeField = null;
   let manualOverride = false;
+  const subscribers = new Set(); // Auto Mode listens to every reading: {status, lb}
 
   const widget = document.getElementById('scale-widget');
   const chip = document.getElementById('scale-chip');
@@ -46,6 +47,13 @@
     else setChip('ok', `Scale · ${lb.toFixed(1)} lb`);
 
     if (status === 4 && lb > 0) fill(lb);
+    notify({ status, lb });
+  }
+
+  function notify(reading) {
+    subscribers.forEach((fn) => {
+      try { fn(reading); } catch { /* a listener's error must not break the scale */ }
+    });
   }
 
   function fill(lb) {
@@ -103,6 +111,7 @@
       device = null;
       btn.style.display = '';
       setChip('err', 'Scale unplugged');
+      notify({ status: -1, lb: 0 });
     });
     navigator.hid.addEventListener('connect', async (e) => {
       if (!device && isScale(e.device)) attach(pick(await navigator.hid.getDevices()));
@@ -125,5 +134,10 @@
   }
 
   init();
-  window.Scale = { get device() { return device; }, _onReport: onReport };
+  window.Scale = {
+    get device() { return device; },
+    get connected() { return !!device; },
+    subscribe(fn) { subscribers.add(fn); return () => subscribers.delete(fn); },
+    _onReport: onReport,
+  };
 })();

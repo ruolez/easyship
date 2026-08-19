@@ -71,3 +71,14 @@ def resolve(rules, tags):
         if not service and r["service"]:
             service = r["service"]
     return {"signature": signature, "service": service, "matched": matched}
+
+
+def preferred_by(courier_name, service_id, preferred_service="", preferred_service_id=""):
+    """Why a rate is the preferred one: 'tag_rule' when an order tag rule
+    names its service, 'preset' when it is the station's Auto Mode service,
+    else None. A tag rule outranks the preset."""
+    if service_matches(preferred_service, courier_name):
+        return "tag_rule"
+    if service_id and preferred_service_id and str(service_id) == str(preferred_service_id):
+        return "preset"
+    return None

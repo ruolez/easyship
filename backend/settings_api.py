@@ -245,6 +245,23 @@ def provider_services(name):
     return jsonify({"services": services, "excluded": excluded})
 
 
+@bp.get("/providers/<name>/services/available")
+@login_required
+def provider_available_services(name):
+    """Services a packer can pick from (Auto Mode preset): the catalog minus
+    the admin's exclusions. Providers without a catalog return an empty list."""
+    provider = _provider_or_404(name)
+    if not provider:
+        return api_error("Unknown provider", 404)
+    try:
+        services = provider.list_courier_services()
+    except Exception as e:
+        return api_error(f"Could not fetch services from {provider.label}: {e}")
+    excluded = provider.get_excluded_service_ids()
+    available = [s for s in services if str(s.get("id")) not in excluded]
+    return jsonify({"services": available, "has_catalog": bool(services)})
+
+
 @bp.post("/providers/<name>/excluded-services")
 @admin_required
 def provider_excluded_services(name):

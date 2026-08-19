@@ -3,6 +3,7 @@ initNav('scan').then(() => {
   const isAdmin = window.currentUser && window.currentUser.role === 'admin';
   document.getElementById('orders-link').style.display = isAdmin ? '' : 'none';
   document.getElementById('orders-link-alt').style.display = isAdmin ? 'none' : '';
+  initAutoMode(); // needs the resolved provider from the nav
 });
 
 const sourceSelect = document.getElementById('source-select');
@@ -116,6 +117,145 @@ async function reshipGate(what, numbers, note) {
      <p class="text-secondary" style="margin-top:8px">${esc(note)}</p>`);
 }
 
+/* ---------- Auto Mode (per station) ----------
+   Toggle + presets live in localStorage: the ship page reads the preset when
+   the URL carries ?auto=1. Service presets are per provider because service
+   ids differ between platforms. */
+const AUTO_MODE_KEY = 'easyship.autoMode';
+const AUTO_PRESET_KEY = 'easyship.autoPreset';
+const autoToggle = document.getElementById('auto-mode');
+let autoServices = [];
+let autoHasCatalog = true;
+let autoBoxes = [];
+
+function readAutoPreset() {
+  try {
+    const p = JSON.parse(localStorage.getItem(AUTO_PRESET_KEY) || '{}');
+    return { box_id: p.box_id || '', byProvider: p.byProvider || {} };
+  } catch {
+    return { box_id: '', byProvider: {} };
+  }
+}
+
+function writeAutoPreset(update) {
+  const p = readAutoPreset();
+  const provider = window.activeProvider ? window.activeProvider() : '';
+  if ('box_id' in update) p.box_id = update.box_id;
+  if (update.service && provider) p.byProvider[provider] = update.service;
+  localStorage.setItem(AUTO_PRESET_KEY, JSON.stringify(p));
+}
+
+function currentServicePreset() {
+  const provider = window.activeProvider ? window.activeProvider() : '';
+  return readAutoPreset().byProvider[provider] || null;
+}
+
+function autoReady() {
+  if (!autoToggle.checked) return false;
+  const p = readAutoPreset();
+  const svc = currentServicePreset();
+  return Boolean(p.box_id && svc && (svc.service_id || svc.service_name));
+}
+
+async function initAutoMode() {
+  autoToggle.checked = localStorage.getItem(AUTO_MODE_KEY) === '1';
+  autoToggle.addEventListener('change', async () => {
+    localStorage.setItem(AUTO_MODE_KEY, autoToggle.checked ? '1' : '0');
+    await renderAutoPreset();
+    numberInput.focus();
+  });
+  window.addEventListener('easyship:provider', () => renderAutoPreset());
+  document.getElementById('auto-carrier').addEventListener('change', () => {
+    fillAutoServices();
+    saveAutoService();
+  });
+  document.getElementById('auto-service').addEventListener('change', saveAutoService);
+  document.getElementById('auto-service-name').addEventListener('input', saveAutoService);
+  document.getElementById('auto-box').addEventListener('change', () => {
+    writeAutoPreset({ box_id: document.getElementById('auto-box').value });
+    renderAutoStatus();
+  });
+  await renderAutoPreset();
+}
+
+async function renderAutoPreset() {
+  const wrap = document.getElementById('auto-preset');
+  if (!autoToggle.checked) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  const provider = window.activeProvider ? window.activeProvider() : '';
+  const status = document.getElementById('auto-status');
+  status.textContent = 'Loading services…';
+  const [boxes, svc] = await Promise.all([
+    api('/api/boxes').catch(() => []),
+    provider ? api(`/api/providers/${encodeURIComponent(provider)}/services/available`).catch(() => null) : null,
+  ]);
+  autoBoxes = boxes;
+  autoServices = (svc && svc.services) || [];
+  autoHasCatalog = svc ? svc.has_catalog : false;
+
+  const preset = readAutoPreset();
+  const boxSel = document.getElementById('auto-box');
+  boxSel.innerHTML = '<option value="">Choose a box…</option>'
+    + autoBoxes.map((b) => `<option value="${b.id}">${esc(b.name)} — ${b.length}×${b.width}×${b.height}</option>`).join('');
+  if (autoBoxes.some((b) => String(b.id) === String(preset.box_id))) boxSel.value = String(preset.box_id);
+
+  const catalogFields = [document.getElementById('auto-carrier-field'), document.getElementById('auto-service-field')];
+  const nameField = document.getElementById('auto-service-name-field');
+  catalogFields.forEach((el) => { el.style.display = autoHasCatalog ? '' : 'none'; });
+  nameField.style.display = autoHasCatalog ? 'none' : '';
+  const current = currentServicePreset() || {};
+  if (autoHasCatalog) {
+    const carriers = [...new Set(autoServices.map((s) => s.umbrella_name || 'Other'))].sort();
+    const carrierSel = document.getElementById('auto-carrier');
+    carrierSel.innerHTML = '<option value="">Choose a carrier…</option>'
+      + carriers.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    if (carriers.includes(current.carrier)) carrierSel.value = current.carrier;
+    fillAutoServices();
+    const serviceSel = document.getElementById('auto-service');
+    if (autoServices.some((s) => String(s.id) === String(current.service_id))) serviceSel.value = String(current.service_id);
+  } else {
+    document.getElementById('auto-service-name').value = current.service_name || '';
+  }
+  renderAutoStatus();
+}
+
+function fillAutoServices() {
+  const carrier = document.getElementById('auto-carrier').value;
+  const serviceSel = document.getElementById('auto-service');
+  const list = autoServices.filter((s) => !carrier || (s.umbrella_name || 'Other') === carrier);
+  serviceSel.innerHTML = '<option value="">Choose a service…</option>'
+    + list.map((s) => `<option value="${esc(String(s.id))}">${esc(s.name)}</option>`).join('');
+}
+
+function saveAutoService() {
+  if (autoHasCatalog) {
+    const id = document.getElementById('auto-service').value;
+    const svc = autoServices.find((s) => String(s.id) === id);
+    writeAutoPreset({ service: {
+      carrier: document.getElementById('auto-carrier').value,
+      service_id: svc ? String(svc.id) : '',
+      service_name: svc ? svc.name : '',
+    } });
+  } else {
+    writeAutoPreset({ service: { carrier: '', service_id: '', service_name: document.getElementById('auto-service-name').value.trim() } });
+  }
+  renderAutoStatus();
+}
+
+function renderAutoStatus() {
+  const status = document.getElementById('auto-status');
+  const svc = currentServicePreset();
+  const box = autoBoxes.find((b) => String(b.id) === String(readAutoPreset().box_id));
+  if (!window.activeProvider || !window.activeProvider()) {
+    status.innerHTML = '<span class="chip static err">Select a shipping provider in the sidebar</span>';
+  } else if (autoReady()) {
+    status.innerHTML = `<span class="chip static ok">Auto: ${esc(svc.service_name || 'service')} · ${esc(box ? box.name : 'box')}</span> `
+      + 'Scanned orders are weighed, rated, bought and printed automatically. Esc on the Ship page switches back to manual.';
+  } else {
+    status.innerHTML = '<span class="chip static warn">Choose a service and a box to enable Auto Mode</span>';
+  }
+}
+
 function stayOnScan() {
   statusEl.innerHTML = '';
   numberInput.select();
@@ -164,7 +304,7 @@ async function lookup() {
         stayOnScan();
         return;
       }
-      location.href = `/ship.html?source=backoffice&db_id=${id}&invoice_id=${inv.invoice_id}&reship_ack=1`;
+      location.href = `/ship.html?source=backoffice&db_id=${id}&invoice_id=${inv.invoice_id}&reship_ack=1${autoReady() ? '&auto=1' : ''}`;
     } else {
       const order = await api(`/api/shopify/lookup?store_id=${id}&number=${encodeURIComponent(number)}`);
       if (!(await reshipGate(`Shopify order ${order.name}`, order.existing_tracking || [],
@@ -176,7 +316,7 @@ async function lookup() {
         stayOnScan();
         return;
       }
-      location.href = `/ship.html?source=shopify&store_id=${id}&order_id=${encodeURIComponent(order.id)}&reship_ack=1`;
+      location.href = `/ship.html?source=shopify&store_id=${id}&order_id=${encodeURIComponent(order.id)}&reship_ack=1${autoReady() ? '&auto=1' : ''}`;
     }
   } catch (err) {
     statusEl.innerHTML = `<span class="chip static err">✕ ${esc(err.message)}</span>`;

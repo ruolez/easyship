@@ -57,6 +57,10 @@ Default login: **admin** / value of `ADMIN_INITIAL_PASSWORD` in `.env` (change i
    - A failed writeback never loses the label — retry from the Shipments page.
 4. **Shipments** page — full history with user attribution, label reprint, void (cancels the shipment at Easyship), retry writeback.
 
+### Auto Mode (scan → weigh → rate → buy → print, no clicks)
+
+On the Scan page tick **Auto Mode** and choose a Carrier, Service and Box for this station (stored in the browser, per shipping provider). From then on a scanned order opens the Ship page with the preset box, waits for a stable weight from the USB scale (or a typed weight + Enter), rates, buys the preset service — a Shopify tag rule's preferred service and signature requirement take precedence — and prints. Anything uncertain (preset service not offered, multi-box invoice, missing address, rate/buy errors) drops back to the normal manual form with a message; **Esc** or *Switch to manual* cancels any time before the label is bought. For truly click-free printing use the *Network thermal printer* or *Zebra Browser Print* print mode — the browser print dialog still needs one click.
+
 ### Zebra Browser Print (silent label printing)
 
 For a USB-attached Zebra thermal printer on the packing station, set Settings → Label printing → **Zebra Browser Print (local USB printer)**. Labels then print silently the moment they're ready — no print dialog. Requirements on each packing station: the [Zebra Browser Print](https://www.zebra.com/us/en/software/printer-software/browser-print.html) app installed and running with the Zebra set as its default printer, and the Zebra's resolution (203 or 300 dpi) selected in Settings → Label printing. Any provider label format works: native ZPL is forwarded as-is, and PDF/PNG labels are rendered server-side to 4x6 ZPL at the printer DPI (the same conversion is used by the Network thermal printer mode). The first print asks you to accept the website inside the Browser Print app — click Accept once. Use Settings → *Test Zebra print (this computer)* to verify a station; reprints from the Parcels page go to the Zebra too.

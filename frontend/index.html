@@ -16,6 +16,19 @@
           <input type="checkbox" id="auto-detect">
           <span>Auto-detect store from order number</span>
         </label>
+        <label class="auto-detect-toggle mb-16">
+          <input type="checkbox" id="auto-mode">
+          <span>Auto Mode — weigh, rate, buy and print without clicks</span>
+        </label>
+        <div id="auto-preset" class="auto-preset mb-16" style="display:none">
+          <div class="row">
+            <div class="field" id="auto-carrier-field"><label>Carrier</label><select id="auto-carrier"></select></div>
+            <div class="field" id="auto-service-field"><label>Service</label><select id="auto-service"></select></div>
+            <div class="field" id="auto-service-name-field" style="display:none"><label>Service name</label><input id="auto-service-name" placeholder="e.g. UPS Ground"></div>
+            <div class="field"><label>Box</label><select id="auto-box"></select></div>
+          </div>
+          <div class="hint mt-16" id="auto-status"></div>
+        </div>
         <div class="field mb-16">
           <label>Store / Database</label>
           <select id="source-select"></select>
