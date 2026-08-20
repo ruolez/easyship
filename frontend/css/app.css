@@ -949,10 +949,23 @@ td { font-variant-numeric: tabular-nums; }
 .switch-text strong { font-size: 14px; font-weight: 600; color: var(--on-surface); }
 .switch-text small { font-size: 12px; color: var(--text-secondary); }
 
-.auto-preset { margin: 2px 0 6px 50px; padding: 14px 16px; border-radius: 10px; background: var(--surface-sunken); border: 1px solid var(--outline); }
-.auto-preset-grid { display: grid; grid-template-columns: 1fr 1.4fr 1.2fr; gap: 12px; }
-.auto-preset .field select, .auto-preset .field input { height: 36px; font-size: 13.5px; }
-.auto-status { margin-top: 12px; font-size: 12.5px; color: var(--text-secondary); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Auto Mode preset — a small config card attached under its switch: pickers on
+   top, one slim status line under a hairline instead of chip-plus-paragraph. */
+.auto-preset {
+  margin: 2px 0 8px 50px; border: 1px solid var(--outline); border-radius: 10px;
+  background: var(--surface-sunken); overflow: hidden;
+}
+.auto-preset-grid { display: grid; grid-template-columns: 1fr 1.4fr 1.1fr; gap: 10px; padding: 12px 14px; }
+.auto-preset .field { gap: 4px; }
+.auto-preset .field label { font-size: 10px; letter-spacing: 0.4px; }
+.auto-preset .field select, .auto-preset .field input { height: 32px; font-size: 13px; background: var(--surface); }
+.auto-status {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  padding: 9px 14px; border-top: 1px solid var(--outline); background: var(--surface);
+  font-size: 12.5px; color: var(--text-secondary); line-height: 1.4;
+}
+.auto-status .auto-summary { font-weight: 600; color: var(--on-surface); }
+.auto-status .auto-hint { flex-basis: 100%; font-size: 12px; }
 @media (max-width: 640px) {
   .auto-preset { margin-left: 0; }
   .auto-preset-grid { grid-template-columns: 1fr; }

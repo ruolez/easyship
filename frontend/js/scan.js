@@ -198,7 +198,7 @@ async function renderAutoPreset() {
   const preset = readAutoPreset();
   const boxSel = document.getElementById('auto-box');
   boxSel.innerHTML = '<option value="">Choose a box…</option>'
-    + autoBoxes.map((b) => `<option value="${b.id}">${esc(b.name)} — ${b.length}×${b.width}×${b.height}</option>`).join('');
+    + autoBoxes.map((b) => `<option value="${b.id}">${b.length}×${b.width}×${b.height} in</option>`).join('');
   if (autoBoxes.some((b) => String(b.id) === String(preset.box_id))) boxSel.value = String(preset.box_id);
 
   const catalogFields = [document.getElementById('auto-carrier-field'), document.getElementById('auto-service-field')];
@@ -259,12 +259,14 @@ function renderAutoStatus() {
     pill.className = 'scan-mode-pill off';
     pill.textContent = 'Auto Mode · needs setup';
   } else if (autoReady()) {
-    status.innerHTML = `<span class="chip static ok">✓ Ready</span> <span>${esc(svc.service_name || 'service')} · ${esc(box ? box.name : 'box')}. `
-      + 'Scanned orders are weighed, rated, bought and printed. Esc on the Ship page switches back to manual.</span>';
+    status.innerHTML = `<span class="chip static ok">✓ Ready</span>`
+      + `<span class="auto-summary">${esc(svc.service_name || 'service')} · ${box ? `${box.length}×${box.width}×${box.height} in` : 'box'}</span>`
+      + '<span class="auto-hint">Scanned orders are weighed, rated, bought and printed — Esc on the Ship page switches back to manual.</span>';
     pill.className = 'scan-mode-pill';
     pill.textContent = `Auto · ${svc.service_name || 'service'}`;
   } else {
-    status.innerHTML = '<span class="chip static warn">Choose a service and a box</span><span>Auto Mode stays off until both are set.</span>';
+    status.innerHTML = '<span class="chip static warn">Choose a service and a box</span>'
+      + '<span class="auto-hint">Auto Mode stays off until both are set.</span>';
     pill.className = 'scan-mode-pill off';
     pill.textContent = 'Auto Mode · needs setup';
   }
