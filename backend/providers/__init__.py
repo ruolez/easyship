@@ -17,9 +17,11 @@ def _load_registry():
         from .easyship import EasyshipProvider
         from .shippo import ShippoProvider
         from .easypost import EasyPostProvider
+        from .shipstation import ShipStationProvider
         _REGISTRY["easyship"] = EasyshipProvider
         _REGISTRY["shippo"] = ShippoProvider
         _REGISTRY["easypost"] = EasyPostProvider
+        _REGISTRY["shipstation"] = ShipStationProvider
     return _REGISTRY
 
 

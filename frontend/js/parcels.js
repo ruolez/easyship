@@ -264,13 +264,20 @@ window.retryWb = async (id) => {
   }
 };
 
+const PROVIDER_LABELS = { easyship: 'Easyship', shippo: 'GoShippo', easypost: 'EasyPost', shipstation: 'ShipStation' };
+function providerLabel(id) {
+  const row = allRows.find((r) => r.id === id);
+  const name = (row && row.provider) || '';
+  return PROVIDER_LABELS[name] || (name ? name.charAt(0).toUpperCase() + name.slice(1) : 'the shipping provider');
+}
+
 async function callVoid(id) {
   const res = await api(`/api/shipments/${id}/void`, { method: 'POST' });
   if (res.ok) {
     const details = Object.entries(res.undo || {}).map(([k, v]) => `${k}: ${v}`).join('; ');
     snackbar(details ? `Label voided — ${details}` : 'Label voided', 'success');
   } else {
-    snackbar(`Label voided at Easyship, but: ${(res.errors || []).join('; ')} — use Retry undo`, 'error');
+    snackbar(`Label voided at ${providerLabel(id)}, but: ${(res.errors || []).join('; ')} — use Retry undo`, 'error');
   }
   load();
 }
@@ -288,7 +295,7 @@ window.voidShipment = (id, ref, source, boxTotal) => {
   document.getElementById('modal').innerHTML = `
     <h3>Undo shipment</h3>
     <p>Undo <strong>${ref}</strong>?</p>
-    <p class="text-secondary" style="margin-top:8px">The label is cancelled at Easyship (UPS/USPS), and ${undoNote}.${boxNote}</p>
+    <p class="text-secondary" style="margin-top:8px">The label is cancelled at ${esc(providerLabel(id))}, and ${undoNote}.${boxNote}</p>
     <div class="actions">
       <button class="btn btn-text" id="m-cancel">Cancel</button>
       <button class="btn btn-danger" id="m-void">Undo shipment</button>

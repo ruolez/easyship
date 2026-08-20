@@ -38,7 +38,10 @@ Default login: **admin** / value of `ADMIN_INITIAL_PASSWORD` in `.env` (change i
 
 ## Setup checklist (Settings page, admin only)
 
-1. **Easyship API** — mode starts as *Sandbox*. Paste your sandbox token (starts with `sand_`), click *Test connection*. Switch the mode to *Production* and paste the production token only when ready to buy real labels. A SANDBOX/PRODUCTION badge is always visible in the top bar.
+1. **Shipping providers** (Providers tab) — enable one or more platforms; packers pick the one to ship with in the sidebar. A SANDBOX badge shows whenever the selected provider is in a test mode.
+   - **Easyship** — mode starts as *Sandbox*. Paste your sandbox token (starts with `sand_`), click *Test connection*. Switch the mode to *Production* and paste the production token only when ready to buy real labels.
+   - **GoShippo** / **EasyPost** — one API token; its prefix (`shippo_test_`/`shippo_live_`, `EZTK`/`EZAK`) sets the environment.
+   - **ShipStation (API v2)** — paste the v2 API key from ShipStation → Settings → Account → API Settings (needs a Standard plan or higher; one active v2 key per account). ShipStation has no sandbox: switch **Test labels** to *On* to buy free test labels while verifying the flow (they are not valid for shipping, and their test tracking numbers are still written back to Shopify/BackOffice exactly like sandbox labels), then *Off* for live labels. Rates are fetched for every carrier connected to the account — hide unwanted services under *ShipStation shipping services*.
 2. **Origin address** — your ship-from address, used for every rate request.
 3. **BackOffice SQL Server** — host/port/database/user/password, *Test connection* runs `SELECT TOP 1` on `Invoices_tbl`.
 4. **Shopify stores** — one row per store: name, `*.myshopify.com` domain, Admin API access token from a custom app with scopes:
