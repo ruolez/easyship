@@ -11,12 +11,39 @@
   <div class="container">
     <div class="scan-hero">
       <div class="card scan-card">
+        <!-- Station bar: the per-station context (store + Auto Mode) lives in a
+             slim strip above the scan box instead of a settings section below it. -->
+        <div class="station-bar">
+          <div class="station-group">
+            <span class="station-label">Store</span>
+            <select id="source-select" class="station-select" aria-label="Store or database"></select>
+          </div>
+          <div class="station-group station-auto">
+            <label class="switch switch-bar">
+              <input type="checkbox" id="auto-mode">
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="station-label">Auto Mode</span>
+            </label>
+            <button type="button" class="station-summary" id="auto-summary" style="display:none"
+                    aria-controls="auto-preset" aria-expanded="false"></button>
+          </div>
+        </div>
+        <div id="auto-preset" class="auto-preset" style="display:none">
+          <div class="auto-preset-grid">
+            <div class="field" id="auto-carrier-field"><label>Carrier</label><select id="auto-carrier"></select></div>
+            <div class="field" id="auto-service-field"><label>Service</label><select id="auto-service"></select></div>
+            <div class="field" id="auto-service-name-field" style="display:none"><label>Service name</label><input id="auto-service-name" placeholder="e.g. UPS Ground"></div>
+            <div class="field"><label>Box</label><select id="auto-box"></select></div>
+          </div>
+          <div class="auto-status" id="auto-status"></div>
+        </div>
+
+        <div class="scan-body">
         <div class="scan-head">
           <div>
             <h1>Scan an order</h1>
             <p class="scan-sub">Scan or type the order / invoice number, then press <kbd>Enter</kbd></p>
           </div>
-          <span class="scan-mode-pill" id="scan-mode-pill" style="display:none"></span>
         </div>
 
         <div class="scan-input-group">
@@ -25,38 +52,6 @@
           <button class="btn btn-primary" id="lookup-btn">Look up</button>
         </div>
         <div class="scan-status" id="lookup-status"></div>
-
-        <div class="station-settings">
-          <div class="station-title">Station settings</div>
-
-          <div class="setting-row">
-            <label class="switch">
-              <input type="checkbox" id="auto-detect">
-              <span class="switch-track" aria-hidden="true"></span>
-              <span class="switch-text"><strong>Auto-detect store</strong><small>Pick the store from the order number prefix</small></span>
-            </label>
-            <div class="field setting-inline" id="source-field">
-              <label for="source-select">Store / Database</label>
-              <select id="source-select"></select>
-            </div>
-          </div>
-
-          <div class="setting-row">
-            <label class="switch">
-              <input type="checkbox" id="auto-mode">
-              <span class="switch-track" aria-hidden="true"></span>
-              <span class="switch-text"><strong>Auto Mode</strong><small>Weigh, rate, buy and print without clicks</small></span>
-            </label>
-          </div>
-          <div id="auto-preset" class="auto-preset" style="display:none">
-            <div class="auto-preset-grid">
-              <div class="field" id="auto-carrier-field"><label>Carrier</label><select id="auto-carrier"></select></div>
-              <div class="field" id="auto-service-field"><label>Service</label><select id="auto-service"></select></div>
-              <div class="field" id="auto-service-name-field" style="display:none"><label>Service name</label><input id="auto-service-name" placeholder="e.g. UPS Ground"></div>
-              <div class="field"><label>Box</label><select id="auto-box"></select></div>
-            </div>
-            <div class="auto-status" id="auto-status"></div>
-          </div>
         </div>
       </div>
     </div>

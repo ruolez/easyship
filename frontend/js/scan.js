@@ -9,7 +9,11 @@ initNav('scan').then(() => {
 const sourceSelect = document.getElementById('source-select');
 const numberInput = document.getElementById('order-number');
 const statusEl = document.getElementById('lookup-status');
-const autoDetectToggle = document.getElementById('auto-detect');
+
+/* Auto-detect is the store select's first option rather than a separate
+   toggle — one control tells the whole story. */
+const AUTO_SOURCE = 'auto';
+const isAutoDetect = () => sourceSelect.value === AUTO_SOURCE;
 
 /* Active sources with their configured prefixes, for auto-detect. */
 let sources = [];
@@ -37,23 +41,18 @@ async function loadSources() {
       .join('')}</optgroup>`);
   }
   if (!groups.length) {
-    sourceSelect.innerHTML = '<option value="">No sources configured — see Settings</option>';
+    sourceSelect.innerHTML = '<option value="">No sources — see Settings</option>';
+    sourceSelect.disabled = true;
     return;
   }
-  sourceSelect.innerHTML = groups.join('');
+  sourceSelect.innerHTML = `<option value="${AUTO_SOURCE}">Auto-detect (order prefix)</option>` + groups.join('');
   const last = localStorage.getItem('easyship.lastSource');
-  if (last && sourceSelect.querySelector(`option[value="${last}"]`)) {
+  if (localStorage.getItem('easyship.autoDetect') === '1') {
+    sourceSelect.value = AUTO_SOURCE;
+  } else if (last && sourceSelect.querySelector(`option[value="${last}"]`)) {
     sourceSelect.value = last;
   }
-  applyAutoDetect();
   numberInput.focus();
-}
-
-/* Reflect the auto-detect toggle: the manual store picker only shows when
-   detection is off (progressive disclosure — one fewer control to read). */
-function applyAutoDetect() {
-  sourceSelect.disabled = autoDetectToggle.checked;
-  document.getElementById('source-field').style.display = autoDetectToggle.checked ? 'none' : '';
 }
 
 /* Resolve a scanned number to a source via configured prefixes.
@@ -126,9 +125,11 @@ async function reshipGate(what, numbers, note) {
 const AUTO_MODE_KEY = 'easyship.autoMode';
 const AUTO_PRESET_KEY = 'easyship.autoPreset';
 const autoToggle = document.getElementById('auto-mode');
+const autoSummary = document.getElementById('auto-summary');
 let autoServices = [];
 let autoHasCatalog = true;
 let autoBoxes = [];
+let autoEditorOpen = false;
 
 function readAutoPreset() {
   try {
@@ -163,8 +164,14 @@ async function initAutoMode() {
   autoToggle.checked = localStorage.getItem(AUTO_MODE_KEY) === '1';
   autoToggle.addEventListener('change', async () => {
     localStorage.setItem(AUTO_MODE_KEY, autoToggle.checked ? '1' : '0');
+    // Opening straight into the editor only when something still needs choosing.
+    autoEditorOpen = autoToggle.checked && !autoReady();
     await renderAutoPreset();
     numberInput.focus();
+  });
+  autoSummary.addEventListener('click', () => {
+    autoEditorOpen = !autoEditorOpen;
+    renderAutoPreset();
   });
   window.addEventListener('easyship:provider', () => renderAutoPreset());
   document.getElementById('auto-carrier').addEventListener('change', () => {
@@ -182,8 +189,9 @@ async function initAutoMode() {
 
 async function renderAutoPreset() {
   const wrap = document.getElementById('auto-preset');
-  if (!autoToggle.checked) { wrap.style.display = 'none'; renderAutoStatus(); return; }
-  wrap.style.display = '';
+  wrap.style.display = autoToggle.checked && autoEditorOpen ? '' : 'none';
+  autoSummary.setAttribute('aria-expanded', String(autoToggle.checked && autoEditorOpen));
+  if (!autoToggle.checked) { renderAutoStatus(); return; }
   const provider = window.activeProvider ? window.activeProvider() : '';
   const status = document.getElementById('auto-status');
   status.textContent = 'Loading services…';
@@ -246,29 +254,27 @@ function saveAutoService() {
 
 function renderAutoStatus() {
   const status = document.getElementById('auto-status');
-  const pill = document.getElementById('scan-mode-pill');
   const svc = currentServicePreset();
   const box = autoBoxes.find((b) => String(b.id) === String(readAutoPreset().box_id));
   if (!autoToggle.checked) {
-    pill.style.display = 'none';
+    autoSummary.style.display = 'none';
     return;
   }
-  pill.style.display = '';
+  autoSummary.style.display = '';
   if (!window.activeProvider || !window.activeProvider()) {
+    autoSummary.className = 'station-summary err';
+    autoSummary.textContent = 'Select a provider';
     status.innerHTML = '<span class="chip static err">Select a shipping provider in the sidebar</span>';
-    pill.className = 'scan-mode-pill off';
-    pill.textContent = 'Auto Mode · needs setup';
   } else if (autoReady()) {
-    status.innerHTML = `<span class="chip static ok">✓ Ready</span>`
-      + `<span class="auto-summary">${esc(svc.service_name || 'service')} · ${box ? `${box.length}×${box.width}×${box.height} in` : 'box'}</span>`
+    autoSummary.className = 'station-summary ok';
+    autoSummary.textContent = `${svc.service_name || 'service'} · ${box ? `${box.length}×${box.width}×${box.height} in` : 'box'}`;
+    status.innerHTML = '<span class="chip static ok">✓ Ready</span>'
       + '<span class="auto-hint">Scanned orders are weighed, rated, bought and printed — Esc on the Ship page switches back to manual.</span>';
-    pill.className = 'scan-mode-pill';
-    pill.textContent = `Auto · ${svc.service_name || 'service'}`;
   } else {
+    autoSummary.className = 'station-summary warn';
+    autoSummary.textContent = 'Set service & box';
     status.innerHTML = '<span class="chip static warn">Choose a service and a box</span>'
       + '<span class="auto-hint">Auto Mode stays off until both are set.</span>';
-    pill.className = 'scan-mode-pill off';
-    pill.textContent = 'Auto Mode · needs setup';
   }
 }
 
@@ -283,7 +289,7 @@ async function lookup() {
   if (!number) { numberInput.focus(); return; }
 
   let kind, id;
-  if (autoDetectToggle.checked) {
+  if (isAutoDetect()) {
     const res = detectSource(number);
     if (res.error === 'none') {
       statusEl.innerHTML = '<span class="chip static err">✕ No store matches this order number</span>';
@@ -298,12 +304,10 @@ async function lookup() {
       return;
     }
     ({ kind, id } = res.source);
-    sourceSelect.value = `${kind}:${id}`;
     statusEl.innerHTML = `<span class="chip static ok">Detected: ${esc(res.source.name)}</span> <span class="spinner"></span>`;
   } else {
     const source = sourceSelect.value;
     if (!source) { snackbar('Configure a BackOffice database or Shopify store in Settings first', 'error'); return; }
-    localStorage.setItem('easyship.lastSource', source);
     [kind, id] = source.split(':');
     statusEl.innerHTML = '<span class="spinner"></span>';
   }
@@ -345,12 +349,9 @@ numberInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); lookup(); }
 });
 document.getElementById('lookup-btn').addEventListener('click', lookup);
-sourceSelect.addEventListener('change', () => numberInput.focus());
-
-autoDetectToggle.checked = localStorage.getItem('easyship.autoDetect') === '1';
-autoDetectToggle.addEventListener('change', () => {
-  localStorage.setItem('easyship.autoDetect', autoDetectToggle.checked ? '1' : '0');
-  applyAutoDetect();
+sourceSelect.addEventListener('change', () => {
+  localStorage.setItem('easyship.autoDetect', isAutoDetect() ? '1' : '0');
+  if (!isAutoDetect() && sourceSelect.value) localStorage.setItem('easyship.lastSource', sourceSelect.value);
   statusEl.innerHTML = '';
   numberInput.focus();
 });

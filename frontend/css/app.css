@@ -894,17 +894,54 @@ td { font-variant-numeric: tabular-nums; }
 /* ---------- Scan page: one dominant action (the scan box), station
    settings disclosed below it as switches ---------- */
 .scan-hero { max-width: 620px; margin: 6vh auto 18px; }
-.scan-card { padding: 28px 32px 22px; }
+.scan-card { padding: 0; overflow: hidden; }
+.scan-body { padding: 24px 32px 22px; }
 .scan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .scan-head h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.2px; margin: 0 0 4px; }
 .scan-sub { color: var(--text-secondary); font-size: 13px; margin: 0; }
-.scan-mode-pill {
-  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
-  padding: 5px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 650; letter-spacing: 0.3px;
-  background: var(--success-light); color: var(--success); border: 1px solid rgba(22, 163, 74, 0.25);
+
+/* ---------- Station bar: per-station context (store + Auto Mode) as a slim
+   strip across the top of the scan card ---------- */
+.station-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 18px; background: var(--surface-sunken);
+  border-bottom: 1px solid var(--outline);
 }
-.scan-mode-pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.scan-mode-pill.off { background: var(--warning-light); color: var(--warning); border-color: rgba(217, 119, 6, 0.3); }
+.station-group { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.station-label {
+  font-size: 10.5px; font-weight: 650; letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--text-secondary); white-space: nowrap;
+}
+.station-select {
+  height: 30px; max-width: 240px; padding: 0 26px 0 10px; font-family: inherit; font-size: 12.5px;
+  font-weight: 550; color: var(--on-surface); background: var(--surface); border: 1px solid var(--outline-strong);
+  border-radius: 8px; cursor: pointer; text-overflow: ellipsis;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2364748b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 9px center;
+}
+.station-select:focus-visible { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+.station-select:disabled { color: var(--text-secondary); cursor: default; }
+.station-auto { margin-left: auto; }
+.switch-bar { flex: 0 0 auto; gap: 8px; }
+.switch-bar .station-label { color: var(--on-surface); }
+
+/* Auto Mode state chip in the bar — click to open/close the preset editor. */
+.station-summary {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px 0 11px;
+  border-radius: 999px; border: 1px solid transparent; font-family: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer; max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.station-summary::after {
+  content: ''; flex: 0 0 auto; width: 8px; height: 5px;
+  background: currentColor; opacity: 0.7;
+  clip-path: polygon(0 0, 50% 100%, 100% 0);
+}
+.station-summary[aria-expanded="true"]::after { clip-path: polygon(0 100%, 50% 0, 100% 100%); }
+.station-summary:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--primary-ring); }
+.station-summary.ok { background: var(--success-light); color: var(--success); border-color: rgba(22, 163, 74, 0.25); }
+.station-summary.warn { background: var(--warning-light); color: var(--warning); border-color: rgba(217, 119, 6, 0.3); }
+.station-summary.err { background: var(--error-light); color: var(--error); border-color: rgba(220, 38, 38, 0.25); }
 
 .scan-input-group {
   display: flex; align-items: stretch;
@@ -923,16 +960,8 @@ td { font-variant-numeric: tabular-nums; }
 .scan-input-group .btn { border-radius: 0; height: auto; padding: 0 22px; font-size: 14px; }
 .scan-status { min-height: 22px; margin-top: 10px; font-size: 13px; }
 
-.station-settings { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--outline); }
-.station-title { font-size: 11px; font-weight: 650; letter-spacing: 0.6px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 12px; }
-.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; }
-.setting-row + .setting-row { border-top: 1px solid var(--outline); }
-.setting-inline { flex: 0 1 260px; }
-.setting-inline label { display: none; }
-.setting-inline select { height: 36px; font-size: 13.5px; }
-
 /* Toggle switch — instant-effect settings read better as switches than checkboxes. */
-.switch { display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; flex: 1; min-width: 0; }
+.switch { display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; min-width: 0; }
 .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
 .switch-track {
   position: relative; flex: 0 0 auto; width: 38px; height: 22px; border-radius: 999px;
@@ -945,32 +974,24 @@ td { font-variant-numeric: tabular-nums; }
 .switch input:checked + .switch-track { background: var(--primary); }
 .switch input:checked + .switch-track::after { transform: translateX(16px); }
 .switch input:focus-visible + .switch-track { box-shadow: 0 0 0 3px var(--primary-ring); }
-.switch-text { display: flex; flex-direction: column; line-height: 1.25; }
-.switch-text strong { font-size: 14px; font-weight: 600; color: var(--on-surface); }
-.switch-text small { font-size: 12px; color: var(--text-secondary); }
-
-/* Auto Mode preset — a small config card attached under its switch: pickers on
-   top, one slim status line under a hairline instead of chip-plus-paragraph. */
-.auto-preset {
-  margin: 2px 0 8px 50px; border: 1px solid var(--outline); border-radius: 10px;
-  background: var(--surface-sunken); overflow: hidden;
-}
-.auto-preset-grid { display: grid; grid-template-columns: 1fr 1.4fr 1.1fr; gap: 10px; padding: 12px 14px; }
+/* Auto Mode preset editor — a strip that folds out of the station bar:
+   pickers on top, one slim status line under a hairline. */
+.auto-preset { background: var(--surface-sunken); border-bottom: 1px solid var(--outline); }
+.auto-preset-grid { display: grid; grid-template-columns: 1fr 1.4fr 1.1fr; gap: 10px; padding: 12px 18px; }
 .auto-preset .field { gap: 4px; }
 .auto-preset .field label { font-size: 10px; letter-spacing: 0.4px; }
 .auto-preset .field select, .auto-preset .field input { height: 32px; font-size: 13px; background: var(--surface); }
 .auto-status {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
-  padding: 9px 14px; border-top: 1px solid var(--outline); background: var(--surface);
+  padding: 8px 18px; border-top: 1px solid var(--outline); background: var(--surface);
   font-size: 12.5px; color: var(--text-secondary); line-height: 1.4;
 }
-.auto-status .auto-summary { font-weight: 600; color: var(--on-surface); }
-.auto-status .auto-hint { flex-basis: 100%; font-size: 12px; }
+.auto-status .auto-hint { font-size: 12px; }
 @media (max-width: 640px) {
-  .auto-preset { margin-left: 0; }
   .auto-preset-grid { grid-template-columns: 1fr; }
-  .setting-row { flex-direction: column; align-items: stretch; }
-  .setting-inline { flex: 1 1 auto; }
+  .station-auto { margin-left: 0; width: 100%; justify-content: space-between; }
+  .station-select { max-width: none; flex: 1; }
+  .station-bar .station-group:first-child { width: 100%; }
 }
 .scan-links { max-width: 620px; margin: 0 auto; color: var(--text-secondary); font-size: 13px; text-align: center; }
 
@@ -1145,13 +1166,4 @@ table.striped.parcels-table tbody tr:hover td.actions { background: var(--surfac
 .copy-btn:hover { opacity: 1; background: var(--primary-light); color: var(--primary); }
 .copy-btn.copied { opacity: 1; color: var(--success); }
 
-.auto-detect-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--on-surface);
-}
-.auto-detect-toggle input { width: 16px; height: 16px; cursor: pointer; }
 select:disabled { opacity: 0.55; cursor: not-allowed; }
