@@ -197,7 +197,7 @@ function addParcelRow(weight = '', length = '', width = '', height = '') {
   const n = document.querySelectorAll('.parcel-row').length + 1;
   const boxOptions = ['<option value="">Custom size</option>']
     .concat(savedBoxes.map((b) =>
-      `<option value="${b.id}">${esc(b.name)} — ${b.length}×${b.width}×${b.height}</option>`))
+      `<option value="${b.id}">${b.length}×${b.width}×${b.height} in</option>`))
     .join('');
   div.innerHTML = `
     <div class="parcel-num">${n}</div>

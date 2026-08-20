@@ -185,11 +185,10 @@ async function loadBoxes() {
   const tbody = document.getElementById('boxes-body');
   tbody.innerHTML = boxes.length
     ? boxes.map((b) => `<tr>
-        <td><strong>${esc(b.name)}</strong></td>
-        <td class="mono">${b.length} × ${b.width} × ${b.height}</td>
+        <td class="mono"><strong>${b.length} × ${b.width} × ${b.height}</strong></td>
         <td><button class="btn btn-danger btn-small" onclick="deleteBox(${b.id})">Delete</button></td>
       </tr>`).join('')
-    : '<tr><td colspan="3" class="text-secondary">No box sizes yet.</td></tr>';
+    : '<tr><td colspan="2" class="text-secondary">No box sizes yet.</td></tr>';
 }
 
 document.getElementById('add-box').addEventListener('click', async () => {
@@ -197,13 +196,12 @@ document.getElementById('add-box').addEventListener('click', async () => {
     await api('/api/boxes', {
       method: 'POST',
       body: {
-        name: document.getElementById('box-name').value,
         length: document.getElementById('box-length').value,
         width: document.getElementById('box-width').value,
         height: document.getElementById('box-height').value,
       },
     });
-    ['box-name', 'box-length', 'box-width', 'box-height'].forEach((id) => {
+    ['box-length', 'box-width', 'box-height'].forEach((id) => {
       document.getElementById(id).value = '';
     });
     snackbar('Box added', 'success');

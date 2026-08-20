@@ -322,7 +322,8 @@ def test_easyship():
 @login_required
 def list_boxes():
     rows = db.query(
-        "SELECT id, name, length, width, height, is_active FROM boxes WHERE is_active ORDER BY name"
+        """SELECT id, name, length, width, height, is_active FROM boxes
+           WHERE is_active ORDER BY length * width * height, length, width, height"""
     )
     return jsonify([
         {**r, "length": float(r["length"]), "width": float(r["width"]), "height": float(r["height"])}
@@ -334,13 +335,14 @@ def list_boxes():
 @admin_required
 def create_box():
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
     try:
         dims = [float(data.get(k)) for k in ("length", "width", "height")]
-        if not name or any(d <= 0 for d in dims):
+        if any(d <= 0 for d in dims):
             raise ValueError
     except (TypeError, ValueError):
-        return api_error("Name and positive length/width/height (inches) are required")
+        return api_error("Positive length/width/height (inches) are required")
+    # A box is identified by its dimensions — the name is derived, not chosen.
+    name = "×".join(f"{d:g}" for d in dims)
     row = db.execute(
         "INSERT INTO boxes (name, length, width, height) VALUES (%s, %s, %s, %s) RETURNING id",
         (name, *dims),
