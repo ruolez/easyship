@@ -277,7 +277,19 @@ def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_number
     result = data["fulfillmentCreate"]
     if result.get("userErrors"):
         raise ShopifyError("; ".join(e["message"] for e in result["userErrors"]))
-    return result["fulfillment"]
+    created = result["fulfillment"]
+    if all_numbers and len(all_numbers) > 1 and created and created.get("id"):
+        # fulfillmentCreate has been seen keeping only one of the numbers;
+        # fulfillmentTrackingInfoUpdate reliably sets the full list, so re-assert
+        # every box's number on the new fulfillment (no second customer email).
+        # If this follow-up fails, the writeback is marked errored and a retry
+        # lands in _append_tracking, which merges the missing numbers back in.
+        _update_tracking(
+            store_id, created["id"],
+            {"company": courier_name or "Other", "numbers": list(all_numbers)},
+            notify=False,
+        )
+    return created
 
 
 def _active_fulfillments(store_id, order_gid):

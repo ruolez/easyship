@@ -662,7 +662,13 @@ def run_group_writebacks(group_id):
     if not ready:
         return {"skipped": "no tracking numbers yet"}
     primary = rows[0]
-    numbers = [r["tracking_number"] for r in rows if r["tracking_number"]]
+    # Every number of every box (a box's shipment can carry several parcels),
+    # deduped in box order.
+    numbers = []
+    for r in rows:
+        for n in (r["tracking_numbers"] or ([r["tracking_number"]] if r["tracking_number"] else [])):
+            if n and n not in numbers:
+                numbers.append(n)
     results = {}
     errors = []
 
