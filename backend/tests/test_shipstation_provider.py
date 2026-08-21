@@ -51,10 +51,10 @@ class FakeResponse:
 
 
 class CombineRatesTest(unittest.TestCase):
-    def test_single_box_sums_all_amounts_and_flags_cheapest_best_value(self):
-        box = [rate(UPS, "ups_ground", 10.00, other=1.50, confirmation=0.0, days=3),
-               rate(FEDEX, "fedex_ground", 9.00, other=3.00, days=2)]
-        out = [r.to_ui() for r in ss._combine_rates([box], CATALOG, NAMES)]
+    def test_sums_all_amounts_and_flags_cheapest_best_value(self):
+        rates = [rate(UPS, "ups_ground", 10.00, other=1.50, confirmation=0.0, days=3),
+                 rate(FEDEX, "fedex_ground", 9.00, other=3.00, days=2)]
+        out = [r.to_ui() for r in ss._combine_rates(rates, CATALOG, NAMES)]
         self.assertEqual(out, [
             {"provider": "shipstation", "courier_service_id": f"{UPS}:ups_ground",
              "courier_name": "UPS® Ground", "umbrella_name": "UPS", "total_charge": 11.5,
@@ -64,27 +64,32 @@ class CombineRatesTest(unittest.TestCase):
              "currency": "USD", "min_delivery_time": 2, "max_delivery_time": 2, "value_for_money_rank": None},
         ])
 
-    def test_multi_box_keeps_only_common_services_and_sums_across_boxes(self):
-        box1 = [rate(UPS, "ups_ground", 10.0, days=3), rate(UPS, "ups_nda", 40.0, days=1)]
-        box2 = [rate(UPS, "ups_ground", 12.0, days=4), rate(FEDEX, "fedex_ground", 9.0)]
-        out = [(r.provider_service_id, r.total_charge, r.max_delivery_time)
-               for r in ss._combine_rates([box1, box2], CATALOG, NAMES)]
-        self.assertEqual(out, [(f"{UPS}:ups_ground", 22.0, 4)])
-
     def test_invalid_and_errored_rates_are_dropped(self):
-        box = [rate(UPS, "ups_ground", 10.0, validation_status="invalid"),
-               rate(UPS, "ups_nda", 40.0, error_messages=["Package too heavy"]),
-               rate(FEDEX, "fedex_ground", 9.0)]
-        out = [r.provider_service_id for r in ss._combine_rates([box], CATALOG, NAMES)]
+        rates = [rate(UPS, "ups_ground", 10.0, validation_status="invalid"),
+                 rate(UPS, "ups_nda", 40.0, error_messages=["Package too heavy"]),
+                 rate(FEDEX, "fedex_ground", 9.0)]
+        out = [r.provider_service_id for r in ss._combine_rates(rates, CATALOG, NAMES)]
         self.assertEqual(out, [f"{FEDEX}:fedex_ground"])
 
     def test_cheapest_duplicate_service_wins_and_names_fall_back_to_service_type(self):
-        box = [rate(UPS, "ups_ground", 12.0), rate(UPS, "ups_ground", 10.0)]
-        out = [(r.courier_name, r.umbrella_name, r.total_charge) for r in ss._combine_rates([box])]
+        rates = [rate(UPS, "ups_ground", 12.0), rate(UPS, "ups_ground", 10.0)]
+        out = [(r.courier_name, r.umbrella_name, r.total_charge) for r in ss._combine_rates(rates)]
         self.assertEqual(out, [("UPS_GROUND", "UPS", 10.0)])
 
-    def test_box_without_rates_yields_no_combined_rates(self):
-        self.assertEqual(ss._combine_rates([[rate(UPS, "ups_ground", 10.0)], []]), [])
+    def test_no_rates_yields_no_quotes(self):
+        self.assertEqual(ss._combine_rates([]), [])
+
+
+class BoxIdTest(unittest.TestCase):
+    def test_single_box_keeps_the_plain_shipment_id(self):
+        self.assertEqual(ss._box_id("se-1", 0, 1), "se-1")
+        self.assertEqual(ss._split_box_id("se-1"), ("se-1", None))
+
+    def test_multi_box_ids_round_trip(self):
+        ids = [ss._box_id("se-1", i, 3) for i in range(3)]
+        self.assertEqual(ids, ["se-1#1", "se-1#2", "se-1#3"])
+        self.assertEqual([ss._split_box_id(b) for b in ids],
+                         [("se-1", 0), ("se-1", 1), ("se-1", 2)])
 
 
 class ServiceIdTest(unittest.TestCase):
@@ -121,6 +126,30 @@ class LabelStateTest(unittest.TestCase):
         state = ss._to_state(self.label("error", tracking_number=None))
         self.assertEqual((state.label_status, state.tracking_numbers, state.error_message),
                          (LabelStatus.FAILED, [], "Label rejected by ShipStation"))
+
+    def test_multi_package_label_gives_each_box_its_own_tracking_and_split_cost(self):
+        label = self.label("completed", tracking_number="1Z-MASTER", packages=[
+            {"package_id": "p1", "tracking_number": "1Z-BOX1",
+             "label_download": {"pdf": "https://l/1.pdf"}},
+            {"package_id": "p2", "tracking_number": "1Z-BOX2",
+             "label_download": {"pdf": "https://l/2.pdf"}},
+        ])
+        s1 = ss._to_state(label, CATALOG, NAMES, box_id="se-s-1#1")
+        s2 = ss._to_state(label, CATALOG, NAMES, box_id="se-s-1#2")
+        self.assertEqual(
+            (s1.tracking_numbers, s1.cost, s2.tracking_numbers, s2.cost,
+             s1.provider_shipment_id, s2.provider_shipment_id),
+            (["1Z-BOX1"], 4.5, ["1Z-BOX2"], 4.5, "se-l-1", "se-l-1"))
+        self.assertEqual(
+            (ss._download_url(s1.raw, "pdf"), ss._download_url(s2.raw, "pdf")),
+            ("https://l/1.pdf", "https://l/2.pdf"))
+
+    def test_single_package_label_uses_the_whole_label_download(self):
+        label = self.label("completed", label_download={"pdf": "https://l/all.pdf"},
+                           packages=[{"tracking_number": "1Z999"}])
+        state = ss._to_state(label, CATALOG, NAMES, box_id="se-s-1")
+        self.assertEqual((state.tracking_numbers, state.cost, ss._download_url(state.raw, "pdf")),
+                         (["1Z999"], 9.0, "https://l/all.pdf"))
 
     def test_failed_state_from_purchase_rejection(self):
         state = ss._failed_state("se-s-1", ProviderError("ShipStation error (400): bad address", status=400))
@@ -184,6 +213,69 @@ class BuildersTest(unittest.TestCase):
                     {"carrier_id": "se-2", "carrier_code": "ups", "friendly_name": "UPS", "nickname": "Returns"},
                     {"carrier_id": "se-3", "carrier_code": "usps", "friendly_name": "USPS", "nickname": "USPS"}]
         self.assertEqual(ss._carrier_names(carriers), {"se-1": "UPS · Main", "se-2": "UPS · Returns", "se-3": "USPS"})
+
+
+class GroupedBuyTest(unittest.TestCase):
+    """A multi-box order is ONE shipment: buying its boxes issues one purchase."""
+
+    def setUp(self):
+        self._orig = (ss._request, ss._carriers, ss._origin_address)
+        self.calls = []
+
+        def fake_request(method, path, json_body=None, params=None, timeout=45, auth=None):
+            self.calls.append((method, path))
+            if path == "/v2/labels" and method == "GET":
+                return {"labels": []}  # idempotency guard: nothing bought yet
+            if path.startswith("/v2/shipments/") and method == "GET":
+                return {"shipment_id": "se-s-9",
+                        "ship_to": {"name": "A", "address_line1": "1 Main", "city_locality": "X",
+                                    "state_province": "TX", "postal_code": "1", "country_code": "US"},
+                        "ship_from": None,
+                        "packages": [{"weight": {"value": 1, "unit": "pound"}},
+                                     {"weight": {"value": 2, "unit": "pound"}}]}
+            if path == "/v2/labels" and method == "POST":
+                self.post_body = json_body
+                return {"label_id": "se-l-9", "status": "completed", "carrier_id": UPS,
+                        "carrier_code": "ups", "service_code": "ups_ground",
+                        "shipment_cost": {"currency": "usd", "amount": 10.0},
+                        "packages": [{"tracking_number": "1Z-A"}, {"tracking_number": "1Z-B"}]}
+            raise AssertionError(f"unexpected {method} {path}")
+
+        ss._request = fake_request
+        ss._carriers = lambda auth, force=False: []
+        ss._origin_address = lambda: {"name": "W", "address_line1": "9 Dock", "city_locality": "D",
+                                      "state_province": "TX", "postal_code": "2", "country_code": "US"}
+        ss.db.get_setting = lambda key, default=None: "key" if key == "shipstation_api_key" else default
+
+    def tearDown(self):
+        ss._request, ss._carriers, ss._origin_address = self._orig
+        ss.db.get_setting = lambda *a, **k: None
+
+    def test_two_boxes_one_purchase_with_per_box_tracking(self):
+        out = ss.ShipStationProvider().buy_labels(["se-s-9#1", "se-s-9#2"], f"{UPS}:ups_ground")
+        posts = [c for c in self.calls if c == ("POST", "/v2/labels")]
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(len(self.post_body["shipment"]["packages"]), 2)
+        self.assertEqual(self.post_body["shipment"]["external_shipment_id"], "se-s-9")
+        self.assertEqual(
+            {bid: (st.tracking_numbers, st.cost, st.label_status) for bid, st in out.items()},
+            {"se-s-9#1": (["1Z-A"], 5.0, LabelStatus.READY),
+             "se-s-9#2": (["1Z-B"], 5.0, LabelStatus.READY)})
+
+    def test_cancel_voids_a_shared_label_once(self):
+        voids = []
+        orig = ss._request
+
+        def fake(method, path, json_body=None, params=None, timeout=45, auth=None):
+            voids.append((method, path))
+            return {"approved": True}
+
+        ss._request = fake
+        try:
+            errors = ss.ShipStationProvider().cancel_all(["se-l-9#1", "se-l-9#2", "se-l-9"])
+        finally:
+            ss._request = orig
+        self.assertEqual((errors, voids), ([], [("PUT", "/v2/labels/se-l-9/void")]))
 
 
 class DescriptorTest(unittest.TestCase):

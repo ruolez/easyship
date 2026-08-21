@@ -7,21 +7,25 @@ platforms, with these differences the adapter absorbs:
   * rating needs explicit `carrier_ids`, so the connected carriers are fetched
     (and cached briefly) and all of them are quoted;
   * native lb/in units — no conversion;
-  * rate ids are per request, so a stable "carrier_id:service_code" id
-    intersects services across boxes; the label is bought with the shipment
-    inline (the only purchase path that honors `test_label`) and tagged with
-    the draft shipment id as `external_shipment_id`, which is what makes buying
-    idempotent: every purchase is guarded by `GET /v2/labels?external_shipment_id=`.
+  * rate ids are per request, so a stable "carrier_id:service_code" id names
+    the chosen service; the label is bought with the shipment inline (the only
+    purchase path that honors `test_label`) and tagged with the shipment id as
+    `external_shipment_id`, which is what makes buying idempotent: every
+    purchase is guarded by `GET /v2/labels?external_shipment_id=`.
 
-One ShipStation shipment per box (mirrors the other providers) so the
-group/box machinery is reused unchanged.
+Unlike the other providers, a multi-box order is ONE ShipStation shipment
+with N packages — that's how the ShipStation site rates it, and it's the only
+way multi-package discounts (single pickup fee, UPS/FedEx multi-piece and
+hundredweight tiers) apply. The app's group/box machinery still wants one id
+and one label per box, so the adapter hands out synthetic per-box ids
+("<shipment_id>#<box>"): one purchase produces one label whose packages[]
+carry per-box tracking numbers and label downloads.
 """
 import hashlib
 import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import partial
 
 import requests
 
@@ -236,6 +240,23 @@ def _split_service_id(service_id):
     return carrier_id, service_code
 
 
+def _box_id(shipment_id, index, count):
+    """The per-box draft id: the shipment id itself for a single box, or
+    '<shipment_id>#<box>' when one multi-package shipment backs several boxes."""
+    return shipment_id if count == 1 else f"{shipment_id}#{index + 1}"
+
+
+def _split_box_id(box_id):
+    """('se-123', 0) from 'se-123#1'; (id, None) for a plain single-box id."""
+    base, _, idx = (box_id or "").partition("#")
+    if not idx:
+        return base, None
+    try:
+        return base, max(int(idx) - 1, 0)
+    except ValueError:
+        return base, None
+
+
 def _amount(value):
     if isinstance(value, dict):
         value = value.get("amount")
@@ -326,32 +347,24 @@ def _cheapest_by_service(rates):
     return out
 
 
-def _combine_rates(per_box_rates, catalog=None, carrier_names=None):
-    """One quote list across per-box rate lists: only services every box can
-    serve, price = sum across boxes. The cheapest combined rate is flagged as
-    best value (ShipStation has no best-value attribute of its own)."""
+def _combine_rates(rates, catalog=None, carrier_names=None):
+    """Quotes for one shipment (which may carry several packages): the cheapest
+    usable rate per service, sorted by price. The cheapest is flagged as best
+    value (ShipStation has no best-value attribute of its own)."""
     catalog = catalog or {}
     carrier_names = carrier_names or {}
-    per_box = [_cheapest_by_service(rs) for rs in per_box_rates]
-    if not per_box or any(not m for m in per_box):
-        return []
-    common = set(per_box[0])
-    for m in per_box[1:]:
-        common &= set(m)
     combined = []
-    for sid in common:
-        rs = [m[sid] for m in per_box]
-        first = rs[0]
-        key = (first.get("carrier_id"), first.get("service_code"))
-        days = max((int(r.get("delivery_days") or 0) for r in rs), default=0) or None
+    for sid, r in _cheapest_by_service(rates).items():
+        key = (r.get("carrier_id"), r.get("service_code"))
+        days = int(r.get("delivery_days") or 0) or None
         combined.append(Rate(
             provider="shipstation",
             provider_service_id=sid,
-            courier_name=catalog.get(key) or first.get("service_type") or first.get("service_code") or sid,
-            umbrella_name=(carrier_names.get(first.get("carrier_id"))
-                           or first.get("carrier_friendly_name") or first.get("carrier_code") or ""),
-            total_charge=round(sum(_rate_total(r) for r in rs), 2),
-            currency=((first.get("shipping_amount") or {}).get("currency") or "USD").upper(),
+            courier_name=catalog.get(key) or r.get("service_type") or r.get("service_code") or sid,
+            umbrella_name=(carrier_names.get(r.get("carrier_id"))
+                           or r.get("carrier_friendly_name") or r.get("carrier_code") or ""),
+            total_charge=_rate_total(r),
+            currency=((r.get("shipping_amount") or {}).get("currency") or "USD").upper(),
             min_delivery_time=days,
             max_delivery_time=days,
             value_for_money_rank=None,
@@ -373,12 +386,23 @@ def _label_status(label):
     return LabelStatus.NOT_CREATED
 
 
-def _to_state(label, catalog=None, carrier_names=None, error_message=None):
+def _to_state(label, catalog=None, carrier_names=None, error_message=None, box_id=None):
+    """One box's view of a label. A multi-package label backs several boxes:
+    the box's package supplies its tracking number and label download, and the
+    shipment cost is split evenly across packages."""
     catalog = catalog or {}
     carrier_names = carrier_names or {}
     status = _label_status(label)
     tracking = label.get("tracking_number")
     cost = _amount(label.get("shipment_cost")) + _amount(label.get("insurance_cost"))
+    raw = label
+    packages = label.get("packages") or []
+    _, idx = _split_box_id(box_id) if box_id else (None, None)
+    if idx is not None and len(packages) > 1:
+        pkg = packages[idx] if idx < len(packages) else {}
+        tracking = pkg.get("tracking_number") or tracking
+        cost = cost / len(packages)
+        raw = {**label, "_package_index": idx}
     key = (label.get("carrier_id"), label.get("service_code"))
     return ShipmentState(
         provider_shipment_id=label.get("label_id"),
@@ -388,8 +412,22 @@ def _to_state(label, catalog=None, carrier_names=None, error_message=None):
         courier_umbrella_name=carrier_names.get(label.get("carrier_id")) or label.get("carrier_code"),
         cost=round(cost, 2) if label.get("shipment_cost") is not None else None,
         error_message=(error_message or "Label rejected by ShipStation") if status == LabelStatus.FAILED else None,
-        raw=label,
+        raw=raw,
     )
+
+
+def _download_url(raw, fmt):
+    """The label file URL for one box: its own package's download on a
+    multi-package label, the whole label's otherwise."""
+    packages = raw.get("packages") or []
+    idx = raw.get("_package_index")
+    if idx is not None and len(packages) > 1:
+        download = (packages[idx] if idx < len(packages) else {}).get("label_download") or {}
+        # No per-package file -> nothing to print for this box; the whole-label
+        # document would duplicate every box's pages.
+        return download.get(fmt) or download.get("pdf") or download.get("href")
+    download = raw.get("label_download") or {}
+    return download.get(fmt) or download.get("pdf") or download.get("href")
 
 
 def _failed_state(sid, error):
@@ -457,51 +495,30 @@ class ShipStationProvider(ShippingProvider):
         ship_from = _origin_address()
         ship_to = _dest_address(destination)
         confirmation = CONFIRMATION.get((options or {}).get("signature") or "none")
-        bodies = []
-        for p in parcels:
-            shipment = {
-                "validate_address": "no_validation",
-                "ship_to": ship_to,
-                "ship_from": ship_from,
-                "packages": [_build_package(p)],
-            }
-            if confirmation:
-                shipment["confirmation"] = confirmation
-            bodies.append({"shipment": shipment, "rate_options": {"carrier_ids": carrier_ids}})
-
-        responses = [None] * len(bodies)
-        if len(bodies) == 1:
-            responses[0] = _request("POST", "/v2/rates", json_body=bodies[0], timeout=60, auth=auth)
-        else:
-            with ThreadPoolExecutor(max_workers=min(len(bodies), 6)) as pool:
-                futures = {
-                    pool.submit(partial(_request, "POST", "/v2/rates",
-                                        json_body=body, timeout=60, auth=auth)): i
-                    for i, body in enumerate(bodies)
-                }
-                errors = []
-                for future in as_completed(futures):
-                    i = futures[future]
-                    try:
-                        responses[i] = future.result()
-                    except ProviderError as e:
-                        errors.append(e)
-                # Unbought ShipStation shipments aren't charged, so orphans are harmless.
-                if errors:
-                    raise errors[0]
-
-        per_box_rates = []
-        for resp in responses:
-            rate_response = resp.get("rate_response") or {}
-            rates = rate_response.get("rates") or []
-            if not rates and rate_response.get("errors"):
-                msgs = [e.get("message") for e in rate_response["errors"] if isinstance(e, dict) and e.get("message")]
-                raise ProviderError("ShipStation rating failed: " + (" | ".join(msgs) or "no rates"))
-            per_box_rates.append(rates)
-        drafts = [DraftShipment(r.get("shipment_id")) for r in responses]
-        if any(not d.provider_shipment_id for d in drafts):
-            raise ProviderError("ShipStation did not return a shipment id for every box")
-        return drafts, _combine_rates(per_box_rates, _service_catalog(carriers), _carrier_names(carriers)), []
+        # One shipment carrying every box: multi-package rating is how the
+        # ShipStation site quotes, and the only way multi-package discounts
+        # (single pickup fee, multi-piece/hundredweight tiers) apply.
+        shipment = {
+            "validate_address": "no_validation",
+            "ship_to": ship_to,
+            "ship_from": ship_from,
+            "packages": [_build_package(p) for p in parcels],
+        }
+        if confirmation:
+            shipment["confirmation"] = confirmation
+        resp = _request("POST", "/v2/rates",
+                        json_body={"shipment": shipment, "rate_options": {"carrier_ids": carrier_ids}},
+                        timeout=60, auth=auth)
+        rate_response = resp.get("rate_response") or {}
+        rates = rate_response.get("rates") or []
+        if not rates and rate_response.get("errors"):
+            msgs = [e.get("message") for e in rate_response["errors"] if isinstance(e, dict) and e.get("message")]
+            raise ProviderError("ShipStation rating failed: " + (" | ".join(msgs) or "no rates"))
+        shipment_id = resp.get("shipment_id")
+        if not shipment_id:
+            raise ProviderError("ShipStation did not return a shipment id")
+        drafts = [DraftShipment(_box_id(shipment_id, i, len(parcels))) for i in range(len(parcels))]
+        return drafts, _combine_rates(rates, _service_catalog(carriers), _carrier_names(carriers)), []
 
     def get_excluded_service_ids(self):
         raw = db.get_setting(EXCLUDED_KEY)
@@ -544,13 +561,20 @@ class ShipStationProvider(ShippingProvider):
         catalog, names = _service_catalog(carriers), _carrier_names(carriers)
         origin = _origin_address()  # settings are read here, not in worker threads
 
-        def work(sid):
-            existing = self._existing_label(sid, auth)
+        # Several box ids can share one multi-package shipment — purchase once
+        # per shipment, then hand each box its own package's view of the label.
+        by_base = {}
+        for bid in provider_shipment_ids:
+            base, _ = _split_box_id(bid)
+            by_base.setdefault(base, []).append(bid)
+
+        def work(base):
+            existing = self._existing_label(base, auth)
             if existing is not None:
-                return _to_state(existing, catalog, names)
-            draft = _request("GET", f"/v2/shipments/{sid}", auth=auth)
+                return existing
+            draft = _request("GET", f"/v2/shipments/{base}", auth=auth)
             body = {
-                "shipment": _inline_shipment(draft, carrier_id, service_code, sid, origin),
+                "shipment": _inline_shipment(draft, carrier_id, service_code, base, origin),
                 "test_label": test_label,
                 "validate_address": "no_validation",
                 "label_format": label_format,
@@ -558,33 +582,55 @@ class ShipStationProvider(ShippingProvider):
                 "label_download_type": "url",
             }
             try:
-                label = _request("POST", "/v2/labels", json_body=body, timeout=90, auth=auth)
+                return _request("POST", "/v2/labels", json_body=body, timeout=90, auth=auth)
             except ProviderError as e:
                 if e.recoverable:
-                    raise
-                return _failed_state(sid, e)
-            return _to_state(label, catalog, names)
+                    raise  # captured per base by _map_parallel; the buy loop re-checks
+                return ("failed", e)  # deterministic rejection — don't retry it every poll
 
-        return _map_parallel(list(provider_shipment_ids), work)
+        results = _map_parallel(list(by_base), work)
+        out = {}
+        for base, bids in by_base.items():
+            res = results.get(base)
+            for bid in bids:
+                if isinstance(res, ProviderError):
+                    out[bid] = res
+                elif isinstance(res, tuple):
+                    out[bid] = _failed_state(bid, res[1])
+                else:
+                    out[bid] = _to_state(res, catalog, names, box_id=bid)
+        return out
 
     def poll_shipments(self, provider_shipment_ids, service_id=None):
         auth = _auth()
         carriers = _carriers(auth)
         catalog, names = _service_catalog(carriers), _carrier_names(carriers)
 
-        def work(sid):
-            label = self._existing_label(sid, auth)
-            if label is None:
-                return ShipmentState(provider_shipment_id=sid,
-                                     label_status=LabelStatus.NOT_CREATED, raw={})
-            return _to_state(label, catalog, names)
+        by_base = {}
+        for bid in provider_shipment_ids:
+            base, _ = _split_box_id(bid)
+            by_base.setdefault(base, []).append(bid)
 
-        return _map_parallel(list(provider_shipment_ids), work)
+        def work(base):
+            return self._existing_label(base, auth)
+
+        results = _map_parallel(list(by_base), work)
+        out = {}
+        for base, bids in by_base.items():
+            res = results.get(base)
+            for bid in bids:
+                if isinstance(res, ProviderError):
+                    out[bid] = res
+                elif res is None:
+                    out[bid] = ShipmentState(provider_shipment_id=bid,
+                                             label_status=LabelStatus.NOT_CREATED, raw={})
+                else:
+                    out[bid] = _to_state(res, catalog, names, box_id=bid)
+        return out
 
     def fetch_labels(self, state):
-        download = (state.raw or {}).get("label_download") or {}
         fmt = _label_format()
-        url = download.get(fmt) or download.get("pdf") or download.get("href")
+        url = _download_url(state.raw or {}, fmt)
         if not url:
             return []
         resp = requests.get(url, timeout=30)
@@ -597,7 +643,14 @@ class ShipStationProvider(ShippingProvider):
         """Ids are label ids after a purchase (void) or draft shipment ids before
         one (cancel) — both are `se-…`, so try the void first and fall back."""
         errors = []
-        for sid in [i for i in provider_shipment_ids if i]:
+        seen = set()
+        bases = []
+        for raw_id in provider_shipment_ids:
+            base, _ = _split_box_id(raw_id)
+            if base and base not in seen:
+                seen.add(base)
+                bases.append(base)
+        for sid in bases:
             try:
                 result = _request("PUT", f"/v2/labels/{sid}/void")
                 if result.get("approved") is False:
@@ -622,10 +675,11 @@ class ShipStationProvider(ShippingProvider):
         return errors
 
     def get_raw_shipment(self, provider_shipment_id):
+        base, _ = _split_box_id(provider_shipment_id)
         try:
-            return _request("GET", f"/v2/labels/{provider_shipment_id}")
+            return _request("GET", f"/v2/labels/{base}")
         except ProviderError:
-            return _request("GET", f"/v2/shipments/{provider_shipment_id}")
+            return _request("GET", f"/v2/shipments/{base}")
 
     # ---- settings surface ----
     def list_item_categories(self):
