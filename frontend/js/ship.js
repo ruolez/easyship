@@ -530,9 +530,9 @@ function showResult(s) {
       : `<span class="chip static err">✕ BackOffice update failed</span> <button class="btn btn-text btn-small" onclick="retryWriteback()">Retry</button>`);
   }
   if (s.printed === 'ok') {
-    chips.push('<span class="chip static ok">🖨 Sent to printer</span>');
+    chips.push(`<span class="chip static ok">${ICON_PRINTER} Sent to printer</span>`);
   } else if (s.printed && s.printed.startsWith('error')) {
-    chips.push(`<span class="chip static err">🖨 ${esc(s.printed)}</span> <button class="btn btn-text btn-small" onclick="printAgain(${s.id})">Print again</button>`);
+    chips.push(`<span class="chip static err">${ICON_PRINTER} ${esc(s.printed)}</span> <button class="btn btn-text btn-small" onclick="printAgain(${s.id})">Print again</button>`);
   }
   if (s.error_message) chips.push(`<div class="text-secondary mt-16">${esc(s.error_message)}</div>`);
   wb.innerHTML = chips.join(' ');
@@ -596,11 +596,11 @@ async function sendToZebra(url) {
   const wb = document.getElementById('r-writebacks');
   try {
     await ZebraPrint.printLabelUrl(url);
-    wb.innerHTML += ' <span class="chip static ok">🖨 Sent to printer</span>';
+    wb.innerHTML += ` <span class="chip static ok">${ICON_PRINTER} Sent to printer</span>`;
     snackbar('Label sent to Zebra printer', 'success');
   } catch (err) {
     cancelAutoAdvance(); // print failed — let the packer reprint before advancing
-    wb.innerHTML += ` <span class="chip static err">🖨 ${esc(err.message)}</span>
+    wb.innerHTML += ` <span class="chip static err">${ICON_PRINTER} ${esc(err.message)}</span>
       <button class="btn btn-text btn-small" onclick="printAgain()">Print again</button>`;
     snackbar(err.message, 'error');
   }

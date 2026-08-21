@@ -196,7 +196,7 @@ function render() {
         <td class="actions">
           ${canResume ? `<button class="btn btn-text btn-small" onclick="resumeBuy('${esc(s.group_id)}')">Resume labels</button>` : ''}
           ${s.has_label ? `<a class="btn btn-text btn-small" href="/api/shipments/${s.id}/label" target="_blank">Label</a>` : ''}
-          ${s.has_label ? `<button class="btn btn-text btn-small" onclick="reprint(${s.id})" title="Send to printer">🖨</button>` : ''}
+          ${s.has_label ? `<button class="btn btn-text btn-small" onclick="reprint(${s.id})" title="Send to printer" aria-label="Send to printer">${ICON_PRINTER}</button>` : ''}
           ${needsRetry ? `<button class="btn btn-text btn-small" onclick="retryWb(${s.id})">Retry writeback</button>` : ''}
           ${['label_created', 'fulfilled'].includes(s.status) ? `<button class="btn btn-danger btn-small" onclick="voidShipment(${s.id}, '${esc(ref)}', '${esc(s.source)}', ${s.box_total})">Undo</button>` : ''}
           ${s.status === 'voided' && s.error_message ? `<button class="btn btn-danger btn-small" onclick="retryUndo(${s.id})">Retry undo</button>` : ''}
