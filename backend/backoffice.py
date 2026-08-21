@@ -25,6 +25,13 @@ def _connect(db_id):
         raise BackofficeError(f"BackOffice connection failed ({cfg['name']}): {e}")
 
 
+def _clean_tracking(value):
+    """A usable tracking number, or "". BackOffice sometimes stores "0" as a
+    placeholder for none — treat it as empty everywhere."""
+    v = (value or "").strip()
+    return "" if v == "0" else v
+
+
 def _to_float(value):
     try:
         return float(str(value).strip())
@@ -52,7 +59,7 @@ def list_open_invoices(db_id, days=14, q=""):
     else:
         sql = select + """
             WHERE (Void IS NULL OR Void = 0)
-              AND (TrackingNo IS NULL OR LTRIM(RTRIM(TrackingNo)) = '')
+              AND (TrackingNo IS NULL OR LTRIM(RTRIM(TrackingNo)) IN ('', '0'))
               AND InvoiceDate >= DATEADD(day, -%s, GETDATE())
             ORDER BY InvoiceDate DESC
         """
@@ -69,7 +76,7 @@ def list_open_invoices(db_id, days=14, q=""):
         {
             "invoice_id": r["InvoiceID"],
             "invoice_number": r["InvoiceNumber"],
-            "tracking_no": (r["TrackingNo"] or "").strip() or None,
+            "tracking_no": _clean_tracking(r["TrackingNo"]) or None,
             "ship_date": r["ShipDate"].strftime("%m/%d/%Y") if r["ShipDate"] else
                          (r["InvoiceDate"].strftime("%m/%d/%Y") if r["InvoiceDate"] else ""),
             "business_name": r["BusinessName"],
@@ -144,7 +151,7 @@ def get_invoice(db_id, invoice_id):
         "invoice_id": inv["InvoiceID"],
         "invoice_number": inv["InvoiceNumber"],
         "business_name": inv["BusinessName"],
-        "tracking_no": inv["TrackingNo"],
+        "tracking_no": _clean_tracking(inv["TrackingNo"]) or None,
         "no_boxes": inv["NoBoxes"],
         "total_weight": _to_float(inv["TotalWeight"]),
         "invoice_total": float(inv["InvoiceTotal"]) if inv["InvoiceTotal"] is not None else None,
@@ -200,7 +207,7 @@ def clear_tracking(db_id, invoice_id, tracking_number, extra_numbers=None):
                 row = cur.fetchone()
                 if row is None:
                     raise BackofficeError(f"Invoice {invoice_id} not found")
-                current = (row[0] or "").strip()
+                current = _clean_tracking(row[0])
                 if current and current != (tracking_number or "").strip():
                     raise BackofficeError(
                         f"Invoice {invoice_id} now has a different tracking number "
@@ -227,7 +234,7 @@ def write_tracking(db_id, invoice_id, tracking_number, shipping_cost, extra_numb
             row = cur.fetchone()
             if row is None:
                 raise BackofficeError(f"Invoice {invoice_id} not found for tracking update")
-            current = (row[0] or "").strip()
+            current = _clean_tracking(row[0])
             notes = (row[1] or "").strip()
             reship = bool(current) and current != (tracking_number or "").strip()
             if reship:

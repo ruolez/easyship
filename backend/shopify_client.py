@@ -203,8 +203,8 @@ def get_order(store_id, order_gid):
         if f.get("status") == "CANCELLED":
             continue
         for t in f.get("trackingInfo") or []:
-            n = t.get("number")
-            if n and n not in existing_tracking:
+            n = (t.get("number") or "").strip()
+            if n and n != "0" and n not in existing_tracking:
                 existing_tracking.append(n)
     items = []
     total_weight_lb = 0.0
