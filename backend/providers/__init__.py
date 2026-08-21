@@ -60,5 +60,32 @@ def enabled_providers():
     return active or [get_provider("easyship")]
 
 
+def enabled_for_user(user_id, role):
+    """Enabled providers this user may ship with. Admins and users without an
+    assignment get every enabled provider. The empty-intersection case stays
+    empty — never fall back to Easyship for a restricted user. Reads the
+    assignment fresh from the DB so admin changes apply without re-login."""
+    active = enabled_providers()
+    if role == "admin" or not user_id:
+        return active
+    row = db.query("SELECT allowed_providers FROM users WHERE id = %s", (user_id,), one=True)
+    allowed = (row or {}).get("allowed_providers")
+    if not allowed:
+        return active
+    allowed = {str(n) for n in allowed}
+    return [p for p in active if p.name in allowed]
+
+
+def sanitize_allowed(names):
+    """An allowed_providers value ready to store: only registered names, in
+    registration order; None when empty or when nothing is actually excluded
+    (no selection = no restriction)."""
+    wanted = {str(n) for n in (names or [])}
+    clean = [n for n in registered_names() if n in wanted]
+    if not clean or len(clean) == len(registered_names()):
+        return None
+    return clean
+
+
 def descriptors():
     return [p.descriptor() for p in all_providers()]

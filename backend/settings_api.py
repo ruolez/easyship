@@ -149,11 +149,11 @@ def list_providers():
 @bp.get("/providers/enabled")
 @login_required
 def enabled_providers():
-    """The shipping platforms a packer can choose from — drives the nav
+    """The shipping platforms this user may ship with — drives the nav
     'Shipping with' selector and its environment badge."""
     return jsonify([
         {"name": p.name, "label": p.label, "test": p.is_test_mode()}
-        for p in providers.enabled_providers()
+        for p in providers.enabled_for_user(session["user_id"], session.get("role"))
     ])
 
 
@@ -253,6 +253,8 @@ def provider_available_services(name):
     provider = _provider_or_404(name)
     if not provider:
         return api_error("Unknown provider", 404)
+    if name not in [p.name for p in providers.enabled_for_user(session["user_id"], session.get("role"))]:
+        return api_error("This shipping integration is not enabled for your account", 403)
     try:
         services = provider.list_courier_services()
     except Exception as e:
@@ -456,7 +458,7 @@ def test_store(store_id):
 @admin_required
 def list_users():
     rows = db.query(
-        "SELECT id, username, role, is_active, created_at FROM users ORDER BY id"
+        "SELECT id, username, role, is_active, allowed_providers, created_at FROM users ORDER BY id"
     )
     return jsonify([{**r, "created_at": r["created_at"].isoformat()} for r in rows])
 
@@ -473,12 +475,13 @@ def create_user():
     existing = db.query("SELECT id FROM users WHERE username = %s", (username,), one=True)
     if existing:
         return api_error("Username already exists")
+    allowed = providers.sanitize_allowed(data.get("allowed_providers")) if role == "user" else None
     row = db.execute(
-        "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s) RETURNING id",
-        (username, generate_password_hash(password), role),
+        "INSERT INTO users (username, password_hash, role, allowed_providers) VALUES (%s, %s, %s, %s) RETURNING id",
+        (username, generate_password_hash(password), role, json.dumps(allowed) if allowed else None),
         returning=True,
     )
-    audit("user.create", {"username": username, "role": role})
+    audit("user.create", {"username": username, "role": role, "allowed_providers": allowed})
     return jsonify({"id": row["id"]})
 
 
@@ -498,6 +501,26 @@ def activate_user(user_id):
     db.execute("UPDATE users SET is_active = TRUE WHERE id = %s", (user_id,))
     audit("user.activate", {"id": user_id})
     return jsonify({"ok": True})
+
+
+@bp.put("/users/<int:user_id>/providers")
+@admin_required
+def set_user_providers(user_id):
+    """Assign which shipping integrations a user may ship with.
+    None/empty = unrestricted; admins are never restricted."""
+    row = db.query("SELECT id, role FROM users WHERE id = %s", (user_id,), one=True)
+    if not row:
+        return api_error("User not found", 404)
+    if row["role"] == "admin":
+        return api_error("Admins always have access to every integration")
+    data = request.get_json(silent=True) or {}
+    allowed = providers.sanitize_allowed(data.get("allowed_providers"))
+    db.execute(
+        "UPDATE users SET allowed_providers = %s WHERE id = %s",
+        (json.dumps(allowed) if allowed else None, user_id),
+    )
+    audit("user.providers", {"id": user_id, "allowed_providers": allowed})
+    return jsonify({"ok": True, "allowed_providers": allowed})
 
 
 @bp.put("/users/<int:user_id>/password")

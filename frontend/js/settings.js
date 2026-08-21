@@ -692,14 +692,54 @@ window.deleteStore = (id, name) => {
 };
 
 /* ---------- Users ---------- */
+/* Registered providers ({name, label}), for the per-user integration pickers. */
+let allProviders = [];
+
+async function loadAllProviders() {
+  if (!allProviders.length) {
+    try {
+      allProviders = (await api('/api/providers')).map((p) => ({ name: p.name, label: p.label }));
+    } catch { /* pickers degrade to "All" */ }
+  }
+  return allProviders;
+}
+
+function providerNamesToLabels(names) {
+  return names.map((n) => (allProviders.find((p) => p.name === n) || { label: n }).label);
+}
+
+function integrationsCell(u) {
+  if (u.role === 'admin' || !u.allowed_providers || !u.allowed_providers.length) return 'All';
+  return providerNamesToLabels(u.allowed_providers)
+    .map((l) => `<span class="chip static">${esc(l)}</span>`).join(' ');
+}
+
+function providerChecklistHtml(checkedNames) {
+  const all = !checkedNames || !checkedNames.length;
+  return `<div class="field mb-16" id="m-user-providers"><label>Allowed integrations</label>
+    <div class="svc-checklist">${allProviders.map((p) => `
+      <label class="svc-item"><input type="checkbox" class="m-user-provider" value="${esc(p.name)}"
+        ${all || checkedNames.includes(p.name) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}
+    </div>
+    <span class="hint">Which shipping integrations this user can ship with. All (or none) checked = no restriction.</span>
+  </div>`;
+}
+
+function checkedProviders() {
+  return [...document.querySelectorAll('.m-user-provider:checked')].map((el) => el.value);
+}
+
 async function loadUsers() {
-  const users = await api('/api/users');
+  const [users] = await Promise.all([api('/api/users'), loadAllProviders()]);
+  window.usersById = Object.fromEntries(users.map((u) => [u.id, u]));
   const tbody = document.getElementById('users-body');
   tbody.innerHTML = users.map((u) => `<tr>
     <td><strong>${esc(u.username)}</strong></td>
     <td>${esc(u.role)}</td>
+    <td>${integrationsCell(u)}</td>
     <td>${u.is_active ? '<span class="chip static ok">active</span>' : '<span class="chip static">inactive</span>'}</td>
     <td>
+      ${u.role !== 'admin' ? `<button class="btn btn-text btn-small" onclick="editUserProviders(${u.id}, '${esc(u.username)}')">Integrations</button>` : ''}
       <button class="btn btn-text btn-small" onclick="resetPassword(${u.id}, '${esc(u.username)}')">Reset password</button>
       ${u.is_active
         ? `<button class="btn btn-danger btn-small" onclick="deactivateUser(${u.id}, '${esc(u.username)}')">Deactivate</button>`
@@ -708,16 +748,48 @@ async function loadUsers() {
   </tr>`).join('');
 }
 
-document.getElementById('add-user').addEventListener('click', () => {
+window.editUserProviders = async (id, username) => {
+  await loadAllProviders();
+  const u = (window.usersById || {})[id] || {};
+  openModal(`
+    <h3>Integrations — ${esc(username)}</h3>
+    ${providerChecklistHtml(u.allowed_providers || [])}
+    <div class="actions">
+      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="m-user-providers-save">Save</button>
+    </div>`);
+  document.getElementById('m-user-providers-save').addEventListener('click', async () => {
+    try {
+      await api(`/api/users/${id}/providers`, {
+        method: 'PUT',
+        body: { allowed_providers: checkedProviders() },
+      });
+      closeModal();
+      snackbar('Integrations updated', 'success');
+      loadUsers();
+    } catch (err) {
+      snackbar(err.message, 'error');
+    }
+  });
+};
+
+document.getElementById('add-user').addEventListener('click', async () => {
+  await loadAllProviders();
   openModal(`
     <h3>Add user</h3>
     <div class="field mb-16"><label>Username</label><input id="m-user-name" autocomplete="off"></div>
     <div class="field mb-16"><label>Password</label><input type="password" id="m-user-pass" autocomplete="new-password"></div>
     <div class="field mb-16"><label>Role</label><select id="m-user-role"><option value="user">User</option><option value="admin">Admin</option></select></div>
+    ${providerChecklistHtml([])}
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="m-user-save">Create</button>
     </div>`);
+  // Admins always have every integration — hide the picker for the admin role.
+  const roleSel = document.getElementById('m-user-role');
+  roleSel.addEventListener('change', () => {
+    document.getElementById('m-user-providers').style.display = roleSel.value === 'admin' ? 'none' : '';
+  });
   document.getElementById('m-user-save').addEventListener('click', async () => {
     try {
       await api('/api/users', {
@@ -726,6 +798,7 @@ document.getElementById('add-user').addEventListener('click', () => {
           username: document.getElementById('m-user-name').value,
           password: document.getElementById('m-user-pass').value,
           role: document.getElementById('m-user-role').value,
+          allowed_providers: checkedProviders(),
         },
       });
       closeModal();

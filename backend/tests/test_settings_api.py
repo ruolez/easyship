@@ -22,6 +22,7 @@ CATALOG = [
 
 
 class FakeProvider:
+    name = "fake"
     label = "Fake"
 
     def __init__(self, catalog, excluded):
@@ -40,14 +41,15 @@ class AvailableServicesTest(unittest.TestCase):
         self.app = Flask(__name__)
         self.app.secret_key = "test"
         self.app.register_blueprint(settings_api.bp)
-        self._orig = (providers.get_provider, providers.registered_names)
+        self._orig = (providers.get_provider, providers.registered_names, providers.enabled_for_user)
         providers.registered_names = lambda: ["fake"]
 
     def tearDown(self):
-        providers.get_provider, providers.registered_names = self._orig
+        providers.get_provider, providers.registered_names, providers.enabled_for_user = self._orig
 
     def _call(self, provider):
         providers.get_provider = lambda name: provider
+        providers.enabled_for_user = lambda user_id, role: [provider]
         with self.app.test_request_context("/api/providers/fake/services/available"):
             session["user_id"] = 1
             return json.loads(settings_api.provider_available_services("fake").get_data())

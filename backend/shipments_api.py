@@ -140,18 +140,24 @@ def get_rates():
         row_ids.append(row["id"])
 
     # The packer picks one provider up front; rate against just that one. Fall
-    # back to every enabled provider when none is specified (manual/legacy).
+    # back to every provider this user may ship with when none is specified.
     requested_provider = (data.get("provider") or "").strip()
-    active_providers = providers.enabled_providers()
+    active_providers = providers.enabled_for_user(session["user_id"], session.get("role"))
+    def _rates_refused(message, status=400):
+        for rid in row_ids:
+            db.execute(
+                "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
+                (message, rid),
+            )
+        return api_error(message, status)
+    if not active_providers:
+        return _rates_refused(
+            "No shipping integrations are assigned to your account — ask an admin", 403)
     if requested_provider:
         chosen = [p for p in active_providers if p.name == requested_provider]
         if not chosen:
-            for rid in row_ids:
-                db.execute(
-                    "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
-                    (f"Selected shipping provider '{requested_provider}' is not enabled", rid),
-                )
-            return api_error(f"Selected shipping provider '{requested_provider}' is not enabled", 400)
+            return _rates_refused(
+                f"Selected shipping provider '{requested_provider}' is not enabled for your account")
         active_providers = chosen
 
     draft_ids_by_provider = {}
@@ -296,6 +302,10 @@ def group_buy(group_id):
     rate = data.get("rate") or primary["rate"] or {}
     provider_name = (data.get("provider") or (rate or {}).get("provider")
                      or primary["provider"] or "easyship")
+    if provider_name not in [p.name for p in
+                             providers.enabled_for_user(session["user_id"], session.get("role"))]:
+        return api_error(
+            f"Shipping provider '{provider_name}' is not enabled for your account", 403)
 
     progress = primary["progress"] or {}
     if progress.get("state") == "buying":

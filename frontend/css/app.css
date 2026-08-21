@@ -542,6 +542,8 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 .svc-selectall input { flex: 0 0 auto; width: 14px; height: 14px; cursor: pointer; }
 .svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 3px 16px; }
 .svc-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; cursor: pointer; }
+.svc-checklist { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; border: 1px solid var(--outline); border-radius: 8px; background: var(--surface-sunken); }
+.svc-checklist .svc-item { text-transform: none; letter-spacing: normal; font-size: 13px; font-weight: 500; color: var(--on-surface); }
 .svc-item input { flex: 0 0 auto; width: 15px; height: 15px; cursor: pointer; }
 
 input[type='number']::-webkit-inner-spin-button { opacity: 0.4; }
