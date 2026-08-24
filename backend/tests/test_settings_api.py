@@ -41,11 +41,10 @@ class AvailableServicesTest(unittest.TestCase):
         self.app = Flask(__name__)
         self.app.secret_key = "test"
         self.app.register_blueprint(settings_api.bp)
-        self._orig = (providers.get_provider, providers.registered_names, providers.enabled_for_user)
-        providers.registered_names = lambda: ["fake"]
+        self._orig = (providers.get_provider, providers.enabled_for_user)
 
     def tearDown(self):
-        providers.get_provider, providers.registered_names, providers.enabled_for_user = self._orig
+        providers.get_provider, providers.enabled_for_user = self._orig
 
     def _call(self, provider):
         providers.get_provider = lambda name: provider

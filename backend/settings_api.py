@@ -48,7 +48,8 @@ BASE_SECRET_KEYS = {"shipper_password"}
 
 
 def _provider_setting_keys():
-    """(all persistable keys, secret keys) contributed by registered providers."""
+    """(all persistable keys, secret keys) contributed by the configured
+    provider instances, including each instance's ship-from override."""
     keys, secrets = [], set()
     for d in providers.descriptors():
         keys.append(d["enabled_key"])
@@ -58,6 +59,9 @@ def _provider_setting_keys():
             keys.append(f["key"])
             if f.get("type") == "secret":
                 secrets.add(f["key"])
+        if d.get("origin_override_key"):
+            keys.append(d["origin_override_key"])
+            keys.extend(f["key"] for f in d.get("origin_fields") or [])
     return keys, secrets
 
 
@@ -80,7 +84,7 @@ def _aggregate_mode():
 
 
 def _provider_or_404(name):
-    return providers.get_provider(name) if name in providers.registered_names() else None
+    return providers.get_provider(name)
 
 
 @bp.get("/settings")
@@ -142,8 +146,56 @@ def client_settings():
 @bp.get("/providers")
 @admin_required
 def list_providers():
-    """Provider descriptors that drive the Settings shipping section."""
+    """One descriptor per configured provider instance — drives the Settings
+    shipping section and the per-user integration pickers."""
     return jsonify(providers.descriptors())
+
+
+# ---------- Provider instances (named accounts of a platform) ----------
+
+@bp.get("/provider-instances")
+@admin_required
+def list_provider_instances():
+    return jsonify({"platforms": providers.platforms(), "instances": providers.instance_summaries()})
+
+
+@bp.post("/provider-instances")
+@admin_required
+def create_provider_instance():
+    data = request.get_json(silent=True) or {}
+    try:
+        row = providers.create_instance((data.get("platform") or "").strip(), data.get("label"))
+    except ValueError as e:
+        return api_error(str(e))
+    audit("provider_instance.create", row)
+    return jsonify(row), 201
+
+
+@bp.put("/provider-instances/<int:instance_id>")
+@admin_required
+def rename_provider_instance(instance_id):
+    data = request.get_json(silent=True) or {}
+    try:
+        row = providers.rename_instance(instance_id, data.get("label"))
+    except LookupError as e:
+        return api_error(str(e), 404)
+    except ValueError as e:
+        return api_error(str(e))
+    audit("provider_instance.rename", row)
+    return jsonify(row)
+
+
+@bp.delete("/provider-instances/<int:instance_id>")
+@admin_required
+def delete_provider_instance(instance_id):
+    try:
+        row = providers.delete_instance(instance_id)
+    except LookupError as e:
+        return api_error(str(e), 404)
+    except providers.InstanceEnabled as e:
+        return api_error(str(e), 409)
+    audit("provider_instance.delete", row)
+    return jsonify({"ok": True})
 
 
 @bp.get("/providers/enabled")

@@ -7,9 +7,7 @@ shapes into the provider-agnostic types.
 import requests
 
 import config
-import db
 import easyship_client as ec
-from providers import labels
 from providers.base import (
     DraftShipment,
     LabelStatus,
@@ -17,7 +15,7 @@ from providers.base import (
     Rate,
     ShipmentState,
     ShippingProvider,
-    provider_setting,
+    origin_descriptor,
 )
 
 # Easyship label_state values that mean the label is bought and printable.
@@ -58,9 +56,9 @@ def _to_state(shipment, service_id=None):
     )
 
 
-def _combine_rates(es_list):
+def _combine_rates(es_list, provider="easyship"):
     """One quote list across per-box shipments: only couriers that can serve
-    EVERY box, price = sum across boxes."""
+    EVERY box, price = sum across boxes. `provider` is the instance key."""
     rate_maps = [
         {r["courier_service"]["id"]: r for r in (s.get("rates") or [])}
         for s in es_list
@@ -72,7 +70,7 @@ def _combine_rates(es_list):
     for cid in common:
         rs = [m[cid] for m in rate_maps]
         combined.append(Rate(
-            provider="easyship",
+            provider=provider,
             provider_service_id=cid,
             courier_name=rs[0]["courier_service"].get("name"),
             umbrella_name=rs[0]["courier_service"].get("umbrella_name"),
@@ -86,30 +84,31 @@ def _combine_rates(es_list):
 
 
 class EasyshipProvider(ShippingProvider):
-    name = "easyship"
+    platform = "easyship"
     label = "Easyship"
     modes = ("sandbox", "production")
 
     # ---- rating / drafting ----
     def create_draft_shipments(self, destination, parcels, items, options=None):
-        es_list, warnings = ec.create_shipments(destination, parcels, items, options)
+        es_list, warnings = ec.create_shipments(
+            destination, parcels, items, options, key=self.name, origin=self.origin())
         drafts = [DraftShipment(es["easyship_shipment_id"]) for es in es_list]
-        return drafts, _combine_rates(es_list), warnings
+        return drafts, _combine_rates(es_list, provider=self.name), warnings
 
     def get_excluded_service_ids(self):
-        return ec.get_excluded_service_ids()
+        return ec.get_excluded_service_ids(self.name)
 
     def set_excluded_service_ids(self, ids):
-        return ec.set_excluded_service_ids(ids)
+        return ec.set_excluded_service_ids(ids, self.name)
 
     # ---- label lifecycle ----
     def buy_labels(self, provider_shipment_ids, service_id):
-        results = ec.buy_labels(provider_shipment_ids, service_id)
+        results = ec.buy_labels(provider_shipment_ids, service_id, key=self.name)
         return {sid: (res if isinstance(res, ProviderError) else _to_state(res, service_id))
                 for sid, res in results.items()}
 
     def poll_shipments(self, provider_shipment_ids, service_id=None):
-        results = ec.get_shipments(provider_shipment_ids)
+        results = ec.get_shipments(provider_shipment_ids, key=self.name)
         return {sid: (res if isinstance(res, ProviderError) else _to_state(res, service_id))
                 for sid, res in results.items()}
 
@@ -119,32 +118,32 @@ class EasyshipProvider(ShippingProvider):
             # Some couriers only expose the label as a rendered 4x6 PDF.
             try:
                 docs = ec.extract_label_documents(
-                    ec.get_shipment(state.provider_shipment_id, pdf_4x6=True)
+                    ec.get_shipment(state.provider_shipment_id, pdf_4x6=True, key=self.name)
                 )
             except ProviderError:
                 pass
         return docs
 
     def cancel_all(self, provider_shipment_ids):
-        return ec.cancel_all(provider_shipment_ids)
+        return ec.cancel_all(provider_shipment_ids, key=self.name)
 
     def get_raw_shipment(self, provider_shipment_id):
-        return ec.get_shipment(provider_shipment_id)
+        return ec.get_shipment(provider_shipment_id, key=self.name)
 
     # ---- settings surface ----
     def list_item_categories(self):
-        return ec.list_item_categories()
+        return ec.list_item_categories(self.name)
 
     def list_courier_services(self):
-        return ec.list_courier_services()
+        return ec.list_courier_services(self.name)
 
     def active_mode(self):
-        return provider_setting(self.name, "mode") or "sandbox"
+        return self.setting("mode") or "sandbox"
 
     def test_connection(self, mode=None, token=None):
         mode = mode or self.active_mode()
         if not token or token == "••••••••":
-            token = provider_setting(self.name, f"{mode}_token")
+            token = self.setting(f"{mode}_token")
         if not token:
             raise ProviderError(f"No {mode} token configured")
         # NB: Easyship's /account endpoint 500s unconditionally, so we validate
@@ -167,10 +166,13 @@ class EasyshipProvider(ShippingProvider):
     def descriptor(self):
         return {
             "name": self.name,
+            "key": self.name,
+            "platform": self.platform,
+            "platform_label": self.platform_label,
             "label": self.label,
-            "enabled": provider_setting(self.name, "enabled") == "true",
-            "enabled_key": f"{self.name}_enabled",
-            "mode_key": f"{self.name}_mode",
+            "enabled": self.setting("enabled") == "true",
+            "enabled_key": self.setting_key("enabled"),
+            "mode_key": self.setting_key("mode"),
             "mode": self.active_mode(),
             "modes": [
                 {"value": "sandbox", "label": "Sandbox (test)"},
@@ -181,7 +183,7 @@ class EasyshipProvider(ShippingProvider):
                  "type": "secret", "mode": "sandbox"},
                 {"key": f"{self.name}_production_token", "label": "Production access token",
                  "type": "secret", "mode": "production"},
-                {"key": "default_item_category", "label": "Default item category (customs)",
+                {"key": self.setting_key("default_item_category"), "label": "Default item category (customs)",
                  "type": "select", "options_endpoint": f"/api/providers/{self.name}/item-categories",
                  "hint": "Applied to shipment items — Easyship requires one per item"},
             ],
@@ -189,4 +191,5 @@ class EasyshipProvider(ShippingProvider):
             "supports": {"service_exclusions": True},
             "services_endpoint": f"/api/providers/{self.name}/services",
             "excluded_endpoint": f"/api/providers/{self.name}/excluded-services",
+            **origin_descriptor(self.name),
         }

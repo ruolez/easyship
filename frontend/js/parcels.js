@@ -264,11 +264,9 @@ window.retryWb = async (id) => {
   }
 };
 
-const PROVIDER_LABELS = { easyship: 'Easyship', shippo: 'GoShippo', easypost: 'EasyPost', shipstation: 'ShipStation' };
 function providerLabel(id) {
   const row = allRows.find((r) => r.id === id);
-  const name = (row && row.provider) || '';
-  return PROVIDER_LABELS[name] || (name ? name.charAt(0).toUpperCase() + name.slice(1) : 'the shipping provider');
+  return (row && (row.provider_label || row.provider)) || 'the shipping provider';
 }
 
 async function callVoid(id) {

@@ -90,19 +90,77 @@ class ShipmentState:
 # A label document is a plain (bytes, format) tuple; format in {"pdf","png","zpl"}.
 
 
-def provider_setting(name, key, default=None):
-    """Read a provider-scoped setting. Providers keep their own namespaced keys
-    (e.g. `easyship_mode`, `easyship_sandbox_token`)."""
-    return db.get_setting(key, default) if key.startswith(f"{name}_") else db.get_setting(f"{name}_{key}", default)
+# Ship-from address fields, in the order the Settings page shows them.
+ORIGIN_FIELDS = (
+    ("company", "Company"),
+    ("contact", "Contact name"),
+    ("address1", "Address 1"),
+    ("address2", "Address 2"),
+    ("city", "City"),
+    ("state", "State"),
+    ("zip", "ZIP"),
+    ("phone", "Phone"),
+    ("email", "Email"),
+)
+
+
+def origin_override_key(key):
+    return f"{key}_origin_override"
+
+
+def origin_settings(key):
+    """The ship-from address one instance ships with, keyed like the global
+    settings (`origin_company`, ...): the instance's own `{key}_origin_*` values
+    when its override flag is on, otherwise the global origin."""
+    own = db.get_setting(origin_override_key(key)) == "true"
+    prefix = f"{key}_origin_" if own else "origin_"
+    return {f"origin_{f}": (db.get_setting(f"{prefix}{f}") or "").strip() for f, _ in ORIGIN_FIELDS}
+
+
+def origin_descriptor(key):
+    """Descriptor fragment that lets the Settings page render and persist an
+    instance's ship-from override."""
+    return {
+        "origin_override_key": origin_override_key(key),
+        "origin_fields": [{"key": f"{key}_origin_{f}", "label": label} for f, label in ORIGIN_FIELDS],
+    }
+
+
+def missing_origin_fields(origin, required):
+    """Labels of the required origin fields that are blank in `origin`."""
+    return [label for k, label in required.items() if not (origin.get(k) or "").strip()]
 
 
 class ShippingProvider(ABC):
     """Everything the shipping routes need from a platform. All methods may raise
-    ProviderError; parallel helpers return per-id ProviderError instead."""
+    ProviderError; parallel helpers return per-id ProviderError instead.
 
-    name: str
+    One object represents one configured INSTANCE of a platform: `platform` is
+    the class-level platform key ("shipstation"), `name` the instance key that
+    identifies it everywhere (settings prefix, shipments.provider, the nav
+    selector) and `label` the admin's alias. The primary instance of each
+    platform has `name == platform`, so the no-arg constructor is that one."""
+
+    platform: str
     label: str
     modes: tuple = ()  # e.g. ("sandbox", "production"); empty if the provider has no environments
+
+    def __init__(self, key=None, label=None):
+        self.name = key or self.platform
+        self.label = label or type(self).label
+
+    @property
+    def platform_label(self):
+        return type(self).label
+
+    def setting_key(self, suffix):
+        return f"{self.name}_{suffix}"
+
+    def setting(self, suffix, default=None):
+        return db.get_setting(self.setting_key(suffix), default)
+
+    def origin(self):
+        return origin_settings(self.name)
 
     # ---- rating / drafting (POST /rates) ----
     @abstractmethod

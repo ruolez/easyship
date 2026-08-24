@@ -21,12 +21,16 @@ LABEL_MIMETYPES = {"pdf": "application/pdf", "png": "image/png", "zpl": "text/pl
 
 LIST_SELECT = """
     SELECT s.*, u.username AS created_by_username,
-           ss.name AS store_name, bd.name AS db_name
+           ss.name AS store_name, bd.name AS db_name,
+           pi.label AS provider_current_label
     FROM shipments s
     JOIN users u ON u.id = s.created_by
     LEFT JOIN shopify_stores ss ON ss.id = s.shopify_store_id
     LEFT JOIN backoffice_dbs bd ON bd.id = s.backoffice_db_id
+    LEFT JOIN provider_instances pi ON pi.key = s.provider
 """
+
+REMOVED_PROVIDER = "This shipping integration has been removed — the label can no longer be managed here"
 
 
 def _row_to_json(row):
@@ -58,6 +62,9 @@ def _row_to_json(row):
         "parcels": row["parcels"],
         "items": row["items"],
         "provider": row.get("provider") or "easyship",
+        # Live alias while the instance exists, the snapshot after it's deleted.
+        "provider_label": (row.get("provider_current_label") or row.get("provider_label")
+                           or row.get("provider") or ""),
         "provider_shipment_id": row["easyship_shipment_id"],
         "easyship_shipment_id": row["easyship_shipment_id"],
         "courier_name": row["courier_name"],
@@ -206,13 +213,14 @@ def get_rates():
     # active shipment id now — a rated row then resumes/voids exactly as before.
     if len(draft_ids_by_provider) == 1:
         (only_name, only_ids), = draft_ids_by_provider.items()
+        only_label = next(p.label for p in active_providers if p.name == only_name)
         for i, rid in enumerate(row_ids):
             if i < len(only_ids):
                 sid = only_ids[i]
                 db.execute(
-                    """UPDATE shipments SET provider=%s, easyship_shipment_id=%s,
+                    """UPDATE shipments SET provider=%s, provider_label=%s, easyship_shipment_id=%s,
                        easyship_shipment_ids=%s, updated_at=now() WHERE id=%s""",
-                    (only_name, sid, json.dumps([sid]), rid),
+                    (only_name, only_label, sid, json.dumps([sid]), rid),
                 )
 
     if not all_rates:
@@ -302,10 +310,12 @@ def group_buy(group_id):
     rate = data.get("rate") or primary["rate"] or {}
     provider_name = (data.get("provider") or (rate or {}).get("provider")
                      or primary["provider"] or "easyship")
-    if provider_name not in [p.name for p in
-                             providers.enabled_for_user(session["user_id"], session.get("role"))]:
+    chosen = [p for p in providers.enabled_for_user(session["user_id"], session.get("role"))
+              if p.name == provider_name]
+    if not chosen:
         return api_error(
             f"Shipping provider '{provider_name}' is not enabled for your account", 403)
+    provider_label = chosen[0].label
 
     progress = primary["progress"] or {}
     if progress.get("state") == "buying":
@@ -328,15 +338,16 @@ def group_buy(group_id):
         draft_id = _draft_id(r)
         if draft_id:
             db.execute(
-                """UPDATE shipments SET provider=%s, courier_service_id=%s, rate=%s,
+                """UPDATE shipments SET provider=%s, provider_label=%s, courier_service_id=%s, rate=%s,
                    easyship_shipment_id=%s, easyship_shipment_ids=%s, updated_at=now() WHERE id=%s""",
-                (provider_name, courier_service_id, json.dumps(rate),
+                (provider_name, provider_label, courier_service_id, json.dumps(rate),
                  draft_id, json.dumps([draft_id]), r["id"]),
             )
         else:
             db.execute(
-                "UPDATE shipments SET provider=%s, courier_service_id=%s, rate=%s, updated_at=now() WHERE id=%s",
-                (provider_name, courier_service_id, json.dumps(rate), r["id"]),
+                """UPDATE shipments SET provider=%s, provider_label=%s, courier_service_id=%s, rate=%s,
+                   updated_at=now() WHERE id=%s""",
+                (provider_name, provider_label, courier_service_id, json.dumps(rate), r["id"]),
             )
 
     _cancel_other_drafts(rows, provider_name)
@@ -367,8 +378,11 @@ def _cancel_other_drafts(rows, chosen_provider):
     def worker():
         with app.app_context():
             for name, ids in by_provider.items():
+                provider = providers.get_provider(name)
+                if provider is None:
+                    continue
                 try:
-                    providers.get_provider(name).cancel_all(ids)
+                    provider.cancel_all(ids)
                 except Exception:
                     pass
 
@@ -445,6 +459,14 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
     rows = _group_rows(group_id)
     primary_id = rows[0]["id"]
     box_total = len(rows)
+    if provider is None:
+        for r in rows:
+            db.execute(
+                "UPDATE shipments SET status='error', error_message=%s, updated_at=now() WHERE id=%s",
+                (REMOVED_PROVIDER, r["id"]),
+            )
+        _set_group_progress(primary_id, "error", message=REMOVED_PROVIDER)
+        return
     targets = {r["easyship_shipment_id"]: r for r in rows
                if r["status"] in ("rated", "error") and r["easyship_shipment_id"]}
     sids = list(targets.keys())
@@ -900,6 +922,8 @@ def easyship_raw(shipment_id):
     if not row["easyship_shipment_id"]:
         return api_error("Shipment was never sent to a provider")
     provider = providers.get_provider(row.get("provider") or "easyship")
+    if provider is None:
+        return api_error(REMOVED_PROVIDER, 409)
     try:
         return jsonify(provider.get_raw_shipment(row["easyship_shipment_id"]))
     except ProviderError as e:
@@ -944,6 +968,8 @@ def void(shipment_id):
 
     if row["status"] != "voided":
         provider = providers.get_provider(primary.get("provider") or "easyship")
+        if provider is None:
+            return api_error(REMOVED_PROVIDER, 409)
         all_ids = []
         for r in rows:
             all_ids += r["easyship_shipment_ids"] or ([r["easyship_shipment_id"]] if r["easyship_shipment_id"] else [])

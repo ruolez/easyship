@@ -30,10 +30,12 @@ from providers.base import (
     Rate,
     ShipmentState,
     ShippingProvider,
+    missing_origin_fields,
+    origin_descriptor,
 )
 
 BASE_URL = "https://api.easypost.com/v2"
-EXCLUDED_KEY = "easypost_excluded_service_ids"
+PRIMARY_KEY = "easypost"
 MASK = "••••••••"
 LABEL_FORMATS = ("PDF", "ZPL", "PNG")
 DELIVERY_CONFIRMATION = {"adult": "ADULT_SIGNATURE", "signature": "SIGNATURE"}
@@ -49,21 +51,21 @@ ORIGIN_REQUIRED = {
 }
 
 
-def _token():
-    token = db.get_setting("easypost_token")
+def _token(key=PRIMARY_KEY):
+    token = db.get_setting(f"{key}_token")
     if not token:
         raise ProviderError("No EasyPost API key configured — set it in Settings")
     return token
 
 
-def _auth():
+def _auth(key=PRIMARY_KEY):
     """(base_url, token) captured in the request context so parallel worker
     threads — which have no Flask context — can still authenticate."""
-    return BASE_URL, _token()
+    return BASE_URL, _token(key)
 
 
-def _label_format():
-    val = (db.get_setting("easypost_label_file_type") or "PDF").upper()
+def _label_format(key=PRIMARY_KEY):
+    val = (db.get_setting(f"{key}_label_file_type") or "PDF").upper()
     return val if val in LABEL_FORMATS else "PDF"
 
 
@@ -127,29 +129,30 @@ def _request(method, path, json_body=None, params=None, timeout=45, auth=None):
     return resp.json() if resp.content else {}
 
 
-def _origin_address():
-    missing = [label for key, label in ORIGIN_REQUIRED.items() if not (db.get_setting(key) or "").strip()]
+def _origin_address(origin):
+    """EasyPost address from an `origin_settings()` dict."""
+    missing = missing_origin_fields(origin, ORIGIN_REQUIRED)
     if missing:
         raise ProviderError(
             "Origin address is incomplete — fill in on the Settings page: " + ", ".join(missing)
         )
-    company = db.get_setting("origin_company") or ""
+    company = origin.get("origin_company") or ""
     return {
-        "name": db.get_setting("origin_contact") or company or "Shipping",
+        "name": origin.get("origin_contact") or company or "Shipping",
         "company": company,
-        "street1": db.get_setting("origin_address1"),
-        "street2": db.get_setting("origin_address2") or "",
-        "city": db.get_setting("origin_city"),
-        "state": db.get_setting("origin_state"),
-        "zip": db.get_setting("origin_zip"),
+        "street1": origin.get("origin_address1"),
+        "street2": origin.get("origin_address2") or "",
+        "city": origin.get("origin_city"),
+        "state": origin.get("origin_state"),
+        "zip": origin.get("origin_zip"),
         "country": "US",
-        "phone": db.get_setting("origin_phone") or "",
-        "email": db.get_setting("origin_email") or "",
+        "phone": origin.get("origin_phone") or "",
+        "email": origin.get("origin_email") or "",
     }
 
 
-def _dest_address(dest):
-    email = (dest.get("email") or "").strip() or (db.get_setting("origin_email") or "").strip()
+def _dest_address(dest, origin_email=""):
+    email = (dest.get("email") or "").strip() or (origin_email or "").strip()
     return {
         "name": dest.get("contact") or dest.get("company") or "Recipient",
         "company": dest.get("company") or "",
@@ -204,10 +207,11 @@ def _cheapest_by_service(shipment):
     return out
 
 
-def _combine_rates(shipments):
+def _combine_rates(shipments, provider=PRIMARY_KEY):
     """One quote list across per-box shipments: only services every box can
     serve, price = sum across boxes. The cheapest combined rate is flagged as
-    best value (EasyPost has no best-value attribute of its own)."""
+    best value (EasyPost has no best-value attribute of its own). `provider`
+    is the instance key."""
     per_box = [_cheapest_by_service(s) for s in shipments]
     if not per_box or any(not m for m in per_box):
         return []
@@ -220,7 +224,7 @@ def _combine_rates(shipments):
         first = rs[0]
         days = max((_rate_days(r) for r in rs), default=0) or None
         combined.append(Rate(
-            provider="easypost",
+            provider=provider,
             provider_service_id=sid,
             courier_name=f"{first.get('carrier') or ''} {first.get('service') or ''}".strip() or sid,
             umbrella_name=first.get("carrier") or "",
@@ -287,16 +291,17 @@ def _map_parallel(items, fn):
 
 
 class EasyPostProvider(ShippingProvider):
-    name = "easypost"
+    platform = "easypost"
     label = "EasyPost"
     modes = ()
 
     # ---- rating / drafting ----
     def create_draft_shipments(self, destination, parcels, items, options=None):
-        auth = _auth()
-        label_format = _label_format()
-        address_from = _origin_address()
-        address_to = _dest_address(destination)
+        auth = _auth(self.name)
+        label_format = _label_format(self.name)
+        origin = self.origin()
+        address_from = _origin_address(origin)
+        address_to = _dest_address(destination, origin.get("origin_email"))
         # label_size 4x6 is required for a 4x6 PDF — without it USPS PDFs
         # render as a full 8.5x11 page. ZPL is 4x6 regardless.
         shipment_options = {"label_format": label_format, "label_size": "4x6"}
@@ -333,10 +338,10 @@ class EasyPostProvider(ShippingProvider):
                 if errors:
                     raise errors[0]
         drafts = [DraftShipment(s["id"]) for s in shipments]
-        return drafts, _combine_rates(shipments), []
+        return drafts, _combine_rates(shipments, provider=self.name), []
 
     def get_excluded_service_ids(self):
-        raw = db.get_setting(EXCLUDED_KEY)
+        raw = self.setting("excluded_service_ids")
         if not raw:
             return set()
         try:
@@ -346,12 +351,12 @@ class EasyPostProvider(ShippingProvider):
 
     def set_excluded_service_ids(self, ids):
         clean = sorted({str(i) for i in ids if i})
-        db.set_setting(EXCLUDED_KEY, json.dumps(clean))
+        db.set_setting(self.setting_key("excluded_service_ids"), json.dumps(clean))
         return clean
 
     # ---- label lifecycle ----
     def buy_labels(self, provider_shipment_ids, service_id):
-        auth = _auth()
+        auth = _auth(self.name)
 
         def work(shipment_id):
             shipment = _request("GET", f"/shipments/{shipment_id}", auth=auth)
@@ -369,7 +374,7 @@ class EasyPostProvider(ShippingProvider):
         return _map_parallel(list(provider_shipment_ids), work)
 
     def poll_shipments(self, provider_shipment_ids, service_id=None):
-        auth = _auth()
+        auth = _auth(self.name)
 
         def work(shipment_id):
             shipment = _request("GET", f"/shipments/{shipment_id}", auth=auth)
@@ -398,7 +403,7 @@ class EasyPostProvider(ShippingProvider):
             "ZPL": pl.get("label_zpl_url"),
             "PNG": pl.get("label_url"),
         }
-        url = by_format.get(_label_format()) or pl.get("label_url") or pl.get("label_pdf_url")
+        url = by_format.get(_label_format(self.name)) or pl.get("label_url") or pl.get("label_pdf_url")
         if not url:
             return []
         resp = requests.get(url, timeout=30)
@@ -409,9 +414,11 @@ class EasyPostProvider(ShippingProvider):
 
     def cancel_all(self, provider_shipment_ids):
         errors = []
-        for sid in [i for i in provider_shipment_ids if i]:
+        ids = [i for i in provider_shipment_ids if i]
+        auth = _auth(self.name) if ids else None
+        for sid in ids:
             try:
-                result = _request("POST", f"/shipments/{sid}/refund")
+                result = _request("POST", f"/shipments/{sid}/refund", auth=auth)
                 status = (result.get("refund_status") or "").lower()
                 if status in ("rejected", "not_applicable"):
                     errors.append(f"{sid}: refund {status}")
@@ -424,7 +431,7 @@ class EasyPostProvider(ShippingProvider):
         return errors
 
     def get_raw_shipment(self, provider_shipment_id):
-        return _request("GET", f"/shipments/{provider_shipment_id}")
+        return _request("GET", f"/shipments/{provider_shipment_id}", auth=_auth(self.name))
 
     # ---- settings surface ----
     def list_item_categories(self):
@@ -439,11 +446,11 @@ class EasyPostProvider(ShippingProvider):
         return ""
 
     def is_test_mode(self):
-        return (db.get_setting("easypost_token") or "").startswith("EZTK")
+        return (self.setting("token") or "").startswith("EZTK")
 
     def test_connection(self, mode=None, token=None):
         if not token or token == MASK:
-            token = db.get_setting("easypost_token")
+            token = self.setting("token")
         if not token:
             raise ProviderError("No EasyPost API key configured")
         try:
@@ -465,13 +472,16 @@ class EasyPostProvider(ShippingProvider):
     def descriptor(self):
         return {
             "name": self.name,
+            "key": self.name,
+            "platform": self.platform,
+            "platform_label": self.platform_label,
             "label": self.label,
-            "enabled": db.get_setting("easypost_enabled") == "true",
-            "enabled_key": "easypost_enabled",
+            "enabled": self.setting("enabled") == "true",
+            "enabled_key": self.setting_key("enabled"),
             "modes": [],
             "fields": [
-                {"key": "easypost_token", "label": "API key", "type": "secret"},
-                {"key": "easypost_label_file_type", "label": "Label format", "type": "select",
+                {"key": self.setting_key("token"), "label": "API key", "type": "secret"},
+                {"key": self.setting_key("label_file_type"), "label": "Label format", "type": "select",
                  "options": [
                      {"value": "PDF", "label": "PDF (4x6)"},
                      {"value": "ZPL", "label": "ZPL"},
@@ -480,4 +490,5 @@ class EasyPostProvider(ShippingProvider):
             ],
             "test_endpoint": f"/api/providers/{self.name}/test",
             "supports": {"service_exclusions": False},
+            **origin_descriptor(self.name),
         }

@@ -60,7 +60,8 @@ function setDirty(v) {
 function watchDirty() {
   SETTING_IDS.forEach((id) => {
     const el = document.getElementById(id);
-    if (!el) return;
+    if (!el || el.dataset.dirtyWired) return;
+    el.dataset.dirtyWired = '1';
     el.addEventListener('input', () => setDirty(true));
     el.addEventListener('change', () => setDirty(true));
   });
@@ -216,23 +217,37 @@ window.deleteBox = async (id) => {
   loadBoxes();
 };
 
-/* ---------- Shipping providers (rendered from descriptors) ---------- */
+/* ---------- Shipping providers (one card per configured instance) ----------
+   Cards render from GET /api/providers descriptors; an instance's fields are
+   plain settings keys prefixed with its key, saved through the regular
+   Save / Discard flow. Add / rename / delete go through /api/provider-instances
+   and re-render the cards. */
+let instanceByKey = {};
+
 async function renderProviders() {
   const container = document.getElementById('providers-container');
-  let list;
+  let list, meta;
   try {
-    list = await api('/api/providers');
+    [list, meta] = await Promise.all([api('/api/providers'), api('/api/provider-instances')]);
   } catch (err) {
     container.innerHTML = `<div class="card"><p class="text-secondary">Could not load providers: ${esc(err.message)}</p></div>`;
     return;
   }
-  container.innerHTML = list.map(providerCardHtml).join('');
-  // Register every provider field as a persistable setting.
+  instanceByKey = Object.fromEntries((meta.instances || []).map((i) => [i.key, i]));
+  // Register every instance field as a persistable setting (fresh on each re-render).
+  SETTING_IDS = [...BASE_SETTING_IDS];
   list.forEach((p) => {
     SETTING_IDS.push(p.enabled_key);
     if (p.modes && p.modes.length) SETTING_IDS.push(p.mode_key);
     p.fields.forEach((f) => SETTING_IDS.push(f.key));
+    if (p.origin_override_key) {
+      SETTING_IDS.push(p.origin_override_key);
+      (p.origin_fields || []).forEach((f) => SETTING_IDS.push(f.key));
+    }
   });
+  container.innerHTML = list.length
+    ? list.map(providerCardHtml).join('')
+    : '<div class="card"><p class="text-secondary">No shipping integrations yet — add one above.</p></div>';
   for (const p of list) {
     wireProviderCard(p);
     for (const f of p.fields) {
@@ -241,22 +256,109 @@ async function renderProviders() {
     if (p.supports && p.supports.service_exclusions) loadServices(p);
   }
   wireProviderPicker(list);
+  wireAddInstance(meta.platforms || []);
 }
 
-/* Show one provider's config card at a time, chosen from the picker dropdown. */
-function wireProviderPicker(list) {
+function instanceOptionText(p) {
+  return p.label === p.platform_label ? p.label : `${p.label} — ${p.platform_label}`;
+}
+
+/* Show one instance's config card at a time, chosen from the picker dropdown.
+   Keeps the current choice across re-renders; `preferred` selects a given key. */
+function wireProviderPicker(list, preferred) {
   const picker = document.getElementById('provider-config-select');
-  if (!picker || !list.length) return;
-  picker.innerHTML = list.map((p) => `<option value="${esc(p.name)}">${esc(p.label)}</option>`).join('');
+  if (!picker) return;
+  const previous = preferred || picker.value;
+  picker.innerHTML = list.map((p) => `<option value="${esc(p.name)}">${esc(instanceOptionText(p))}</option>`).join('');
   const showOnly = (name) => {
     list.forEach((p) => {
       document.querySelectorAll(`[data-provider="${p.name}"], [data-services="${p.name}"]`)
         .forEach((el) => { el.style.display = p.name === name ? '' : 'none'; });
     });
   };
-  picker.value = list[0].name;
-  showOnly(list[0].name);
-  picker.addEventListener('change', () => showOnly(picker.value));
+  if (!list.length) return;
+  picker.value = list.some((p) => p.name === previous) ? previous : list[0].name;
+  showOnly(picker.value);
+  picker.onchange = () => showOnly(picker.value);
+}
+
+function wireAddInstance(platforms) {
+  const select = document.getElementById('new-instance-platform');
+  const label = document.getElementById('new-instance-label');
+  const button = document.getElementById('add-instance');
+  if (!select || !button) return;
+  select.innerHTML = platforms.map((p) => `<option value="${esc(p.name)}">${esc(p.label)}</option>`).join('');
+  button.onclick = async () => {
+    if (!settingsClean()) return;
+    try {
+      const row = await api('/api/provider-instances', {
+        method: 'POST',
+        body: { platform: select.value, label: label.value },
+      });
+      label.value = '';
+      snackbar(`${row.label} added — enter its credentials, then enable it and save`, 'success');
+      await refreshProviders(row.key);
+    } catch (err) {
+      snackbar(err.message, 'error');
+    }
+  };
+}
+
+/* Instance changes re-render the cards, which would discard unsaved edits. */
+function settingsClean() {
+  if (dirty) snackbar('Save or discard your settings changes first', 'error');
+  return !dirty;
+}
+
+async function refreshProviders(selectKey) {
+  allProviders = [];
+  await renderProviders();
+  await loadSettings();
+  watchDirty();
+  const picker = document.getElementById('provider-config-select');
+  if (selectKey && picker && [...picker.options].some((o) => o.value === selectKey)) {
+    picker.value = selectKey;
+    picker.onchange();
+  }
+  loadServiceNames();
+  loadUsers();
+  initNav('settings');
+}
+
+function originFieldsHtml(p) {
+  const byKey = Object.fromEntries((p.origin_fields || []).map((f) => [f.key.slice(p.name.length + 8), f]));
+  const input = (name, extra = '') => {
+    const f = byKey[name];
+    return f ? `<div class="field${extra ? ' fixed' : ''}"${extra ? ` style="${extra}"` : ''}><label>${esc(f.label)}</label><input id="${esc(f.key)}"${name === 'state' ? ' maxlength="2" style="text-transform:uppercase"' : ''}${name === 'email' ? ' type="email"' : ''}></div>` : '';
+  };
+  return `
+    <div id="origin-fields-${esc(p.name)}" style="display:none">
+      <div class="row mt-16">${input('company')}${input('contact')}</div>
+      <div class="row mt-16">${input('address1')}${input('address2')}</div>
+      <div class="row mt-16">${input('city')}${input('state', 'min-width:90px')}${input('zip', 'min-width:120px')}</div>
+      <div class="row mt-16">${input('phone')}${input('email')}</div>
+    </div>`;
+}
+
+/* Origin-override fields only show while the override box is ticked. */
+function syncOriginToggles() {
+  document.querySelectorAll('[data-origin-toggle]').forEach((box) => {
+    const fields = document.getElementById(`origin-fields-${box.dataset.originToggle}`);
+    if (fields) fields.style.display = box.checked ? '' : 'none';
+  });
+}
+
+/* Delete is locked while the SAVED enabled flag is on (the server refuses
+   with 409 anyway). Runs after load/save/discard, when the checkboxes
+   reflect what's stored. */
+function syncDeleteButtons() {
+  document.querySelectorAll('[data-delete]').forEach((btn) => {
+    const enabled = document.getElementById(`${btn.dataset.delete}_enabled`);
+    const locked = !!(enabled && enabled.checked);
+    btn.disabled = locked;
+    btn.title = locked ? 'Disable this integration and save before deleting it'
+      : 'Remove this integration and its credentials';
+  });
 }
 
 function fieldHtml(f) {
@@ -298,20 +400,37 @@ function providerCardHtml(p) {
         <div class="fixed" id="services-status-${esc(p.name)}"></div>
       </div>
     </div>` : '';
+  const origin = p.origin_override_key ? `
+    <div class="row mt-16">
+      <label class="svc-selectall"><input type="checkbox" id="${esc(p.origin_override_key)}" data-origin-toggle="${esc(p.name)}"> Ship from a different address than the global origin</label>
+    </div>
+    ${originFieldsHtml(p)}` : '';
+  const deleteAttrs = p.enabled
+    ? ' disabled title="Disable this integration and save before deleting it"'
+    : ' title="Remove this integration and its credentials"';
   return `
     <div class="card" data-provider="${esc(p.name)}">
-      <h2>${esc(p.label)} API
+      <h2>${esc(p.label)} <span class="text-secondary" style="font-weight:400">· ${esc(p.platform_label)}</span>
         <label class="svc-selectall" style="margin-left:auto"><input type="checkbox" id="${esc(p.enabled_key)}"> Enabled</label>
       </h2>
       <div class="row mb-16">
         ${modeField}${testBtn}
       </div>
       <div class="row">${p.fields.map(fieldHtml).join('')}</div>
+      ${origin}
+      <div class="row mt-16">
+        <div class="fixed"><button class="btn btn-text btn-small" data-rename="${esc(p.name)}">Rename</button></div>
+        <div class="fixed"><button class="btn btn-danger btn-small" data-delete="${esc(p.name)}"${deleteAttrs}>Delete</button></div>
+      </div>
     </div>
     ${services}`;
 }
 
 function wireProviderCard(p) {
+  const toggle = document.querySelector(`[data-origin-toggle="${p.name}"]`);
+  if (toggle) toggle.addEventListener('change', syncOriginToggles);
+  document.querySelector(`[data-rename="${p.name}"]`).addEventListener('click', () => renameInstance(p));
+  document.querySelector(`[data-delete="${p.name}"]`).addEventListener('click', () => deleteInstance(p));
   if (p.test_endpoint) {
     const btn = document.querySelector(`[data-test="${p.name}"]`);
     btn.addEventListener('click', () => {
@@ -330,6 +449,54 @@ function wireProviderCard(p) {
     document.getElementById(`services-list-${p.name}`)
       .addEventListener('change', onServiceToggle);
   }
+}
+
+function renameInstance(p) {
+  const inst = instanceByKey[p.name];
+  if (!inst || !settingsClean()) return;
+  openModal(`
+    <h3>Rename integration</h3>
+    <div class="field mb-16"><label>Name</label><input id="m-instance-label" value="${esc(inst.label)}" maxlength="60" autocomplete="off"></div>
+    <div class="actions">
+      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="m-instance-save">Save</button>
+    </div>`);
+  document.getElementById('m-instance-label').focus();
+  document.getElementById('m-instance-save').addEventListener('click', async () => {
+    try {
+      await api(`/api/provider-instances/${inst.id}`, {
+        method: 'PUT',
+        body: { label: document.getElementById('m-instance-label').value },
+      });
+      closeModal();
+      snackbar('Integration renamed', 'success');
+      await refreshProviders(p.name);
+    } catch (err) {
+      snackbar(err.message, 'error');
+    }
+  });
+}
+
+function deleteInstance(p) {
+  const inst = instanceByKey[p.name];
+  if (!inst || !settingsClean()) return;
+  openModal(`
+    <h3>Delete ${esc(inst.label)}?</h3>
+    <p class="text-secondary mb-16">Its credentials, service exclusions and ship-from override are removed and it disappears from the “Shipping with” selector and from users’ allowed integrations. Parcels already shipped through it keep their history, but their labels can no longer be voided or re-bought here.</p>
+    <div class="actions">
+      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" id="m-instance-delete">Delete</button>
+    </div>`);
+  document.getElementById('m-instance-delete').addEventListener('click', async () => {
+    try {
+      await api(`/api/provider-instances/${inst.id}`, { method: 'DELETE' });
+      closeModal();
+      snackbar(`${inst.label} deleted`, 'success');
+      await refreshProviders();
+    } catch (err) {
+      snackbar(err.message, 'error');
+    }
+  });
 }
 
 async function loadFieldOptions(f) {
@@ -430,6 +597,8 @@ async function loadSettings() {
     // A select with no matching saved value falls back to its first option.
     if (el.tagName === 'SELECT' && !el.value) el.selectedIndex = 0;
   });
+  syncOriginToggles();
+  syncDeleteButtons();
 }
 
 document.getElementById('save-settings').addEventListener('click', async () => {
@@ -439,7 +608,9 @@ document.getElementById('save-settings').addEventListener('click', async () => {
     if (!el) return;
     body[id] = el.type === 'checkbox' ? (el.checked ? 'true' : '') : el.value;
   });
-  if (body.origin_state) body.origin_state = body.origin_state.toUpperCase();
+  Object.keys(body).forEach((id) => {
+    if (id.endsWith('origin_state') && body[id]) body[id] = body[id].toUpperCase();
+  });
   try {
     await api('/api/settings', { method: 'PUT', body });
     snackbar('Settings saved', 'success');

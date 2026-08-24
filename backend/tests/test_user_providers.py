@@ -15,9 +15,9 @@ class FakeProvider:
 
 
 def patch(registered, enabled, assignments):
-    """Swap the registry, enablement and users table for one test."""
-    orig = (providers.registered_names, providers.enabled_providers, providers.db.query)
-    providers.registered_names = lambda: list(registered)
+    """Swap the configured instances, enablement and users table for one test."""
+    orig = (providers.instance_keys, providers.enabled_providers, providers.db.query)
+    providers.instance_keys = lambda: list(registered)
     providers.enabled_providers = lambda: [FakeProvider(n) for n in enabled]
     providers.db.query = lambda sql, params=None, one=False: (
         {"allowed_providers": assignments.get(params[0])} if params and params[0] in assignments else None)
@@ -25,10 +25,10 @@ def patch(registered, enabled, assignments):
 
 
 def restore(orig):
-    providers.registered_names, providers.enabled_providers, providers.db.query = orig
+    providers.instance_keys, providers.enabled_providers, providers.db.query = orig
 
 
-REGISTERED = ["easyship", "shippo", "easypost", "shipstation"]
+REGISTERED = ["easyship", "shippo", "easypost", "shipstation", "shipstation-5"]
 
 
 class EnabledForUserTest(unittest.TestCase):
@@ -64,6 +64,11 @@ class EnabledForUserTest(unittest.TestCase):
             self.run_case(["easyship", "shippo"], {7: ["easyship", "easypost"]}, 7, "user"),
             ["easyship"])
 
+    def test_second_instance_of_a_platform_is_permissioned_on_its_own(self):
+        self.assertEqual(
+            self.run_case(["shipstation", "shipstation-5"], {7: ["shipstation-5"]}, 7, "user"),
+            ["shipstation-5"])
+
 
 class SanitizeAllowedTest(unittest.TestCase):
     def run_case(self, names):
@@ -73,8 +78,8 @@ class SanitizeAllowedTest(unittest.TestCase):
         finally:
             restore(orig)
 
-    def test_unknown_names_are_dropped_and_order_is_registration_order(self):
-        self.assertEqual(self.run_case(["shipstation", "bogus", "easyship"]), ["easyship", "shipstation"])
+    def test_unknown_names_are_dropped_and_order_is_creation_order(self):
+        self.assertEqual(self.run_case(["shipstation-5", "bogus", "easyship"]), ["easyship", "shipstation-5"])
 
     def test_none_and_empty_mean_unrestricted(self):
         self.assertEqual((self.run_case(None), self.run_case([])), (None, None))
@@ -107,15 +112,15 @@ class EnabledRouteTest(unittest.TestCase):
             label = "X"
             def is_test_mode(self):
                 return False
-        orig = (providers.registered_names, providers.enabled_providers, providers.db.query)
-        providers.registered_names = lambda: REGISTERED
+        orig = (providers.instance_keys, providers.enabled_providers, providers.db.query)
+        providers.instance_keys = lambda: REGISTERED
         providers.enabled_providers = lambda: [FakeFull("easyship"), FakeFull("shippo")]
         providers.db.query = lambda sql, params=None, one=False: {"allowed_providers": ["shippo"]}
         try:
             self.assertEqual((self.call(7, "user"), self.call(1, "admin")),
                              (["shippo"], ["easyship", "shippo"]))
         finally:
-            providers.registered_names, providers.enabled_providers, providers.db.query = orig
+            providers.instance_keys, providers.enabled_providers, providers.db.query = orig
 
 
 if __name__ == "__main__":

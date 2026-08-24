@@ -10,9 +10,11 @@ import requests
 import config
 import db
 from providers import labels
-from providers.base import ProviderError
+from providers.base import ProviderError, missing_origin_fields
 
-EXCLUDED_SERVICES_KEY = "excluded_courier_service_ids"
+# Every function takes the instance `key` (default: the primary Easyship
+# instance) and reads that instance's `{key}_*` settings.
+PRIMARY_KEY = "easyship"
 
 # Easyship limits requests per second; parallel per-box calls must be spaced
 # out. Processing still overlaps — only the launches are staggered.
@@ -39,23 +41,26 @@ class EasyshipError(ProviderError):
     """Easyship-specific failure — a ProviderError so callers can stay generic."""
 
 
-def _base_url():
-    mode = db.get_setting("easyship_mode") or "sandbox"
-    return config.EASYSHIP_BASE_URLS[mode]
+def _mode(key=PRIMARY_KEY):
+    return db.get_setting(f"{key}_mode") or "sandbox"
 
 
-def _token():
-    mode = db.get_setting("easyship_mode") or "sandbox"
-    token = db.get_setting(f"easyship_{mode}_token")
+def _base_url(key=PRIMARY_KEY):
+    return config.EASYSHIP_BASE_URLS[_mode(key)]
+
+
+def _token(key=PRIMARY_KEY):
+    mode = _mode(key)
+    token = db.get_setting(f"{key}_{mode}_token")
     if not token:
         raise EasyshipError(f"No Easyship {mode} token configured — set it in Settings")
     return token
 
 
-def _auth():
+def _auth(key=PRIMARY_KEY):
     """Resolve (base_url, token) inside the request context — worker threads
     have no Flask context, so parallel helpers capture this first."""
-    return _base_url(), _token()
+    return _base_url(key), _token(key)
 
 
 def _request(method, path, json_body=None, params=None, timeout=45, auth=None):
@@ -139,30 +144,31 @@ ORIGIN_REQUIRED = {
 }
 
 
-def origin_address():
-    missing = [label for key, label in ORIGIN_REQUIRED.items() if not (db.get_setting(key) or "").strip()]
+def origin_address(origin):
+    """Easyship origin from an `origin_settings()` dict."""
+    missing = missing_origin_fields(origin, ORIGIN_REQUIRED)
     if missing:
         raise EasyshipError(
             "Origin address is incomplete — fill in on the Settings page: " + ", ".join(missing)
         )
     return _clean({
-        "company_name": db.get_setting("origin_company") or None,
-        "contact_name": db.get_setting("origin_contact") or db.get_setting("origin_company") or "Shipping",
-        "contact_phone": db.get_setting("origin_phone") or None,
-        "contact_email": db.get_setting("origin_email") or None,
-        "line_1": db.get_setting("origin_address1"),
-        "line_2": db.get_setting("origin_address2") or None,
-        "city": db.get_setting("origin_city"),
-        "state": db.get_setting("origin_state"),
-        "postal_code": db.get_setting("origin_zip"),
+        "company_name": origin.get("origin_company") or None,
+        "contact_name": origin.get("origin_contact") or origin.get("origin_company") or "Shipping",
+        "contact_phone": origin.get("origin_phone") or None,
+        "contact_email": origin.get("origin_email") or None,
+        "line_1": origin.get("origin_address1"),
+        "line_2": origin.get("origin_address2") or None,
+        "city": origin.get("origin_city"),
+        "state": origin.get("origin_state"),
+        "postal_code": origin.get("origin_zip"),
         "country_alpha2": "US",
     })
 
 
-def build_destination(dest):
+def build_destination(dest, origin_email=""):
     # Easyship requires a destination email; fall back to the origin email
     # (shipment notifications then go to us instead of the customer).
-    email = (dest.get("email") or "").strip() or (db.get_setting("origin_email") or "").strip()
+    email = (dest.get("email") or "").strip() or (origin_email or "").strip()
     return _clean({
         "company_name": dest.get("company") or None,
         "contact_name": dest.get("contact") or dest.get("company") or "Recipient",
@@ -177,9 +183,9 @@ def build_destination(dest):
     })
 
 
-def build_parcels(parcels, items):
+def build_parcels(parcels, items, key=PRIMARY_KEY):
     """parcels: [{length,width,height (in), weight (lb)}]; items: [{description, quantity, value, sku?, weight?}]"""
-    category = (db.get_setting("default_item_category") or "dry_food_supplements").strip()
+    category = (db.get_setting(f"{key}_default_item_category") or "dry_food_supplements").strip()
     es_parcels = []
     for i, p in enumerate(parcels):
         box_dims = None
@@ -230,8 +236,8 @@ def build_parcels(parcels, items):
     return es_parcels
 
 
-def list_item_categories():
-    data = _request("GET", "/item_categories", params={"perPage": 50})
+def list_item_categories(key=PRIMARY_KEY):
+    data = _request("GET", "/item_categories", params={"perPage": 50}, auth=_auth(key))
     return [
         {"slug": c.get("slug"), "name": c.get("name") or c.get("slug")}
         for c in data.get("item_categories") or []
@@ -246,14 +252,15 @@ def _service_label(c):
     ).strip()
 
 
-def list_courier_services():
+def list_courier_services(key=PRIMARY_KEY):
     """Every active courier service on the account as [{id, name, umbrella_name}],
     deduped and sorted by carrier then service. Paginates /courier_services. The
     `id` matches the courier_service.id used in rates, so it's a safe exclusion key."""
+    auth = _auth(key)
     services = {}
     page = 1
     while page <= 20:  # safety cap; the account has far fewer than 2000 services
-        data = _request("GET", "/courier_services", params={"page": page, "per_page": 100})
+        data = _request("GET", "/courier_services", params={"page": page, "per_page": 100}, auth=auth)
         batch = data.get("courier_services") or []
         for c in batch:
             sid = c.get("id")
@@ -270,9 +277,9 @@ def list_courier_services():
     return sorted(services.values(), key=lambda s: (s["umbrella_name"].lower(), s["name"].lower()))
 
 
-def get_excluded_service_ids():
+def get_excluded_service_ids(key=PRIMARY_KEY):
     """Set of courier_service_id strings the user has chosen to hide from rates."""
-    raw = db.get_setting(EXCLUDED_SERVICES_KEY)
+    raw = db.get_setting(f"{key}_excluded_service_ids")
     if not raw:
         return set()
     try:
@@ -281,9 +288,9 @@ def get_excluded_service_ids():
         return set()
 
 
-def set_excluded_service_ids(ids):
+def set_excluded_service_ids(ids, key=PRIMARY_KEY):
     clean = sorted({str(i) for i in ids if i})
-    db.set_setting(EXCLUDED_SERVICES_KEY, json.dumps(clean))
+    db.set_setting(f"{key}_excluded_service_ids", json.dumps(clean))
     return clean
 
 
@@ -301,39 +308,41 @@ def _signature_rejected(error):
         "delivery_confirmation" in text or "additional_services" in text)
 
 
-def create_shipments(destination, parcels, items, options=None):
+def create_shipments(destination, parcels, items, options=None, key=PRIMARY_KEY, origin=None):
     """One Easyship shipment PER BOX, created in parallel. Couriers like USPS
     don't support true multi-parcel shipments — separate shipments give every
     box its own label and tracking number, and parallel requests keep it fast.
+    `origin` is the instance's `origin_settings()` dict.
     Returns (shipments in box order, warnings)."""
     signature = (options or {}).get("signature") or "none"
     confirmation = DELIVERY_CONFIRMATION.get(signature)
     try:
-        return _create_shipments(destination, parcels, items, confirmation), []
+        return _create_shipments(destination, parcels, items, confirmation, key, origin), []
     except EasyshipError as e:
         if not confirmation or not _signature_rejected(e):
             raise
     # The account can't use delivery_confirmation — rate without it and make
     # sure the packer knows the label will NOT carry the signature requirement.
-    shipments = _create_shipments(destination, parcels, items, None)
+    shipments = _create_shipments(destination, parcels, items, None, key, origin)
     return shipments, [
         f"Easyship rejected the {signature} signature option — labels from Easyship "
         "will not require a signature. Use another provider or add it at the carrier."
     ]
 
 
-def _create_shipments(destination, parcels, items, confirmation):
-    auth = _auth()
-    origin = origin_address()
-    dest = build_destination(destination)
+def _create_shipments(destination, parcels, items, confirmation, key=PRIMARY_KEY, origin=None):
+    auth = _auth(key)
+    origin = origin or {}
+    origin_addr = origin_address(origin)
+    dest = build_destination(destination, origin.get("origin_email"))
     bodies = []
     for i, parcel in enumerate(parcels):
         body = {
-            "origin_address": origin,
+            "origin_address": origin_addr,
             "destination_address": dest,
             "incoterms": "DDU",
             # order items ride on box 1 for customs; other boxes get a stub
-            "parcels": build_parcels([parcel], items if i == 0 else []),
+            "parcels": build_parcels([parcel], items if i == 0 else [], key),
         }
         if confirmation:
             body["shipping_settings"] = {"additional_services": {"delivery_confirmation": confirmation}}
@@ -361,15 +370,15 @@ def _create_shipments(destination, parcels, items, confirmation):
     if errors:
         # don't leave orphan shipments behind for the boxes that succeeded
         created = [r["easyship_shipment_id"] for r in results if not isinstance(r, EasyshipError)]
-        cancel_all(created)
+        cancel_all(created, key)
         raise errors[0]
     return results
 
 
-def buy_labels(shipment_ids, courier_service_id):
+def buy_labels(shipment_ids, courier_service_id, key=PRIMARY_KEY):
     """Purchase labels for all shipments in parallel.
     Returns {shipment_id: shipment_object_or_EasyshipError}."""
-    auth = _auth()
+    auth = _auth(key)
     out = {}
     with ThreadPoolExecutor(max_workers=min(len(shipment_ids), 6)) as pool:
         futures = {
@@ -387,10 +396,10 @@ def buy_labels(shipment_ids, courier_service_id):
     return out
 
 
-def get_shipments(shipment_ids):
+def get_shipments(shipment_ids, key=PRIMARY_KEY):
     """Fetch several shipments in parallel.
     Returns {shipment_id: shipment_object_or_EasyshipError}."""
-    auth = _auth()
+    auth = _auth(key)
     out = {}
     with ThreadPoolExecutor(max_workers=min(len(shipment_ids), 6)) as pool:
         futures = {
@@ -406,26 +415,30 @@ def get_shipments(shipment_ids):
     return out
 
 
-def get_shipment(easyship_shipment_id, pdf_4x6=False):
+def get_shipment(easyship_shipment_id, pdf_4x6=False, key=PRIMARY_KEY, auth=None):
     params = {"format": "PDF", "label": "4x6"} if pdf_4x6 else None
-    data = _request("GET", f"/shipments/{easyship_shipment_id}", params=params)
+    data = _request("GET", f"/shipments/{easyship_shipment_id}", params=params, auth=auth or _auth(key))
     return data["shipment"]
 
 
-def cancel_shipment(easyship_shipment_id):
-    return _request("POST", f"/shipments/{easyship_shipment_id}/cancel")
+def cancel_shipment(easyship_shipment_id, key=PRIMARY_KEY, auth=None):
+    return _request("POST", f"/shipments/{easyship_shipment_id}/cancel", auth=auth or _auth(key))
 
 
-def cancel_all(shipment_ids):
+def cancel_all(shipment_ids, key=PRIMARY_KEY):
     """Cancel several shipments; already-cancelled ones don't count as errors.
     Returns a list of error strings."""
     errors = []
-    for sid in [s for s in shipment_ids if s]:
+    ids = [s for s in shipment_ids if s]
+    if not ids:
+        return errors
+    auth = _auth(key)
+    for sid in ids:
         try:
-            cancel_shipment(sid)
+            cancel_shipment(sid, auth=auth)
         except EasyshipError as e:
             try:
-                current = get_shipment(sid)
+                current = get_shipment(sid, auth=auth)
                 if current.get("label_state") in ("voided", "cancelled") or \
                    current.get("shipment_state") in ("cancelled", "abandoned"):
                     continue

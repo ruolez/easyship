@@ -243,9 +243,15 @@ class GroupedBuyTest(unittest.TestCase):
 
         ss._request = fake_request
         ss._carriers = lambda auth, force=False: []
-        ss._origin_address = lambda: {"name": "W", "address_line1": "9 Dock", "city_locality": "D",
-                                      "state_province": "TX", "postal_code": "2", "country_code": "US"}
-        ss.db.get_setting = lambda key, default=None: "key" if key == "shipstation_api_key" else default
+        ss._origin_address = lambda *a, **k: {"name": "W", "address_line1": "9 Dock", "city_locality": "D",
+                                              "state_province": "TX", "postal_code": "2", "country_code": "US"}
+        self.settings_read = []
+
+        def get_setting(key, default=None):
+            self.settings_read.append(key)
+            return "key" if key.endswith("_api_key") else default
+
+        ss.db.get_setting = get_setting
 
     def tearDown(self):
         ss._request, ss._carriers, ss._origin_address = self._orig
@@ -261,6 +267,11 @@ class GroupedBuyTest(unittest.TestCase):
             {bid: (st.tracking_numbers, st.cost, st.label_status) for bid, st in out.items()},
             {"se-s-9#1": (["1Z-A"], 5.0, LabelStatus.READY),
              "se-s-9#2": (["1Z-B"], 5.0, LabelStatus.READY)})
+
+    def test_second_instance_reads_its_own_api_key(self):
+        ss.ShipStationProvider("shipstation-5", "East").buy_labels(["se-s-9"], f"{UPS}:ups_ground")
+        self.assertIn("shipstation-5_api_key", self.settings_read)
+        self.assertNotIn("shipstation_api_key", self.settings_read)
 
     def test_cancel_voids_a_shared_label_once(self):
         voids = []
@@ -296,6 +307,32 @@ class DescriptorTest(unittest.TestCase):
         self.assertEqual(
             ([f["key"] for f in d["fields"] if f["type"] == "secret"], d["supports"], d["enabled_key"], d["modes"]),
             (["shipstation_api_key"], {"service_exclusions": True}, "shipstation_enabled", []))
+
+    def test_second_instance_descriptor_is_namespaced_by_its_key(self):
+        d = ss.ShipStationProvider("shipstation-5", "East").descriptor()
+        keys = [d["enabled_key"], d["origin_override_key"]] + [f["key"] for f in d["fields"]] \
+            + [f["key"] for f in d["origin_fields"]]
+        self.assertEqual(
+            (d["name"], d["label"], d["platform"], d["platform_label"],
+             all(k.startswith("shipstation-5_") for k in keys),
+             d["services_endpoint"]),
+            ("shipstation-5", "East", "shipstation", "ShipStation", True,
+             "/api/providers/shipstation-5/services"))
+
+    def test_rates_are_tagged_with_the_instance_key(self):
+        orig = (ss._request, ss._carriers, ss._origin_address, ss.db.get_setting)
+        ss._request = lambda *a, **k: {"shipment_id": "se-s-1",
+                                       "rate_response": {"rates": [rate(UPS, "ups_ground", 10.0)]}}
+        ss._carriers = lambda auth, force=False: [{"carrier_id": UPS, "carrier_code": "ups",
+                                                    "friendly_name": "UPS", "services": []}]
+        ss._origin_address = lambda *a, **k: {}
+        ss.db.get_setting = lambda key, default=None: "key" if key.endswith("_api_key") else default
+        try:
+            _, rates, _ = ss.ShipStationProvider("shipstation-5", "East").create_draft_shipments(
+                {"address1": "1 Main"}, [{"weight": 1}], [])
+        finally:
+            ss._request, ss._carriers, ss._origin_address, ss.db.get_setting = orig
+        self.assertEqual([r.provider for r in rates], ["shipstation-5"])
 
 
 if __name__ == "__main__":

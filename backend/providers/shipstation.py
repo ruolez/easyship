@@ -38,10 +38,12 @@ from providers.base import (
     Rate,
     ShipmentState,
     ShippingProvider,
+    missing_origin_fields,
+    origin_descriptor,
 )
 
 BASE_URL = "https://api.shipstation.com"
-EXCLUDED_KEY = "shipstation_excluded_service_ids"
+PRIMARY_KEY = "shipstation"
 MASK = "••••••••"
 LABEL_FORMATS = ("pdf", "zpl", "png")
 CONFIRMATION = {"adult": "adult_signature", "signature": "signature"}
@@ -67,26 +69,26 @@ _carrier_cache = {}
 _carrier_lock = threading.Lock()
 
 
-def _token():
-    token = db.get_setting("shipstation_api_key")
+def _token(key=PRIMARY_KEY):
+    token = db.get_setting(f"{key}_api_key")
     if not token:
         raise ProviderError("No ShipStation API key configured — set it in Settings")
     return token
 
 
-def _auth():
+def _auth(key=PRIMARY_KEY):
     """(base_url, token) captured in the request context so parallel worker
     threads — which have no Flask context — can still authenticate."""
-    return BASE_URL, _token()
+    return BASE_URL, _token(key)
 
 
-def _label_format():
-    val = (db.get_setting("shipstation_label_format") or "pdf").lower()
+def _label_format(key=PRIMARY_KEY):
+    val = (db.get_setting(f"{key}_label_format") or "pdf").lower()
     return val if val in LABEL_FORMATS else "pdf"
 
 
-def _test_labels():
-    return db.get_setting("shipstation_test_labels") == "true"
+def _test_labels(key=PRIMARY_KEY):
+    return db.get_setting(f"{key}_test_labels") == "true"
 
 
 def _extract_error(resp):
@@ -168,29 +170,30 @@ def _compact(address):
     return {k: v for k, v in address.items() if v not in (None, "")}
 
 
-def _origin_address():
-    missing = [label for key, label in ORIGIN_REQUIRED.items() if not (db.get_setting(key) or "").strip()]
+def _origin_address(origin):
+    """ShipStation address from an `origin_settings()` dict."""
+    missing = missing_origin_fields(origin, ORIGIN_REQUIRED)
     if missing:
         raise ProviderError(
             "Origin address is incomplete — fill in on the Settings page: " + ", ".join(missing)
         )
-    company = db.get_setting("origin_company") or ""
+    company = origin.get("origin_company") or ""
     return _compact({
-        "name": db.get_setting("origin_contact") or company or "Shipping",
+        "name": origin.get("origin_contact") or company or "Shipping",
         "company_name": company,
-        "address_line1": db.get_setting("origin_address1"),
-        "address_line2": db.get_setting("origin_address2") or "",
-        "city_locality": db.get_setting("origin_city"),
-        "state_province": db.get_setting("origin_state"),
-        "postal_code": db.get_setting("origin_zip"),
+        "address_line1": origin.get("origin_address1"),
+        "address_line2": origin.get("origin_address2") or "",
+        "city_locality": origin.get("origin_city"),
+        "state_province": origin.get("origin_state"),
+        "postal_code": origin.get("origin_zip"),
         "country_code": "US",
-        "phone": db.get_setting("origin_phone") or "",
-        "email": db.get_setting("origin_email") or "",
+        "phone": origin.get("origin_phone") or "",
+        "email": origin.get("origin_email") or "",
     })
 
 
-def _dest_address(dest):
-    email = (dest.get("email") or "").strip() or (db.get_setting("origin_email") or "").strip()
+def _dest_address(dest, origin_email=""):
+    email = (dest.get("email") or "").strip() or (origin_email or "").strip()
     return _compact({
         "name": dest.get("contact") or dest.get("company") or "Recipient",
         "company_name": dest.get("company") or "",
@@ -347,10 +350,11 @@ def _cheapest_by_service(rates):
     return out
 
 
-def _combine_rates(rates, catalog=None, carrier_names=None):
+def _combine_rates(rates, catalog=None, carrier_names=None, provider=PRIMARY_KEY):
     """Quotes for one shipment (which may carry several packages): the cheapest
     usable rate per service, sorted by price. The cheapest is flagged as best
-    value (ShipStation has no best-value attribute of its own)."""
+    value (ShipStation has no best-value attribute of its own). `provider` is
+    the instance key."""
     catalog = catalog or {}
     carrier_names = carrier_names or {}
     combined = []
@@ -358,7 +362,7 @@ def _combine_rates(rates, catalog=None, carrier_names=None):
         key = (r.get("carrier_id"), r.get("service_code"))
         days = int(r.get("delivery_days") or 0) or None
         combined.append(Rate(
-            provider="shipstation",
+            provider=provider,
             provider_service_id=sid,
             courier_name=catalog.get(key) or r.get("service_type") or r.get("service_code") or sid,
             umbrella_name=(carrier_names.get(r.get("carrier_id"))
@@ -481,19 +485,20 @@ def _inline_shipment(draft, carrier_id, service_code, external_shipment_id, ship
 
 
 class ShipStationProvider(ShippingProvider):
-    name = "shipstation"
+    platform = "shipstation"
     label = "ShipStation"
     modes = ()
 
     # ---- rating / drafting ----
     def create_draft_shipments(self, destination, parcels, items, options=None):
-        auth = _auth()
+        auth = _auth(self.name)
         carriers = _carriers(auth)
         carrier_ids = [c["carrier_id"] for c in carriers if c.get("carrier_id")]
         if not carrier_ids:
             raise ProviderError("No carriers are connected to this ShipStation account")
-        ship_from = _origin_address()
-        ship_to = _dest_address(destination)
+        origin = self.origin()
+        ship_from = _origin_address(origin)
+        ship_to = _dest_address(destination, origin.get("origin_email"))
         confirmation = CONFIRMATION.get((options or {}).get("signature") or "none")
         # One shipment carrying every box: multi-package rating is how the
         # ShipStation site quotes, and the only way multi-package discounts
@@ -518,10 +523,11 @@ class ShipStationProvider(ShippingProvider):
         if not shipment_id:
             raise ProviderError("ShipStation did not return a shipment id")
         drafts = [DraftShipment(_box_id(shipment_id, i, len(parcels))) for i in range(len(parcels))]
-        return drafts, _combine_rates(rates, _service_catalog(carriers), _carrier_names(carriers)), []
+        return drafts, _combine_rates(rates, _service_catalog(carriers), _carrier_names(carriers),
+                                      provider=self.name), []
 
     def get_excluded_service_ids(self):
-        raw = db.get_setting(EXCLUDED_KEY)
+        raw = self.setting("excluded_service_ids")
         if not raw:
             return set()
         try:
@@ -531,7 +537,7 @@ class ShipStationProvider(ShippingProvider):
 
     def set_excluded_service_ids(self, ids):
         clean = sorted({str(i) for i in ids if i})
-        db.set_setting(EXCLUDED_KEY, json.dumps(clean))
+        db.set_setting(self.setting_key("excluded_service_ids"), json.dumps(clean))
         return clean
 
     # ---- label lifecycle ----
@@ -553,13 +559,13 @@ class ShipStationProvider(ShippingProvider):
         return label
 
     def buy_labels(self, provider_shipment_ids, service_id):
-        auth = _auth()
+        auth = _auth(self.name)
         carrier_id, service_code = _split_service_id(service_id)
-        label_format = _label_format()
-        test_label = _test_labels()
+        label_format = _label_format(self.name)
+        test_label = _test_labels(self.name)
         carriers = _carriers(auth)
         catalog, names = _service_catalog(carriers), _carrier_names(carriers)
-        origin = _origin_address()  # settings are read here, not in worker threads
+        origin = _origin_address(self.origin())  # settings are read here, not in worker threads
 
         # Several box ids can share one multi-package shipment — purchase once
         # per shipment, then hand each box its own package's view of the label.
@@ -602,7 +608,7 @@ class ShipStationProvider(ShippingProvider):
         return out
 
     def poll_shipments(self, provider_shipment_ids, service_id=None):
-        auth = _auth()
+        auth = _auth(self.name)
         carriers = _carriers(auth)
         catalog, names = _service_catalog(carriers), _carrier_names(carriers)
 
@@ -629,7 +635,7 @@ class ShipStationProvider(ShippingProvider):
         return out
 
     def fetch_labels(self, state):
-        fmt = _label_format()
+        fmt = _label_format(self.name)
         url = _download_url(state.raw or {}, fmt)
         if not url:
             return []
@@ -650,9 +656,10 @@ class ShipStationProvider(ShippingProvider):
             if base and base not in seen:
                 seen.add(base)
                 bases.append(base)
+        auth = _auth(self.name) if bases else None
         for sid in bases:
             try:
-                result = _request("PUT", f"/v2/labels/{sid}/void")
+                result = _request("PUT", f"/v2/labels/{sid}/void", auth=auth)
                 if result.get("approved") is False:
                     msg = (result.get("message") or "").lower()
                     if "already" not in msg:
@@ -666,7 +673,7 @@ class ShipStationProvider(ShippingProvider):
                     errors.append(f"{sid}: {e}")
                     continue
             try:
-                _request("PUT", f"/v2/shipments/{sid}/cancel")
+                _request("PUT", f"/v2/shipments/{sid}/cancel", auth=auth)
             except ProviderError as e:
                 # A never-created or already-cancelled draft — nothing to undo.
                 if e.status in (404, 409):
@@ -676,17 +683,18 @@ class ShipStationProvider(ShippingProvider):
 
     def get_raw_shipment(self, provider_shipment_id):
         base, _ = _split_box_id(provider_shipment_id)
+        auth = _auth(self.name)
         try:
-            return _request("GET", f"/v2/labels/{base}")
+            return _request("GET", f"/v2/labels/{base}", auth=auth)
         except ProviderError:
-            return _request("GET", f"/v2/shipments/{base}")
+            return _request("GET", f"/v2/shipments/{base}", auth=auth)
 
     # ---- settings surface ----
     def list_item_categories(self):
         return []
 
     def list_courier_services(self):
-        carriers = _carriers(_auth(), force=True)
+        carriers = _carriers(_auth(self.name), force=True)
         names = _carrier_names(carriers)
         services = {}
         for c in carriers:
@@ -706,11 +714,11 @@ class ShipStationProvider(ShippingProvider):
         return ""
 
     def is_test_mode(self):
-        return _test_labels()
+        return _test_labels(self.name)
 
     def test_connection(self, mode=None, token=None):
         if not token or token == MASK:
-            token = db.get_setting("shipstation_api_key")
+            token = self.setting("api_key")
         if not token:
             raise ProviderError("No ShipStation API key configured")
         try:
@@ -729,7 +737,7 @@ class ShipStationProvider(ShippingProvider):
                 carriers = []
             names = sorted({c.get("friendly_name") or c.get("carrier_code") or "" for c in carriers} - {""})
             summary = f"{len(carriers)} carrier(s)" + (": " + ", ".join(names) if names else "")
-            if _test_labels():
+            if _test_labels(self.name):
                 summary += " — test labels ON (no charge)"
             return {"ok": True, "account": summary}
         if resp.status_code in (401, 403):
@@ -739,20 +747,23 @@ class ShipStationProvider(ShippingProvider):
     def descriptor(self):
         return {
             "name": self.name,
+            "key": self.name,
+            "platform": self.platform,
+            "platform_label": self.platform_label,
             "label": self.label,
-            "enabled": db.get_setting("shipstation_enabled") == "true",
-            "enabled_key": "shipstation_enabled",
+            "enabled": self.setting("enabled") == "true",
+            "enabled_key": self.setting_key("enabled"),
             "modes": [],
             "fields": [
-                {"key": "shipstation_api_key", "label": "API key (v2)", "type": "secret",
+                {"key": self.setting_key("api_key"), "label": "API key (v2)", "type": "secret",
                  "hint": "ShipStation → Settings → Account → API Settings. Needs a Standard plan or higher."},
-                {"key": "shipstation_label_format", "label": "Label format", "type": "select",
+                {"key": self.setting_key("label_format"), "label": "Label format", "type": "select",
                  "options": [
                      {"value": "pdf", "label": "PDF (4x6)"},
                      {"value": "zpl", "label": "ZPL"},
                      {"value": "png", "label": "PNG"},
                  ]},
-                {"key": "shipstation_test_labels", "label": "Test labels", "type": "select",
+                {"key": self.setting_key("test_labels"), "label": "Test labels", "type": "select",
                  "options": [
                      {"value": "false", "label": "Off — live labels (cost money)"},
                      {"value": "true", "label": "On — test labels, no charge (not valid for shipping)"},
@@ -763,4 +774,5 @@ class ShipStationProvider(ShippingProvider):
             "supports": {"service_exclusions": True},
             "services_endpoint": f"/api/providers/{self.name}/services",
             "excluded_endpoint": f"/api/providers/{self.name}/excluded-services",
+            **origin_descriptor(self.name),
         }

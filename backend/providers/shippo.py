@@ -28,10 +28,12 @@ from providers.base import (
     Rate,
     ShipmentState,
     ShippingProvider,
+    missing_origin_fields,
+    origin_descriptor,
 )
 
 BASE_URL = "https://api.goshippo.com"
-EXCLUDED_KEY = "shippo_excluded_service_ids"
+PRIMARY_KEY = "shippo"
 MASK = "••••••••"
 
 ORIGIN_REQUIRED = {
@@ -45,17 +47,17 @@ ORIGIN_REQUIRED = {
 }
 
 
-def _token():
-    token = db.get_setting("shippo_token")
+def _token(key=PRIMARY_KEY):
+    token = db.get_setting(f"{key}_token")
     if not token:
         raise ProviderError("No Shippo token configured — set it in Settings")
     return token
 
 
-def _auth():
+def _auth(key=PRIMARY_KEY):
     """(base_url, token) captured in the request context so parallel worker
     threads — which have no Flask context — can still authenticate."""
-    return BASE_URL, _token()
+    return BASE_URL, _token(key)
 
 
 def _extract_error(resp):
@@ -113,29 +115,30 @@ def _request(method, path, json_body=None, params=None, timeout=45, auth=None):
     return resp.json() if resp.content else {}
 
 
-def _origin_address():
-    missing = [label for key, label in ORIGIN_REQUIRED.items() if not (db.get_setting(key) or "").strip()]
+def _origin_address(origin):
+    """Shippo address from an `origin_settings()` dict."""
+    missing = missing_origin_fields(origin, ORIGIN_REQUIRED)
     if missing:
         raise ProviderError(
             "Origin address is incomplete — fill in on the Settings page: " + ", ".join(missing)
         )
-    company = db.get_setting("origin_company") or ""
+    company = origin.get("origin_company") or ""
     return {
-        "name": db.get_setting("origin_contact") or company or "Shipping",
+        "name": origin.get("origin_contact") or company or "Shipping",
         "company": company,
-        "street1": db.get_setting("origin_address1"),
-        "street2": db.get_setting("origin_address2") or "",
-        "city": db.get_setting("origin_city"),
-        "state": db.get_setting("origin_state"),
-        "zip": db.get_setting("origin_zip"),
+        "street1": origin.get("origin_address1"),
+        "street2": origin.get("origin_address2") or "",
+        "city": origin.get("origin_city"),
+        "state": origin.get("origin_state"),
+        "zip": origin.get("origin_zip"),
         "country": "US",
-        "phone": db.get_setting("origin_phone") or "",
-        "email": db.get_setting("origin_email") or "",
+        "phone": origin.get("origin_phone") or "",
+        "email": origin.get("origin_email") or "",
     }
 
 
-def _dest_address(dest):
-    email = (dest.get("email") or "").strip() or (db.get_setting("origin_email") or "").strip()
+def _dest_address(dest, origin_email=""):
+    email = (dest.get("email") or "").strip() or (origin_email or "").strip()
     return {
         "name": dest.get("contact") or dest.get("company") or "Recipient",
         "company": dest.get("company") or "",
@@ -177,9 +180,9 @@ def _cheapest_by_token(shipment):
     return out
 
 
-def _combine_rates(shipments):
+def _combine_rates(shipments, provider=PRIMARY_KEY):
     """One quote list across per-box shipments: only service levels every box
-    can serve, price = sum across boxes."""
+    can serve, price = sum across boxes. `provider` is the instance key."""
     per_box = [_cheapest_by_token(s) for s in shipments]
     if not per_box or any(not m for m in per_box):
         # Some box returned no rates -> no service serves every box.
@@ -194,7 +197,7 @@ def _combine_rates(shipments):
         sl = rs[0].get("servicelevel") or {}
         est = max((r.get("estimated_days") or 0) for r in rs) or None
         combined.append(Rate(
-            provider="shippo",
+            provider=provider,
             provider_service_id=token,
             courier_name=sl.get("display_name") or sl.get("name") or token,
             umbrella_name=rs[0].get("provider") or "",
@@ -269,15 +272,16 @@ def _map_parallel(items, fn):
 
 
 class ShippoProvider(ShippingProvider):
-    name = "shippo"
+    platform = "shippo"
     label = "GoShippo"
     modes = ()
 
     # ---- rating / drafting ----
     def create_draft_shipments(self, destination, parcels, items, options=None):
-        auth = _auth()
-        address_from = _origin_address()
-        address_to = _dest_address(destination)
+        auth = _auth(self.name)
+        origin = self.origin()
+        address_from = _origin_address(origin)
+        address_to = _dest_address(destination, origin.get("origin_email"))
         signature = SIGNATURE_CONFIRMATION.get((options or {}).get("signature") or "none")
         bodies = [
             {"address_from": address_from, "address_to": address_to,
@@ -306,10 +310,10 @@ class ShippoProvider(ShippingProvider):
                 if errors:
                     raise errors[0]
         drafts = [DraftShipment(s["object_id"]) for s in shipments]
-        return drafts, _combine_rates(shipments), []
+        return drafts, _combine_rates(shipments, provider=self.name), []
 
     def get_excluded_service_ids(self):
-        raw = db.get_setting(EXCLUDED_KEY)
+        raw = self.setting("excluded_service_ids")
         if not raw:
             return set()
         try:
@@ -319,13 +323,13 @@ class ShippoProvider(ShippingProvider):
 
     def set_excluded_service_ids(self, ids):
         clean = sorted({str(i) for i in ids if i})
-        db.set_setting(EXCLUDED_KEY, json.dumps(clean))
+        db.set_setting(self.setting_key("excluded_service_ids"), json.dumps(clean))
         return clean
 
     # ---- label lifecycle ----
     def buy_labels(self, provider_shipment_ids, service_id):
-        auth = _auth()
-        label_type = db.get_setting("shippo_label_file_type") or "PDF_4x6"
+        auth = _auth(self.name)
+        label_type = self.setting("label_file_type") or "PDF_4x6"
         if label_type.upper() == "ZPL":  # Shippo's name for it; older settings stored "ZPL"
             label_type = "ZPLII"
 
@@ -343,7 +347,7 @@ class ShippoProvider(ShippingProvider):
         return _map_parallel(list(provider_shipment_ids), work)
 
     def poll_shipments(self, provider_shipment_ids, service_id=None):
-        auth = _auth()
+        auth = _auth(self.name)
 
         def work(shipment_id):
             try:
@@ -392,9 +396,11 @@ class ShippoProvider(ShippingProvider):
 
     def cancel_all(self, provider_shipment_ids):
         errors = []
-        for tid in [i for i in provider_shipment_ids if i]:
+        ids = [i for i in provider_shipment_ids if i]
+        auth = _auth(self.name) if ids else None
+        for tid in ids:
             try:
-                result = _request("POST", "/refunds/", json_body={"transaction": tid, "async": False})
+                result = _request("POST", "/refunds/", json_body={"transaction": tid, "async": False}, auth=auth)
                 if (result.get("status") or "").upper() == "ERROR":
                     errors.append(f"{tid}: refund rejected")
             except ProviderError as e:
@@ -406,17 +412,18 @@ class ShippoProvider(ShippingProvider):
         return errors
 
     def get_raw_shipment(self, provider_shipment_id):
+        auth = _auth(self.name)
         try:
-            return _request("GET", f"/transactions/{provider_shipment_id}/")
+            return _request("GET", f"/transactions/{provider_shipment_id}/", auth=auth)
         except ProviderError:
-            return _request("GET", f"/shipments/{provider_shipment_id}/")
+            return _request("GET", f"/shipments/{provider_shipment_id}/", auth=auth)
 
     # ---- settings surface ----
     def list_item_categories(self):
         return []
 
     def list_courier_services(self):
-        auth = _auth()
+        auth = _auth(self.name)
         services = {}
         page = 1
         while page <= 20:  # safety cap
@@ -444,11 +451,11 @@ class ShippoProvider(ShippingProvider):
         return ""
 
     def is_test_mode(self):
-        return (db.get_setting("shippo_token") or "").startswith("shippo_test_")
+        return (self.setting("token") or "").startswith("shippo_test_")
 
     def test_connection(self, mode=None, token=None):
         if not token or token == MASK:
-            token = db.get_setting("shippo_token")
+            token = self.setting("token")
         if not token:
             raise ProviderError("No Shippo token configured")
         try:
@@ -470,13 +477,16 @@ class ShippoProvider(ShippingProvider):
     def descriptor(self):
         return {
             "name": self.name,
+            "key": self.name,
+            "platform": self.platform,
+            "platform_label": self.platform_label,
             "label": self.label,
-            "enabled": db.get_setting("shippo_enabled") == "true",
-            "enabled_key": "shippo_enabled",
+            "enabled": self.setting("enabled") == "true",
+            "enabled_key": self.setting_key("enabled"),
             "modes": [],
             "fields": [
-                {"key": "shippo_token", "label": "API token", "type": "secret"},
-                {"key": "shippo_label_file_type", "label": "Label format", "type": "select",
+                {"key": self.setting_key("token"), "label": "API token", "type": "secret"},
+                {"key": self.setting_key("label_file_type"), "label": "Label format", "type": "select",
                  "options": [
                      {"value": "PDF_4x6", "label": "PDF 4x6"},
                      {"value": "PNG", "label": "PNG"},
@@ -488,4 +498,5 @@ class ShippoProvider(ShippingProvider):
             "supports": {"service_exclusions": True},
             "services_endpoint": f"/api/providers/{self.name}/services",
             "excluded_endpoint": f"/api/providers/{self.name}/excluded-services",
+            **origin_descriptor(self.name),
         }

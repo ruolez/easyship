@@ -29,13 +29,26 @@
     <!-- ================= Providers ================= -->
     <section class="tab-panel" data-panel="providers">
       <div class="card" id="card-provider-picker">
-        <div class="field fixed" style="min-width:260px">
-          <label>Configure provider</label>
-          <select id="provider-config-select"></select>
+        <div class="row">
+          <div class="field fixed" style="min-width:260px">
+            <label>Configure integration</label>
+            <select id="provider-config-select"></select>
+          </div>
+          <div class="fixed" style="flex:1"></div>
+          <div class="field fixed" style="min-width:160px">
+            <label>Add integration</label>
+            <select id="new-instance-platform"></select>
+          </div>
+          <div class="field fixed" style="min-width:200px">
+            <label>Name</label>
+            <input id="new-instance-label" placeholder="e.g. ShipStation – East" maxlength="60" autocomplete="off">
+          </div>
+          <div class="fixed"><button class="btn btn-outlined" id="add-instance">Add</button></div>
         </div>
+        <span class="hint">Several accounts of the same platform can coexist — each one gets its own name in the “Shipping with” selector and can be assigned per user.</span>
       </div>
-      <!-- One card per provider, rendered from GET /api/providers; the picker
-           above shows only the selected provider's card. -->
+      <!-- One card per configured provider instance, rendered from
+           GET /api/providers; the picker above shows only the selected card. -->
       <div id="providers-container"></div>
     </section>
 
