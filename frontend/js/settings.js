@@ -418,6 +418,10 @@ function providerCardHtml(p) {
       </div>
       <div class="row">${p.fields.map(fieldHtml).join('')}</div>
       ${origin}
+      <div class="mt-16" data-inst-users="${esc(p.name)}">
+        <h4 class="mb-16">Assigned users</h4>
+        <div id="inst-users-${esc(p.name)}"><p class="text-secondary">Loading users…</p></div>
+      </div>
       <div class="row mt-16">
         <div class="fixed"><button class="btn btn-text btn-small" data-rename="${esc(p.name)}">Rename</button></div>
         <div class="fixed"><button class="btn btn-danger btn-small" data-delete="${esc(p.name)}"${deleteAttrs}>Delete</button></div>
@@ -429,6 +433,10 @@ function providerCardHtml(p) {
 function wireProviderCard(p) {
   const toggle = document.querySelector(`[data-origin-toggle="${p.name}"]`);
   if (toggle) toggle.addEventListener('change', syncOriginToggles);
+  // Delegated: the block's innerHTML is replaced on every loadUsers().
+  document.getElementById(`inst-users-${p.name}`).addEventListener('click', (e) => {
+    if (e.target.closest('[data-save-inst-users]')) saveInstanceUsers(p);
+  });
   document.querySelector(`[data-rename="${p.name}"]`).addEventListener('click', () => renameInstance(p));
   document.querySelector(`[data-delete="${p.name}"]`).addEventListener('click', () => deleteInstance(p));
   if (p.test_endpoint) {
@@ -449,6 +457,49 @@ function wireProviderCard(p) {
     document.getElementById(`services-list-${p.name}`)
       .addEventListener('change', onServiceToggle);
   }
+}
+
+/* ---------- Assigned users, per account card ---------- */
+function instanceUsersHtml(key, users) {
+  const admins = users.filter((u) => u.role === 'admin' && u.is_active).map((u) => u.username);
+  const packers = users.filter((u) => u.role !== 'admin' && u.is_active);
+  const adminLine = admins.length
+    ? `<p class="hint mb-16">Admins always have access: ${esc(admins.join(', '))}</p>` : '';
+  if (allProviders.length <= 1) {
+    return `${adminLine}<p class="text-secondary">This is the only shipping account, so every user can ship with it.</p>`;
+  }
+  if (!packers.length) return `${adminLine}<p class="text-secondary">No packer accounts yet — add users on the Users tab.</p>`;
+  return `${adminLine}
+    <div class="svc-checklist">${packers.map((u) => `
+      <label class="svc-item"><input type="checkbox" class="inst-user" value="${u.id}"
+        ${!u.allowed_providers || u.allowed_providers.includes(key) ? 'checked' : ''}> ${esc(u.username)}</label>`).join('')}
+    </div>
+    <div class="row mt-16">
+      <div class="fixed"><button class="btn btn-outlined btn-small" data-save-inst-users="${esc(key)}">Save assignments</button></div>
+    </div>
+    <span class="hint">Unchecked users keep their other accounts. A user must keep at least one account — deactivate them to remove all access.</span>`;
+}
+
+function renderInstanceUserBlocks(users) {
+  document.querySelectorAll('[data-inst-users]').forEach((block) => {
+    const key = block.dataset.instUsers;
+    const target = document.getElementById(`inst-users-${key}`);
+    if (target) target.innerHTML = instanceUsersHtml(key, users);
+  });
+}
+
+async function saveInstanceUsers(p) {
+  const inst = instanceByKey[p.name];
+  if (!inst) return;
+  const block = document.getElementById(`inst-users-${p.name}`);
+  const userIds = [...block.querySelectorAll('.inst-user:checked')].map((el) => Number(el.value));
+  try {
+    await api(`/api/provider-instances/${inst.id}/users`, { method: 'PUT', body: { user_ids: userIds } });
+    snackbar(`${inst.label}: assignments saved`, 'success');
+  } catch (err) {
+    snackbar(err.message, 'error');
+  }
+  loadUsers(); // refreshes the Users table and every card's block from the DB
 }
 
 function renameInstance(p) {
@@ -869,7 +920,8 @@ let allProviders = [];
 async function loadAllProviders() {
   if (!allProviders.length) {
     try {
-      allProviders = (await api('/api/providers')).map((p) => ({ name: p.name, label: p.label }));
+      allProviders = (await api('/api/providers'))
+        .map((p) => ({ name: p.name, label: p.label, platform: p.platform, platform_label: p.platform_label }));
     } catch { /* pickers degrade to "All" */ }
   }
   return allProviders;
@@ -880,19 +932,32 @@ function providerNamesToLabels(names) {
 }
 
 function integrationsCell(u) {
-  if (u.role === 'admin' || !u.allowed_providers || !u.allowed_providers.length) return 'All';
+  if (u.role === 'admin' || !u.allowed_providers || !u.allowed_providers.length) return 'All accounts';
   return providerNamesToLabels(u.allowed_providers)
     .map((l) => `<span class="chip static">${esc(l)}</span>`).join(' ');
 }
 
+/* One checkbox per configured ACCOUNT (its own API key), grouped by platform
+   so two ShipStation accounts read as two distinct choices. */
 function providerChecklistHtml(checkedNames) {
   const all = !checkedNames || !checkedNames.length;
-  return `<div class="field mb-16" id="m-user-providers"><label>Allowed integrations</label>
-    <div class="svc-checklist">${allProviders.map((p) => `
+  const groups = new Map();
+  allProviders.forEach((p) => {
+    const g = p.platform_label || p.platform || 'Other';
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(p);
+  });
+  const item = (p) => `
       <label class="svc-item"><input type="checkbox" class="m-user-provider" value="${esc(p.name)}"
-        ${all || checkedNames.includes(p.name) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}
+        ${all || checkedNames.includes(p.name) ? 'checked' : ''}> ${esc(p.label)}${p.label !== p.platform_label ? ` <span class="text-secondary">· ${esc(p.platform_label)}</span>` : ''}</label>`;
+  return `<div class="field mb-16" id="m-user-providers"><label>Allowed shipping accounts</label>
+    <div class="svc-checklist">${[...groups.entries()].map(([g, items]) => `
+      <div class="svc-group">
+        <div class="svc-group-head"><h4>${esc(g)} account${items.length === 1 ? '' : 's'}</h4></div>
+        ${items.map(item).join('')}
+      </div>`).join('')}
     </div>
-    <span class="hint">Which shipping integrations this user can ship with. All (or none) checked = no restriction.</span>
+    <span class="hint">Each box is one account with its own API key. All checked = no restriction; a user must keep at least one.</span>
   </div>`;
 }
 
@@ -903,6 +968,7 @@ function checkedProviders() {
 async function loadUsers() {
   const [users] = await Promise.all([api('/api/users'), loadAllProviders()]);
   window.usersById = Object.fromEntries(users.map((u) => [u.id, u]));
+  renderInstanceUserBlocks(users);
   const tbody = document.getElementById('users-body');
   tbody.innerHTML = users.map((u) => `<tr>
     <td><strong>${esc(u.username)}</strong></td>
@@ -930,6 +996,10 @@ window.editUserProviders = async (id, username) => {
       <button class="btn btn-primary" id="m-user-providers-save">Save</button>
     </div>`);
   document.getElementById('m-user-providers-save').addEventListener('click', async () => {
+    if (!checkedProviders().length) {
+      snackbar('Keep at least one account — to remove all access, deactivate the user', 'error');
+      return;
+    }
     try {
       await api(`/api/users/${id}/providers`, {
         method: 'PUT',

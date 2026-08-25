@@ -192,10 +192,28 @@ def delete_provider_instance(instance_id):
         row = providers.delete_instance(instance_id)
     except LookupError as e:
         return api_error(str(e), 404)
-    except providers.InstanceEnabled as e:
+    except (providers.InstanceEnabled, providers.InstanceInUse) as e:
         return api_error(str(e), 409)
     audit("provider_instance.delete", row)
     return jsonify({"ok": True})
+
+
+@bp.put("/provider-instances/<int:instance_id>/users")
+@admin_required
+def set_provider_instance_users(instance_id):
+    """Assign users to one account from the integration's own card."""
+    data = request.get_json(silent=True) or {}
+    user_ids = data.get("user_ids")
+    if not isinstance(user_ids, list):
+        return api_error("user_ids must be a list of user ids")
+    try:
+        row = providers.set_instance_users(instance_id, user_ids)
+    except LookupError as e:
+        return api_error(str(e), 404)
+    except (TypeError, ValueError) as e:
+        return api_error(str(e))
+    audit("provider_instance.users", {"id": row["id"], "key": row["key"], "user_ids": row["user_ids"]})
+    return jsonify(row)
 
 
 @bp.get("/providers/enabled")
@@ -558,15 +576,19 @@ def activate_user(user_id):
 @bp.put("/users/<int:user_id>/providers")
 @admin_required
 def set_user_providers(user_id):
-    """Assign which shipping integrations a user may ship with.
-    None/empty = unrestricted; admins are never restricted."""
-    row = db.query("SELECT id, role FROM users WHERE id = %s", (user_id,), one=True)
+    """Assign which shipping accounts a user may ship with. Every account
+    selected = unrestricted; admins are never restricted. An empty selection
+    is refused — there is no 'no accounts' state; deactivate the user instead."""
+    row = db.query("SELECT id, role, username FROM users WHERE id = %s", (user_id,), one=True)
     if not row:
         return api_error("User not found", 404)
     if row["role"] == "admin":
         return api_error("Admins always have access to every integration")
     data = request.get_json(silent=True) or {}
-    allowed = providers.sanitize_allowed(data.get("allowed_providers"))
+    requested = data.get("allowed_providers") or []
+    if not any(str(n) in providers.instance_keys() for n in requested):
+        return api_error(f"{row['username']} {providers.NO_ACCOUNT_LEFT}")
+    allowed = providers.sanitize_allowed(requested)
     db.execute(
         "UPDATE users SET allowed_providers = %s WHERE id = %s",
         (json.dumps(allowed) if allowed else None, user_id),

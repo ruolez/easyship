@@ -123,5 +123,46 @@ class EnabledRouteTest(unittest.TestCase):
             providers.instance_keys, providers.enabled_providers, providers.db.query = orig
 
 
+class SetUserProvidersRouteTest(unittest.TestCase):
+    """PUT /api/users/<id>/providers refuses an empty selection — there is no
+    'no accounts' state, so nothing checked must not mean unrestricted."""
+
+    def setUp(self):
+        from flask import Flask
+        import settings_api
+        self.settings_api = settings_api
+        self.app = Flask(__name__)
+        self.app.secret_key = "test"
+        self.app.register_blueprint(settings_api.bp)
+        self._orig = (providers.instance_keys, providers.db.query, providers.db.execute)
+        providers.instance_keys = lambda: ["easyship", "shipstation-5"]
+        providers.db.query = lambda sql, params=None, one=False: {"id": 7, "role": "user", "username": "pat"}
+        self.writes = []  # UPDATE users writes only; the audit-log INSERT is filtered out
+        providers.db.execute = lambda sql, params=None, returning=False: (
+            self.writes.append(params) if sql.lstrip().startswith("UPDATE users") else None)
+
+    def tearDown(self):
+        providers.instance_keys, providers.db.query, providers.db.execute = self._orig
+
+    def call(self, allowed):
+        import json
+        from flask import session
+        with self.app.test_request_context("/api/users/7/providers", method="PUT", json={"allowed_providers": allowed}):
+            session["user_id"] = 1
+            session["role"] = "admin"
+            resp = self.settings_api.set_user_providers(7)
+            body, status = (resp, 200) if not isinstance(resp, tuple) else resp
+            return status, json.loads(body.get_data())
+
+    def test_empty_and_unknown_selections_are_refused_without_writing(self):
+        self.assertEqual(
+            (self.call([])[0], self.call(["bogus"])[0], self.writes),
+            (400, 400, []))
+
+    def test_a_real_subset_is_stored(self):
+        status, body = self.call(["shipstation-5"])
+        self.assertEqual((status, body["allowed_providers"], self.writes), (200, ["shipstation-5"], [('["shipstation-5"]', 7)]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 import unittest
@@ -13,9 +14,10 @@ class FakeDb:
     """Records every statement; answers instance lookups from `rows` and
     settings reads from `settings`."""
 
-    def __init__(self, rows, settings=None):
+    def __init__(self, rows, settings=None, users=None):
         self.rows = rows
         self.settings = settings or {}
+        self.users = users or []
         self.executed = []
 
     def get_setting(self, key, default=None):
@@ -31,6 +33,8 @@ class FakeDb:
             return next((r for r in self.rows if r["key"] == params[0]), None)
         if "FROM provider_instances" in sql:
             return list(self.rows)
+        if "FROM users" in sql:
+            return [u for u in self.users if u.get("is_active", True) and u.get("role", "user") != "admin"]
         return None
 
     def execute(self, sql, params=None, returning=False):
@@ -140,6 +144,16 @@ class DeleteInstanceTest(unittest.TestCase):
             providers.db = orig
         self.assertEqual(fake.executed, [])
 
+    def test_refused_while_it_is_a_users_only_account(self):
+        fake = FakeDb(ROWS, {}, users=[user(7, "pat", ["shipstation-5"]), user(8, "sam", None)])
+        orig = with_db(fake)
+        try:
+            with self.assertRaises(providers.InstanceInUse) as ctx:
+                providers.delete_instance(5)
+        finally:
+            providers.db = orig
+        self.assertEqual((fake.executed, "pat" in str(ctx.exception)), ([], True))
+
     def test_removes_only_that_instance_prefix_and_scrubs_user_allow_lists(self):
         fake = FakeDb(ROWS, {"shipstation-5_enabled": "false"})
         orig = with_db(fake)
@@ -151,6 +165,84 @@ class DeleteInstanceTest(unittest.TestCase):
         self.assertEqual(params, [(5,), ("shipstation-5_",), ("shipstation-5", "shipstation-5")])
         self.assertIn("starts_with(key, %s)", fake.executed[1][0])
         self.assertNotIn("LIKE", fake.executed[1][0])
+
+
+def user(uid, username, allowed, role="user", is_active=True):
+    return {"id": uid, "username": username, "allowed_providers": allowed, "role": role, "is_active": is_active}
+
+
+class SetInstanceUsersTest(unittest.TestCase):
+    """Assigning from the account's own card: only the users whose list must
+    change are written, and nobody can be left without an account."""
+
+    def run_case(self, users, user_ids, instance_id=5, rows=ROWS):
+        fake = FakeDb(rows, users=users)
+        orig = with_db(fake)
+        try:
+            result = providers.set_instance_users(instance_id, user_ids)
+        finally:
+            providers.db = orig
+        return result["user_ids"], [(uid, p and json.loads(p)) for p, uid in (x[1] for x in fake.executed)]
+
+    def test_unrestricted_user_kept_assigned_is_not_written(self):
+        self.assertEqual(self.run_case([user(7, "pat", None)], [7]), ([7], []))
+
+    def test_restricted_user_gains_the_account_in_creation_order(self):
+        self.assertEqual(self.run_case([user(7, "pat", ["easyship"])], [7]),
+                         ([7], [(7, ["easyship", "shipstation-5"])]))
+
+    def test_completing_the_set_collapses_to_unrestricted(self):
+        self.assertEqual(self.run_case([user(7, "pat", ["easyship", "shipstation"])], [7]),
+                         ([7], [(7, None)]))
+
+    def test_unrestricted_user_excluded_gets_every_other_account(self):
+        self.assertEqual(self.run_case([user(7, "pat", None)], []),
+                         ([], [(7, ["easyship", "shipstation"])]))
+
+    def test_restricted_user_excluded_loses_only_this_account(self):
+        self.assertEqual(self.run_case([user(7, "pat", ["easyship", "shipstation-5"])], []),
+                         ([], [(7, ["easyship"])]))
+
+    def test_excluded_user_already_without_the_account_is_not_written(self):
+        self.assertEqual(self.run_case([user(7, "pat", ["easyship"])], []), ([], []))
+
+    def test_leaving_a_user_with_no_account_is_refused_before_any_write(self):
+        fake = FakeDb(ROWS, users=[user(7, "pat", ["shipstation-5"]), user(8, "sam", ["easyship"])])
+        orig = with_db(fake)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                providers.set_instance_users(5, [8])
+        finally:
+            providers.db = orig
+        self.assertEqual((fake.executed, "pat" in str(ctx.exception)), ([], True))
+
+    def test_only_account_in_the_registry_cannot_be_unassigned(self):
+        fake = FakeDb([ROWS[0]], users=[user(7, "pat", None)])
+        orig = with_db(fake)
+        try:
+            with self.assertRaises(ValueError):
+                providers.set_instance_users(1, [])
+        finally:
+            providers.db = orig
+        self.assertEqual(fake.executed, [])
+
+    def test_admins_and_inactive_users_are_never_written(self):
+        users = [user(1, "root", None, role="admin"), user(9, "old", ["easyship"], is_active=False)]
+        self.assertEqual((self.run_case(users, [1, 9]), self.run_case(users, [])), (([], []), ([], [])))
+
+    def test_string_and_duplicate_ids_behave_like_ints(self):
+        self.assertEqual(self.run_case([user(7, "pat", ["easyship"])], ["7", 7]),
+                         ([7], [(7, ["easyship", "shipstation-5"])]))
+
+    def test_unknown_instance(self):
+        fake = FakeDb(ROWS, users=[user(7, "pat", None)])
+        orig = with_db(fake)
+        try:
+            with self.assertRaises(LookupError):
+                providers.set_instance_users(99, [7])
+        finally:
+            providers.db = orig
+        self.assertEqual(fake.executed, [])
 
 
 if __name__ == "__main__":

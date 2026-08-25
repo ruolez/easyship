@@ -15,15 +15,23 @@ Imports are deferred so `easyship_client` (which imports `providers.labels`) can
 load without a circular import through this package.
 """
 
+import json
+
 import db
 
 _REGISTRY = {}
 
 MAX_LABEL_LENGTH = 60
 
+NO_ACCOUNT_LEFT = "would be left with no shipping account — assign another account first, or deactivate them"
+
 
 class InstanceEnabled(Exception):
     """Raised when deleting an instance that is still switched on."""
+
+
+class InstanceInUse(Exception):
+    """Raised when deleting an instance that is some user's only account."""
 
 
 def _load_registry():
@@ -166,11 +174,58 @@ def rename_instance(instance_id, label):
     return {**row, "label": label}
 
 
+def _restrictable_users():
+    """Users whose allow-list matters: active, non-admin, in id order."""
+    return db.query(
+        "SELECT id, username, allowed_providers FROM users "
+        "WHERE is_active AND role <> 'admin' ORDER BY id"
+    ) or []
+
+
+def set_instance_users(instance_id, user_ids):
+    """Make exactly `user_ids` (of the active non-admin users) allowed to ship
+    with this instance, leaving their other accounts untouched. NULL = every
+    account stays NULL when included; an excluded NULL user gets the explicit
+    list of every other account. Refuses — before writing anything — when a
+    user would end up with no account at all (there is no 'none' state:
+    deactivate the user instead)."""
+    row = db.query("SELECT id, platform, key, label FROM provider_instances WHERE id = %s",
+                   (instance_id,), one=True)
+    if not row:
+        raise LookupError("Integration not found")
+    key = row["key"]
+    keys = instance_keys()
+    wanted = {int(u) for u in (user_ids or [])}
+    changes, conflicts, assigned = [], [], []
+    for u in _restrictable_users():
+        current = u["allowed_providers"]
+        if u["id"] in wanted:
+            assigned.append(u["id"])
+            new = None if current is None else sanitize_allowed(list(current) + [key])
+        else:
+            new = [k for k in (current or keys) if k != key]
+            if not new:
+                conflicts.append(u["username"])
+                continue
+            new = sanitize_allowed(new)
+        if new != current:
+            changes.append((u["id"], new))
+    if conflicts:
+        raise ValueError(f"{', '.join(conflicts)} {NO_ACCOUNT_LEFT}")
+    for user_id, new in changes:
+        db.execute(
+            "UPDATE users SET allowed_providers = %s WHERE id = %s",
+            (json.dumps(new) if new else None, user_id),
+        )
+    return {**row, "user_ids": assigned}
+
+
 def delete_instance(instance_id):
     """Remove an instance and every `{key}_*` setting it owned, and drop its key
-    from users' allow-lists so nobody silently becomes unrestricted. Refuses
-    while the instance is enabled. Shipments keep the key and the alias
-    snapshot; they can no longer be voided or re-bought."""
+    from users' allow-lists. Refuses while the instance is enabled, and while
+    it is some user's only account (deleting would silently make them
+    unrestricted). Shipments keep the key and the alias snapshot; they can no
+    longer be voided or re-bought."""
     row = db.query("SELECT id, platform, key, label FROM provider_instances WHERE id = %s",
                    (instance_id,), one=True)
     if not row:
@@ -178,6 +233,9 @@ def delete_instance(instance_id):
     key = row["key"]
     if _is_enabled(key):
         raise InstanceEnabled("Disable this integration and save before deleting it")
+    only = [u["username"] for u in _restrictable_users() if list(u["allowed_providers"] or []) == [key]]
+    if only:
+        raise InstanceInUse(f"{', '.join(only)} {NO_ACCOUNT_LEFT}")
     db.execute("DELETE FROM provider_instances WHERE id = %s", (instance_id,))
     # starts_with, not LIKE: '_' is a LIKE wildcard and 'shipstation_' would
     # otherwise also match 'shipstation-5_'.
