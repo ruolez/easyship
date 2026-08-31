@@ -40,6 +40,7 @@ from providers.base import (
     ShipmentState,
     ShippingProvider,
     missing_origin_fields,
+    no_company_field,
     origin_descriptor,
 )
 
@@ -847,6 +848,7 @@ class ShipStationProvider(ShippingProvider):
                      {"value": "true", "label": "On — test labels, no charge (not valid for shipping)"},
                  ],
                  "hint": "ShipStation has no sandbox; test labels are free but cannot be shipped. Shows the SANDBOX badge."},
+                no_company_field(self.name),
             ],
             "test_endpoint": f"/api/providers/{self.name}/test",
             "supports": {"service_exclusions": True},

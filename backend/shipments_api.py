@@ -175,7 +175,7 @@ def get_rates():
     for provider in active_providers:
         try:
             drafts, rates, provider_warnings = provider.create_draft_shipments(
-                destination, parcels, items, options)
+                provider.prepare_destination(destination), parcels, items, options)
         except ProviderError as e:
             provider_errors.append(f"{provider.label}: {e}")
             continue

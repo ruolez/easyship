@@ -16,6 +16,7 @@ from providers.base import (
     Rate,
     ShipmentState,
     ShippingProvider,
+    no_company_field,
     origin_descriptor,
 )
 
@@ -253,6 +254,7 @@ class EasyshipProvider(ShippingProvider):
                 {"key": self.setting_key("default_item_category"), "label": "Default item category (customs)",
                  "type": "select", "options_endpoint": f"/api/providers/{self.name}/item-categories",
                  "hint": "Applied to shipment items — Easyship requires one per item"},
+                no_company_field(self.name),
             ],
             "test_endpoint": f"/api/providers/{self.name}/test",
             "supports": {"service_exclusions": True},

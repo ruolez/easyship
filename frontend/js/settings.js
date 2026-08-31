@@ -374,6 +374,10 @@ function fieldHtml(f) {
     return `<div class="field fixed" style="min-width:260px"><label>${esc(f.label)}</label>
       <select id="${esc(f.key)}">${opts}</select>${hint}</div>`;
   }
+  if (f.type === 'checkbox') {
+    return `<div class="field fixed"><label class="svc-selectall" title="${esc(f.hint || '')}">
+      <input type="checkbox" id="${esc(f.key)}"> ${esc(f.label)}</label></div>`;
+  }
   return `<div class="field"><label>${esc(f.label)}</label><input id="${esc(f.key)}">${hint}</div>`;
 }
 
