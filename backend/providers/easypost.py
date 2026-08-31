@@ -26,6 +26,7 @@ from providers import labels
 from providers.base import (
     DraftShipment,
     LabelStatus,
+    ManifestResult,
     ProviderError,
     Rate,
     ShipmentState,
@@ -432,6 +433,51 @@ class EasyPostProvider(ShippingProvider):
 
     def get_raw_shipment(self, provider_shipment_id):
         return _request("GET", f"/shipments/{provider_shipment_id}", auth=_auth(self.name))
+
+    # ---- manifests ----
+    def supports_manifests(self):
+        return True
+
+    def create_manifest(self, provider_shipment_ids):
+        """An EasyPost ScanForm over the given shipment ids, polled to completion."""
+        auth = _auth(self.name)
+        ids = [i for i in dict.fromkeys(provider_shipment_ids) if i]
+        if not ids:
+            raise ProviderError("No shipments to manifest")
+        form = _request(
+            "POST", "/scan_forms",
+            json_body={"scan_form": {"shipments": [{"id": sid} for sid in ids]}},
+            timeout=90, auth=auth,
+        )
+        deadline = time.monotonic() + 90
+        while True:
+            status = (form.get("status") or "").lower()
+            if status == "created":
+                break
+            if status == "failed":
+                raise ProviderError(
+                    "EasyPost scan form failed: " + (form.get("message") or "no reason given"))
+            if time.monotonic() >= deadline:
+                raise ProviderError("EasyPost is still generating the scan form — try again in a minute")
+            time.sleep(3)
+            form = _request("GET", f"/scan_forms/{form['id']}", auth=auth)
+        document = None
+        url = form.get("form_url")
+        if url:
+            try:
+                resp = requests.get(url, timeout=30)
+                if resp.ok and resp.content:
+                    document = (resp.content, "pdf")
+            except requests.RequestException:
+                pass
+        return [ManifestResult(
+            provider_manifest_id=form.get("id"),
+            ref_number=form.get("batch_id"),
+            shipment_count=len(form.get("tracking_codes") or []) or len(ids),
+            provider_shipment_ids=ids,
+            document=document,
+            raw=form,
+        )]
 
     # ---- settings surface ----
     def list_item_categories(self):

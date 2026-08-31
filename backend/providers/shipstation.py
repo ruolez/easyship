@@ -34,6 +34,7 @@ from providers import labels
 from providers.base import (
     DraftShipment,
     LabelStatus,
+    ManifestResult,
     ProviderError,
     Rate,
     ShipmentState,
@@ -688,6 +689,83 @@ class ShipStationProvider(ShippingProvider):
             return _request("GET", f"/v2/labels/{base}", auth=auth)
         except ProviderError:
             return _request("GET", f"/v2/shipments/{base}", auth=auth)
+
+    # ---- manifests ----
+    def supports_manifests(self):
+        return True
+
+    def create_manifest(self, provider_shipment_ids):
+        """POST /v2/manifests over the stored label ids. Every box of a
+        multi-box group stores the same label id, so the ids are deduped (and
+        any '#box' suffix stripped). USPS manifests normally come back in the
+        create response itself; a pending manifest_request is polled."""
+        auth = _auth(self.name)
+        label_ids = []
+        for raw_id in provider_shipment_ids:
+            base, _ = _split_box_id(raw_id)
+            if base and base not in label_ids:
+                label_ids.append(base)
+        if not label_ids:
+            raise ProviderError("No labels to manifest")
+        resp = _request("POST", "/v2/manifests", json_body={"label_ids": label_ids},
+                        timeout=90, auth=auth)
+        manifests = resp.get("manifests") or []
+        if not manifests:
+            manifests = self._wait_for_manifests(resp, auth)
+        results = []
+        for m in manifests:
+            covered = m.get("label_ids") or []
+            results.append(ManifestResult(
+                provider_manifest_id=m.get("manifest_id"),
+                ref_number=m.get("submission_id"),
+                shipment_count=m.get("shipments") or len(covered) or len(label_ids),
+                provider_shipment_ids=[i for i in label_ids if not covered or i in covered],
+                document=self._manifest_document(m, auth),
+                raw=m,
+            ))
+        return results
+
+    def _wait_for_manifests(self, resp, auth, timeout=90):
+        pending = [r.get("manifest_request_id")
+                   for r in resp.get("manifest_requests") or [] if r.get("manifest_request_id")]
+        if not pending:
+            raise ProviderError("ShipStation returned no manifest for these labels")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(3)
+            done = []
+            for rid in pending:
+                try:
+                    data = _request("GET", f"/v2/manifests/{rid}", auth=auth)
+                except ProviderError as e:
+                    if e.status == 404:
+                        continue  # not materialized under this id yet
+                    raise
+                if data.get("manifests"):
+                    done.extend(data["manifests"])
+                elif data.get("manifest_id") or data.get("manifest_download"):
+                    done.append(data)
+            if done:
+                return done
+        raise ProviderError(
+            "ShipStation is still generating the manifest — check Shipments → "
+            "End of Day in ShipStation before trying again, so the labels are "
+            "not manifested twice"
+        )
+
+    def _manifest_document(self, manifest, auth):
+        url = (manifest.get("manifest_download") or {}).get("href")
+        if not url:
+            return None
+        try:
+            doc = requests.get(url, timeout=30)
+            if doc.status_code in (401, 403):
+                doc = requests.get(url, headers={"API-Key": auth[1]}, timeout=30)
+            if doc.ok and doc.content:
+                return (doc.content, "pdf")
+        except requests.RequestException:
+            pass
+        return None
 
     # ---- settings surface ----
     def list_item_categories(self):

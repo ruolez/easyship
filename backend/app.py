@@ -17,6 +17,7 @@ def create_app():
 
     import auth
     import backoffice_api
+    import manifests_api
     import reports_api
     import settings_api
     import shipments_api
@@ -26,6 +27,7 @@ def create_app():
     app.register_blueprint(auth.bp)
     app.register_blueprint(settings_api.bp)
     app.register_blueprint(shipments_api.bp)
+    app.register_blueprint(manifests_api.bp)
     app.register_blueprint(shipper_api.bp)
     app.register_blueprint(shopify_api.bp)
     app.register_blueprint(backoffice_api.bp)

@@ -90,6 +90,18 @@ class ShipmentState:
 # A label document is a plain (bytes, format) tuple; format in {"pdf","png","zpl"}.
 
 
+@dataclass
+class ManifestResult:
+    """One end-of-day manifest (USPS SCAN form) issued by the carrier."""
+
+    provider_manifest_id: str | None
+    ref_number: str | None  # the number under the barcode, when the platform returns one
+    shipment_count: int
+    provider_shipment_ids: list[str]  # the ids this manifest actually covered
+    document: tuple | None  # (bytes, "pdf") downloaded at creation — the URLs expire
+    raw: dict = field(default_factory=dict)
+
+
 # Ship-from address fields, in the order the Settings page shows them.
 ORIGIN_FIELDS = (
     ("company", "Company"),
@@ -200,6 +212,20 @@ class ShippingProvider(ABC):
     def get_raw_shipment(self, provider_shipment_id):
         """Optional diagnostic: the raw provider payload for a shipment."""
         raise ProviderError("Raw shipment view not supported by this provider")
+
+    # ---- end-of-day manifests (USPS SCAN forms) ----
+    def supports_manifests(self):
+        """Whether create_manifest works on this platform. Default False so a
+        platform without an implementation keeps working untouched."""
+        return False
+
+    def create_manifest(self, provider_shipment_ids):
+        """Carrier end-of-day manifest(s) for already-purchased labels, given
+        the stored per-box provider ids (deduped). Blocks — with bounded
+        internal polling — until the documents exist, and downloads them
+        (their URLs are signed and expire). Returns list[ManifestResult]:
+        usually one, more when the platform splits by carrier account."""
+        raise ProviderError(f"{self.label} does not support manifests")
 
     # ---- settings surface ----
     @abstractmethod

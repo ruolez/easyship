@@ -11,6 +11,8 @@ POSTGRES = {
 }
 
 LABELS_DIR = os.environ.get("LABELS_DIR", "/data/labels")
+# Inside LABELS_DIR by default so manifests ride the existing Docker volume.
+MANIFESTS_DIR = os.environ.get("MANIFESTS_DIR", os.path.join(LABELS_DIR, "manifests"))
 
 EASYSHIP_BASE_URLS = {
     "production": "https://public-api.easyship.com/2024-09",

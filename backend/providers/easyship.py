@@ -11,6 +11,7 @@ import easyship_client as ec
 from providers.base import (
     DraftShipment,
     LabelStatus,
+    ManifestResult,
     ProviderError,
     Rate,
     ShipmentState,
@@ -20,6 +21,17 @@ from providers.base import (
 
 # Easyship label_state values that mean the label is bought and printable.
 _READY_STATES = {"generated", "printed", "shipping_document_generated"}
+
+
+def _shipment_courier_id(shipment):
+    """A courier (account) id if the raw shipment payload carries one — the
+    field name varies across payload shapes, so try the known spots."""
+    courier = shipment.get("courier") or {}
+    service = shipment.get("courier_service") or {}
+    for candidate in (courier.get("id"), service.get("courier_id"), shipment.get("courier_id")):
+        if candidate:
+            return candidate
+    return None
 
 
 def _label_status(shipment):
@@ -129,6 +141,61 @@ class EasyshipProvider(ShippingProvider):
 
     def get_raw_shipment(self, provider_shipment_id):
         return ec.get_shipment(provider_shipment_id, key=self.name)
+
+    # ---- manifests ----
+    def supports_manifests(self):
+        return True
+
+    def create_manifest(self, provider_shipment_ids):
+        ids = [i for i in dict.fromkeys(provider_shipment_ids) if i]
+        if not ids:
+            raise ProviderError("No shipments to manifest")
+        manifest = ec.create_manifest(self._usps_courier_id(ids[0]), ids, key=self.name)
+        return [ManifestResult(
+            provider_manifest_id=manifest.get("id"),
+            ref_number=manifest.get("ref_number"),
+            shipment_count=manifest.get("shipments_count") or len(ids),
+            provider_shipment_ids=ids,
+            document=self._manifest_document(manifest),
+            raw=manifest,
+        )]
+
+    def _usps_courier_id(self, sample_shipment_id):
+        """The courier account id the manifest is created for. The shipment's
+        own courier id is authoritative when its payload carries one; otherwise
+        a lone USPS courier on the account settles it."""
+        try:
+            cid = _shipment_courier_id(ec.get_shipment(sample_shipment_id, key=self.name))
+        except ProviderError:
+            cid = None
+        if cid:
+            return cid
+        usps = [c for c in ec.list_couriers(self.name) if "usps" in c["umbrella_name"].lower()]
+        if len(usps) == 1:
+            return usps[0]["id"]
+        if not usps:
+            raise ProviderError("No USPS courier is connected to this Easyship account")
+        names = ", ".join(c["name"] or c["id"] for c in usps)
+        raise ProviderError(
+            f"Several USPS couriers are connected to this Easyship account ({names}) "
+            "— could not determine which one to manifest against"
+        )
+
+    def _manifest_document(self, manifest):
+        url = (manifest.get("document") or {}).get("url")
+        if not url:
+            return None
+        try:
+            resp = requests.get(url, timeout=30)
+            if resp.status_code in (401, 403):
+                # Some document URLs are served by the API itself and need the token.
+                _, token = ec._auth(self.name)
+                resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+            if resp.ok and resp.content:
+                return (resp.content, "pdf")
+        except requests.RequestException:
+            pass
+        return None
 
     # ---- settings surface ----
     def list_item_categories(self):

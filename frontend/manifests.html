@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyShip — Manifests</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header id="appbar"></header>
+  <div class="container wide">
+    <div class="page-head"><h1>Manifests</h1><span class="sub">USPS end-of-day SCAN forms — one barcode for the whole pickup</span></div>
+
+    <div class="card">
+      <h2>Today's USPS parcels
+        <span class="text-secondary" id="selected-count" style="text-transform:none;letter-spacing:0"></span>
+        <span style="margin-left:auto;display:inline-flex;gap:8px">
+          <button class="btn btn-outlined btn-small" id="refresh-eligible">Refresh</button>
+          <button class="btn btn-primary btn-small" id="generate" disabled>Generate manifest</button>
+        </span>
+      </h2>
+      <div class="table-wrap flush">
+        <table class="striped compact">
+          <thead>
+            <tr>
+              <th style="width:34px"><input type="checkbox" id="select-all" title="Select all"></th>
+              <th>Order #</th>
+              <th class="col-narrow">User</th>
+              <th class="num col-narrow">Boxes</th>
+              <th>Service</th>
+              <th>Tracking</th>
+              <th>Label created (CT)</th>
+            </tr>
+          </thead>
+          <tbody id="eligible-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="eligible-empty" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>Manifest history</h2>
+      <div class="table-wrap flush">
+        <table class="striped compact">
+          <thead>
+            <tr>
+              <th>Created (CT)</th>
+              <th class="col-narrow">User</th>
+              <th>Account</th>
+              <th class="num col-narrow">Parcels</th>
+              <th>Ref #</th>
+              <th>Status</th>
+              <th class="actions"></th>
+            </tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="history-empty" style="display:none"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/manifests.js"></script>
+</body>
+</html>

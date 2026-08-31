@@ -15,6 +15,7 @@ reused unchanged.
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from functools import partial
 
 import requests
@@ -24,6 +25,7 @@ from providers import labels
 from providers.base import (
     DraftShipment,
     LabelStatus,
+    ManifestResult,
     ProviderError,
     Rate,
     ShipmentState,
@@ -271,6 +273,23 @@ def _map_parallel(items, fn):
     return out
 
 
+def _manifest_documents(manifest):
+    """All of a manifest's PDFs (Shippo splits past 500 labels) merged into
+    one, or None when nothing could be downloaded."""
+    docs = []
+    for url in manifest.get("documents") or []:
+        try:
+            resp = requests.get(url, timeout=30)
+        except requests.RequestException:
+            continue
+        if resp.ok and resp.content:
+            docs.append((resp.content, labels.sniff_label_format(resp.content, "pdf")))
+    if not docs:
+        return None
+    merged = labels.merge_label_documents(docs)
+    return merged if merged and merged[0] else None
+
+
 class ShippoProvider(ShippingProvider):
     platform = "shippo"
     label = "GoShippo"
@@ -417,6 +436,75 @@ class ShippoProvider(ShippingProvider):
             return _request("GET", f"/transactions/{provider_shipment_id}/", auth=auth)
         except ProviderError:
             return _request("GET", f"/shipments/{provider_shipment_id}/", auth=auth)
+
+    # ---- manifests ----
+    def supports_manifests(self):
+        return True
+
+    def create_manifest(self, provider_shipment_ids):
+        """One Shippo manifest per carrier account (transactions on different
+        accounts cannot share a manifest), polled to completion."""
+        auth = _auth(self.name)
+        ids = [i for i in dict.fromkeys(provider_shipment_ids) if i]
+        if not ids:
+            raise ProviderError("No shipments to manifest")
+        address_from = _origin_address(self.origin())
+        accounts = _map_parallel(ids, lambda tid: self._transaction_carrier_account(tid, auth))
+        by_account = {}
+        for tid in ids:
+            res = accounts.get(tid)
+            if isinstance(res, ProviderError):
+                raise res
+            by_account.setdefault(res, []).append(tid)
+        shipment_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        results = []
+        for account, tids in by_account.items():
+            manifest = _request(
+                "POST", "/manifests/",
+                json_body={
+                    "carrier_account": account,
+                    "shipment_date": shipment_date,
+                    "address_from": address_from,
+                    "transactions": tids,
+                    "async": False,
+                },
+                timeout=90, auth=auth,
+            )
+            manifest = self._wait_for_manifest(manifest, auth)
+            results.append(ManifestResult(
+                provider_manifest_id=manifest.get("object_id"),
+                ref_number=None,
+                shipment_count=len(tids),
+                provider_shipment_ids=tids,
+                document=_manifest_documents(manifest),
+                raw=manifest,
+            ))
+        return results
+
+    def _transaction_carrier_account(self, tid, auth):
+        txn = _request("GET", f"/transactions/{tid}/", auth=auth)
+        rate = txn.get("rate")
+        account = rate.get("carrier_account") if isinstance(rate, dict) else None
+        rate_id = rate.get("object_id") if isinstance(rate, dict) else rate
+        if not account and rate_id:
+            account = (_request("GET", f"/rates/{rate_id}/", auth=auth) or {}).get("carrier_account")
+        if not account:
+            raise ProviderError(f"Could not determine the carrier account for transaction {tid}")
+        return account
+
+    def _wait_for_manifest(self, manifest, auth, timeout=90):
+        deadline = time.monotonic() + timeout
+        while True:
+            status = (manifest.get("status") or "").upper()
+            if status == "SUCCESS":
+                return manifest
+            if status == "ERROR":
+                reason = _transaction_error(manifest) or "no reason given"
+                raise ProviderError(f"Shippo manifest failed: {reason}")
+            if time.monotonic() >= deadline:
+                raise ProviderError("Shippo is still generating the manifest — try again in a minute")
+            time.sleep(3)
+            manifest = _request("GET", f"/manifests/{manifest['object_id']}/", auth=auth)
 
     # ---- settings surface ----
     def list_item_categories(self):

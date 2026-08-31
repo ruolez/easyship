@@ -277,6 +277,41 @@ def list_courier_services(key=PRIMARY_KEY):
     return sorted(services.values(), key=lambda s: (s["umbrella_name"].lower(), s["name"].lower()))
 
 
+def list_couriers(key=PRIMARY_KEY):
+    """Courier accounts on the account as [{id, umbrella_name, name}] —
+    paginates /couriers. A courier id (not a courier_service id) is what the
+    manifests endpoint wants."""
+    auth = _auth(key)
+    couriers = {}
+    page = 1
+    while page <= 20:  # safety cap
+        data = _request("GET", "/couriers", params={"page": page, "per_page": 100}, auth=auth)
+        batch = data.get("couriers") or []
+        for c in batch:
+            cid = c.get("id")
+            if cid:
+                couriers[cid] = {
+                    "id": cid,
+                    "umbrella_name": c.get("umbrella_name") or "",
+                    "name": c.get("name") or c.get("umbrella_name") or "",
+                }
+        if not batch or len(batch) < 100:
+            break
+        page += 1
+    return list(couriers.values())
+
+
+def create_manifest(courier_id, shipment_ids, key=PRIMARY_KEY):
+    """POST /manifests — synchronous; returns the manifest object with a
+    document URL. USPS requires explicit shipment_ids."""
+    data = _request(
+        "POST", "/manifests",
+        json_body={"courier_id": courier_id, "shipment_ids": list(shipment_ids)},
+        timeout=90, auth=_auth(key),
+    )
+    return data.get("manifest") or {}
+
+
 def get_excluded_service_ids(key=PRIMARY_KEY):
     """Set of courier_service_id strings the user has chosen to hide from rates."""
     raw = db.get_setting(f"{key}_excluded_service_ids")
