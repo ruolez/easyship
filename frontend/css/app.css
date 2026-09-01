@@ -1099,6 +1099,22 @@ th.sortable.desc::after { content: '▼'; opacity: 1; color: var(--primary); }
 table.striped tbody tr:nth-child(even) { background: rgba(148, 163, 184, 0.08); }
 table.striped tbody tr:hover { background: var(--surface-sunken); }
 
+/* ---------- Filter-aware totals (summary line + tfoot totals row) ---------- */
+.table-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.table-summary strong { color: var(--on-surface); font-variant-numeric: tabular-nums; }
+table.striped tfoot td {
+  font-weight: 600;
+  border-top: 2px solid var(--outline);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- In-table filter row ---------- */
 .filter-row th { padding: 12px 8px 14px; top: 36px; }
 .filter-row input, .filter-row select {

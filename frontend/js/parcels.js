@@ -139,7 +139,7 @@ async function load() {
   const tbody = document.getElementById('parcels-body');
   const empty = document.getElementById('empty');
   empty.style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="13"><span class="spinner"></span> Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="14"><span class="spinner"></span> Loading…</td></tr>';
   try {
     allRows = await api(`/api/shipments?${params}`);
     const uniq = (vals) => [...new Set(vals.filter(Boolean))].sort();
@@ -149,16 +149,40 @@ async function load() {
     render();
   } catch (err) {
     allRows = [];
+    renderTotals([]);
     tbody.innerHTML = '';
     empty.textContent = err.message;
     empty.style.display = '';
   }
 }
 
+/* Filter-aware totals: a summary line above the table and a totals row under
+   it, so the packer sees how many parcels/shipments the current view covers
+   and what the shipping cost added up to. */
+function renderTotals(rows) {
+  const bar = document.getElementById('parcels-summary');
+  const foot = document.getElementById('parcels-foot');
+  if (!rows.length) {
+    bar.style.display = 'none';
+    foot.innerHTML = '';
+    return;
+  }
+  const cost = rows.reduce((sum, s) => sum + (s.shipping_cost || 0), 0);
+  const shipments = new Set(rows.map((s) => s.group_id || `#${s.id}`)).size;
+  bar.style.display = '';
+  bar.innerHTML = `<span><strong>${shipments}</strong> shipment${shipments === 1 ? '' : 's'}</span>
+    <span><strong>${rows.length}</strong> parcel${rows.length === 1 ? '' : 's'}</span>
+    <span>Shipping total <strong>${money(cost)}</strong></span>`;
+  foot.innerHTML = `<tr>
+    <td colspan="9">Total — ${shipments} shipment${shipments === 1 ? '' : 's'}, ${rows.length} parcel${rows.length === 1 ? '' : 's'}</td>
+    <td class="num">${money(cost)}</td><td colspan="4"></td></tr>`;
+}
+
 function render() {
   const tbody = document.getElementById('parcels-body');
   const empty = document.getElementById('empty');
   const rows = visibleRows();
+  renderTotals(rows);
   if (!rows.length) {
     tbody.innerHTML = '';
     empty.textContent = 'No parcels found.';
@@ -166,7 +190,7 @@ function render() {
     return;
   }
   empty.style.display = 'none';
-  tbody.innerHTML = rows.map((s) => {
+  tbody.innerHTML = rows.map((s, rowIndex) => {
       const ref = s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
       const needsRetry = s.status === 'label_created' && s.box_number === 1 &&
         ((s.source === 'shopify' && !s.writeback_shopify_at) ||
@@ -181,6 +205,7 @@ function render() {
         ? `<span class="copy-wrap"><span class="mono">${esc(numbers[0])}</span>${numbers.length > 1 ? `<span class="chip static warn">+${numbers.length - 1}</span>` : ''}<button class="copy-btn" data-copy="${esc(numbers.join('\n'))}" title="Copy tracking number${numbers.length > 1 ? 's' : ''}" aria-label="Copy tracking">${COPY_ICON}</button></span>`
         : '';
       return `<tr>
+        <td class="num col-narrow text-secondary">${rowIndex + 1}</td>
         <td><strong>${copyable(ref, 'order number')}</strong></td>
         <td class="col-narrow">${esc(s.created_by)}</td>
         <td class="ellip store" title="${esc(s.service_name)}">${esc(s.service_name)}</td>
