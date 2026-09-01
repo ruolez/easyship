@@ -77,11 +77,103 @@ function formatAddress(d) {
 async function loadUsers() {
   try {
     const users = await api('/api/shipments/creators');
-    document.getElementById('user-filter').innerHTML =
-      '<option value="">All</option>' +
-      users.map((u) => `<option value="${esc(u)}">${esc(u)}</option>`).join('');
+    userFilter.setOptions(users);
   } catch { /* filter stays open */ }
 }
+
+/* ---------- Multi-select column filters: a compact button in the filter row
+   recalls a checkbox popover; empty selection means "All". ---------- */
+const FM_CARET = '<svg class="fm-caret" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>';
+
+let openFilter = null;
+function closeFilterMenu() {
+  if (!openFilter) return;
+  openFilter.menu.remove();
+  openFilter.btn.classList.remove('open');
+  openFilter = null;
+}
+
+function multiFilter(id, { options = [], onChange }) {
+  const btn = document.getElementById(id);
+  const normalize = (list) => list.map((o) => (typeof o === 'string' ? { value: o, label: o } : o));
+  let opts = normalize(options);
+  const selected = new Set();
+
+  function updateBtn() {
+    let text = 'All';
+    if (selected.size === 1) {
+      const v = selected.values().next().value;
+      text = (opts.find((o) => o.value === v) || { label: v }).label;
+    } else if (selected.size > 1) text = `${selected.size} selected`;
+    btn.innerHTML = `<span class="fm-label">${esc(text)}</span>${FM_CARET}`;
+    btn.classList.toggle('filtered', selected.size > 0);
+  }
+
+  function renderMenu(menu) {
+    menu.innerHTML = `
+      <button class="filter-menu-item${selected.size ? '' : ' checked'}" data-all="1"><span class="fm-check"></span><span>All</span></button>
+      <div class="row-menu-sep"></div>
+      ${opts.map((o) => `<button class="filter-menu-item${selected.has(o.value) ? ' checked' : ''}" data-v="${esc(o.value)}"><span class="fm-check"></span><span>${esc(o.label)}</span></button>`).join('')}`;
+  }
+
+  btn.addEventListener('click', () => {
+    closeRowMenu();
+    if (openFilter && openFilter.btn === btn) { closeFilterMenu(); return; }
+    closeFilterMenu();
+    const menu = document.createElement('div');
+    menu.className = 'row-menu filter-menu';
+    menu.setAttribute('role', 'menu');
+    renderMenu(menu);
+    menu.addEventListener('click', (ev) => {
+      // The re-render below detaches ev.target, so the document-level
+      // outside-click check would no longer see it inside the menu.
+      ev.stopPropagation();
+      const item = ev.target.closest('.filter-menu-item');
+      if (!item) return;
+      if (item.dataset.all) selected.clear();
+      else if (selected.has(item.dataset.v)) selected.delete(item.dataset.v);
+      else selected.add(item.dataset.v);
+      renderMenu(menu);
+      updateBtn();
+      onChange();
+    });
+    document.body.appendChild(menu);
+    const r = btn.getBoundingClientRect();
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8));
+    let top = r.bottom + 4;
+    if (top + menu.offsetHeight > window.innerHeight - 8) top = r.top - menu.offsetHeight - 4;
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    btn.classList.add('open');
+    openFilter = { btn, menu };
+  });
+
+  updateBtn();
+  return {
+    get values() { return selected; },
+    setOptions(list) {
+      opts = normalize(list);
+      [...selected].forEach((v) => { if (!opts.some((o) => o.value === v)) selected.delete(v); });
+      updateBtn();
+    },
+  };
+}
+
+const statusFilter = multiFilter('status-filter', {
+  options: [
+    { value: 'fulfilled', label: 'Fulfilled' },
+    { value: 'label_created', label: 'Label created' },
+    { value: 'rated', label: 'Rated (no label)' },
+    { value: 'draft', label: 'Draft' },
+    { value: 'voided', label: 'Voided' },
+    { value: 'error', label: 'Error' },
+  ],
+  onChange: () => load(),
+});
+const userFilter = multiFilter('user-filter', { onChange: () => load() });
+const storeFilter = multiFilter('store-filter', { onChange: () => render() });
+const serviceFilter = multiFilter('service-filter', { onChange: () => render() });
+const carrierFilter = multiFilter('carrier-filter', { onChange: () => render() });
 
 /* ---------- Client-side sorting & column filters over the fetched page ---------- */
 let allRows = [];
@@ -125,14 +217,14 @@ function fillOptions(id, values) {
 }
 
 function visibleRows() {
-  const store = document.getElementById('store-filter').value;
-  const carrier = document.getElementById('carrier-filter').value;
-  const service = document.getElementById('service-filter').value;
+  const stores = storeFilter.values;
+  const carriers = carrierFilter.values;
+  const services = serviceFilter.values;
   const size = document.getElementById('size-filter').value;
   let rows = allRows.filter((s) =>
-    (!store || s.service_name === store)
-    && (!carrier || s.courier_umbrella_name === carrier)
-    && (!service || s.courier_name === service)
+    (!stores.size || stores.has(s.service_name))
+    && (!carriers.size || carriers.has(s.courier_umbrella_name))
+    && (!services.size || services.has(s.courier_name))
     && (!size || boxSize(s) === size));
   if (sortKey) {
     const val = SORT_VALUE[sortKey];
@@ -147,8 +239,8 @@ function visibleRows() {
 async function load() {
   const params = new URLSearchParams({
     q: document.getElementById('search').value.trim(),
-    status: document.getElementById('status-filter').value,
-    user: document.getElementById('user-filter').value,
+    status: [...statusFilter.values].join(','),
+    user: [...userFilter.values].join(','),
     from: document.getElementById('date-from').value,
     to: document.getElementById('date-to').value,
   });
@@ -159,9 +251,9 @@ async function load() {
   try {
     allRows = await api(`/api/shipments?${params}`);
     const uniq = (vals) => [...new Set(vals.filter(Boolean))].sort();
-    fillOptions('store-filter', uniq(allRows.map((s) => s.service_name)));
-    fillOptions('carrier-filter', uniq(allRows.map((s) => s.courier_umbrella_name)));
-    fillOptions('service-filter', uniq(allRows.map((s) => s.courier_name)));
+    storeFilter.setOptions(uniq(allRows.map((s) => s.service_name)));
+    carrierFilter.setOptions(uniq(allRows.map((s) => s.courier_umbrella_name)));
+    serviceFilter.setOptions(uniq(allRows.map((s) => s.courier_name)));
     const sizes = [...new Map(allRows.filter(boxSize).map((s) => [boxSize(s), boxVolume(s)]))]
       .sort((a, b) => a[1] - b[1]).map(([label]) => label);
     fillOptions('size-filter', sizes);
@@ -275,6 +367,7 @@ function openRowMenu(btn) {
 }
 
 document.addEventListener('click', (e) => {
+  if (!e.target.closest('.filter-multi') && !e.target.closest('.filter-menu')) closeFilterMenu();
   const btn = e.target.closest('.row-menu-btn');
   if (!btn) {
     if (!e.target.closest('.row-menu')) closeRowMenu();
@@ -284,9 +377,14 @@ document.addEventListener('click', (e) => {
   closeRowMenu();
   if (reopen) openRowMenu(btn);
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeRowMenu(); });
-document.addEventListener('scroll', closeRowMenu, true);
-window.addEventListener('resize', closeRowMenu);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeRowMenu(); closeFilterMenu(); }
+});
+document.addEventListener('scroll', (e) => {
+  closeRowMenu();
+  if (openFilter && !openFilter.menu.contains(e.target)) closeFilterMenu();
+}, true);
+window.addEventListener('resize', () => { closeRowMenu(); closeFilterMenu(); });
 
 function render() {
   const tbody = document.getElementById('parcels-body');
@@ -452,12 +550,10 @@ document.getElementById('refresh').addEventListener('click', load);
 document.getElementById('search').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') load();
 });
-['status-filter', 'user-filter', 'date-from', 'date-to'].forEach((id) => {
+['date-from', 'date-to'].forEach((id) => {
   document.getElementById(id).addEventListener('change', load);
 });
-['store-filter', 'carrier-filter', 'service-filter', 'size-filter'].forEach((id) => {
-  document.getElementById(id).addEventListener('change', render);
-});
+document.getElementById('size-filter').addEventListener('change', render);
 
 const showSize = document.getElementById('show-size');
 showSize.checked = localStorage.getItem('parcels.showSize') === '1';

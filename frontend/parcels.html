@@ -45,27 +45,17 @@
             <tr class="filter-row">
               <th class="pin-num"></th>
               <th class="pin-ref"><input type="text" id="search" placeholder="Search…" title="Search order #, tracking, customer, city" style="min-width:90px"></th>
-              <th class="narrow"><select id="user-filter"><option value="">All</option></select></th>
-              <th><select id="store-filter"><option value="">All</option></select></th>
+              <th class="narrow"><button type="button" class="filter-multi" id="user-filter"></button></th>
+              <th><button type="button" class="filter-multi" id="store-filter"></button></th>
               <th></th>
               <th></th>
               <th class="col-size"><select id="size-filter"><option value="">All</option></select></th>
               <th></th>
-              <th><select id="service-filter"><option value="">All</option></select></th>
-              <th><select id="carrier-filter"><option value="">All</option></select></th>
+              <th><button type="button" class="filter-multi" id="service-filter"></button></th>
+              <th><button type="button" class="filter-multi" id="carrier-filter"></button></th>
               <th></th>
               <th></th>
-              <th>
-                <select id="status-filter">
-                  <option value="">All</option>
-                  <option value="fulfilled">Fulfilled</option>
-                  <option value="label_created">Label created</option>
-                  <option value="rated">Rated (no label)</option>
-                  <option value="draft">Draft</option>
-                  <option value="voided">Voided</option>
-                  <option value="error">Error</option>
-                </select>
-              </th>
+              <th><button type="button" class="filter-multi" id="status-filter"></button></th>
               <th>
                 <div class="dates">
                   <input type="date" id="date-from" title="Created from">

@@ -1143,6 +1143,94 @@ table.striped tfoot td {
 table.compact th, table.compact td { padding: 9px 8px; }
 .filter-row th.narrow select { min-width: 64px; }
 
+/* Multi-select filter buttons — styled like the selects they replaced,
+   turning primary when a filter is active. */
+.filter-row .filter-multi {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-width: 96px;
+  height: 32px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--on-surface);
+  background: var(--surface);
+  border: 1px solid var(--outline-strong);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.filter-row th.narrow .filter-multi { min-width: 64px; }
+.filter-row .filter-multi .fm-label { overflow: hidden; text-overflow: ellipsis; }
+.filter-row .filter-multi .fm-caret {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.12s;
+}
+.filter-row .filter-multi.open .fm-caret { transform: rotate(180deg); }
+.filter-row .filter-multi:focus-visible, .filter-row .filter-multi.open {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+.filter-row .filter-multi.filtered {
+  border-color: var(--primary);
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 600;
+}
+.filter-row .filter-multi.filtered .fm-caret { stroke: var(--primary); }
+
+.filter-menu { min-width: 170px; max-height: 320px; overflow-y: auto; }
+.filter-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--on-surface);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.filter-menu-item:hover { background: var(--surface-sunken); }
+.fm-check {
+  flex: none;
+  position: relative;
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid var(--outline-strong);
+  border-radius: 4px;
+  transition: background 0.1s, border-color 0.1s;
+}
+.filter-menu-item.checked .fm-check { background: var(--primary); border-color: var(--primary); }
+.filter-menu-item.checked .fm-check::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
 /* ---------- Parcels table: dense columns, pinned edges, inner scroll ---------- */
 /* The wrap's side padding moves into the edge cells so the sticky edge
    columns can sit flush against the card edge. */

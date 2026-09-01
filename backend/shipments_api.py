@@ -838,11 +838,11 @@ def list_shipments():
         like = f"%{q}%"
         params += [like] * 6
     if status:
-        sql += " AND s.status = %s"
-        params.append(status)
+        sql += " AND s.status = ANY(%s)"
+        params.append(status.split(","))
     if user:
-        sql += " AND u.username = %s"
-        params.append(user)
+        sql += " AND u.username = ANY(%s)"
+        params.append(user.split(","))
     if date_from:
         sql += " AND (s.created_at AT TIME ZONE 'America/Chicago')::date >= %s"
         params.append(date_from)
