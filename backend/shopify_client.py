@@ -198,6 +198,7 @@ def get_order(store_id, order_gid):
     if not order:
         raise ShopifyError("Order not found")
     addr = order.get("shippingAddress") or {}
+    no_company = bool(_store(store_id).get("no_company"))
     existing_tracking = []
     for f in order.get("fulfillments") or []:
         if f.get("status") == "CANCELLED":
@@ -233,7 +234,7 @@ def get_order(store_id, order_gid):
         "tags": order.get("tags") or [],
         "note": (order.get("note") or "").strip(),
         "destination": {
-            "company": addr.get("company"),
+            "company": None if no_company else addr.get("company"),
             "contact": addr.get("name"),
             "address1": addr.get("address1"),
             "address2": addr.get("address2"),

@@ -109,6 +109,7 @@ def find_invoice_id_by_number(db_id, number):
 
 
 def get_invoice(db_id, invoice_id):
+    no_company = bool(get_db_config(db_id).get("no_company"))
     conn = _connect(db_id)
     try:
         with conn.cursor(as_dict=True) as cur:
@@ -156,7 +157,7 @@ def get_invoice(db_id, invoice_id):
         "total_weight": _to_float(inv["TotalWeight"]),
         "invoice_total": float(inv["InvoiceTotal"]) if inv["InvoiceTotal"] is not None else None,
         "destination": {
-            "company": inv["Shipto"] or inv["BusinessName"],
+            "company": None if no_company else (inv["Shipto"] or inv["BusinessName"]),
             "contact": inv["ShipContact"],
             "address1": inv["ShipAddress1"],
             "address2": inv["ShipAddress2"],

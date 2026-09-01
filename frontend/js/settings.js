@@ -756,6 +756,7 @@ function dbForm(dbRow) {
     <div class="field mb-16"><label>Port</label><input id="m-db-port" value="${dbRow ? esc(dbRow.port) : '1433'}"></div>
     <div class="field mb-16"><label>Database name</label><input id="m-db-dbname" value="${dbRow ? esc(dbRow.db_name) : ''}"></div>
     <div class="field mb-16"><label>Order-number prefix (for scan auto-detect)</label><input id="m-db-prefix" autocomplete="off" value="${dbRow ? esc(dbRow.prefix || '') : ''}"></div>
+    <div class="field mb-16"><label class="svc-selectall"><input type="checkbox" id="m-db-nocompany" ${dbRow && dbRow.no_company ? 'checked' : ''}> No Company — leave the customer's company name blank on shipments</label></div>
     <div class="field mb-16"><label>Username</label><input id="m-db-user" autocomplete="off" value="${dbRow ? esc(dbRow.username) : ''}"></div>
     <div class="field mb-16"><label>Password${dbRow ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-db-pass" autocomplete="off"></div>
     ${dbRow ? `<div class="field mb-16"><label>Status</label><select id="m-db-active"><option value="true" ${dbRow.is_active ? 'selected' : ''}>Active</option><option value="false" ${!dbRow.is_active ? 'selected' : ''}>Inactive</option></select></div>` : ''}
@@ -771,6 +772,7 @@ function dbForm(dbRow) {
       db_name: document.getElementById('m-db-dbname').value,
       username: document.getElementById('m-db-user').value,
       prefix: document.getElementById('m-db-prefix').value,
+      no_company: document.getElementById('m-db-nocompany').checked,
       password: document.getElementById('m-db-pass').value,
     };
     if (dbRow) body.is_active = document.getElementById('m-db-active').value === 'true';
@@ -862,6 +864,7 @@ function storeForm(store) {
     <div class="field mb-16"><label>Name</label><input id="m-store-name" value="${store ? esc(store.name) : ''}"></div>
     <div class="field mb-16"><label>Shop domain (mystore.myshopify.com)</label><input id="m-store-domain" value="${store ? esc(store.shop_domain) : ''}"></div>
     <div class="field mb-16"><label>Order-number prefix (for scan auto-detect)</label><input id="m-store-prefix" autocomplete="off" value="${store ? esc(store.prefix || '') : ''}"></div>
+    <div class="field mb-16"><label class="svc-selectall"><input type="checkbox" id="m-store-nocompany" ${store && store.no_company ? 'checked' : ''}> No Company — leave the customer's company name blank on shipments</label></div>
     <div class="field mb-16"><label>Admin API access token${store ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-store-token" autocomplete="off"></div>
     ${store ? `<div class="field mb-16"><label>Status</label><select id="m-store-active"><option value="true" ${store.is_active ? 'selected' : ''}>Active</option><option value="false" ${!store.is_active ? 'selected' : ''}>Inactive</option></select></div>` : ''}
     <div class="actions">
@@ -873,6 +876,7 @@ function storeForm(store) {
       name: document.getElementById('m-store-name').value,
       shop_domain: document.getElementById('m-store-domain').value,
       prefix: document.getElementById('m-store-prefix').value,
+      no_company: document.getElementById('m-store-nocompany').checked,
       access_token: document.getElementById('m-store-token').value,
     };
     if (store) body.is_active = document.getElementById('m-store-active').value === 'true';
