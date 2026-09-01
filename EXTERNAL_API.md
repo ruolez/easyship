@@ -5,11 +5,12 @@ Read-only API for external systems (e.g. profit calculation) to fetch shipping c
 ## Endpoint
 
 ```
-POST http://<easyship-host>:5557/api/external/orders/lookup
+POST http://<easyship-host>:<port>/api/external/orders/lookup
 Content-Type: application/json
 ```
 
-- HTTPS is also available on port `5558` (self-signed certificate — disable TLS verification or trust the cert).
+- The port depends on the deployment: production installs (via `install.sh`) default to **80** for HTTP and **443** for HTTPS; a local dev checkout defaults to **5557**/**5558**. The actual values are `APP_PORT` / `APP_HTTPS_PORT` in the server's `.env`. When the port is 80 you can omit it from the URL.
+- HTTPS uses a self-signed certificate — disable TLS verification or trust the cert.
 - **No authentication.** The API is intended for LAN use only. Do not expose these ports to the internet.
 - The endpoint is read-only; it never modifies shipping data.
 
@@ -126,14 +127,14 @@ There is no rate limit, but be a good citizen: batch lookups (up to 500 per call
 
 ## Health check
 
-`GET http://<easyship-host>:5557/api/health` → `{"status": "ok"}` — use this to verify connectivity before syncing.
+`GET http://<easyship-host>:<port>/api/health` → `{"status": "ok"}` — use this to verify connectivity before syncing.
 
 ## Example client (Python)
 
 ```python
 import requests
 
-EASYSHIP_URL = "http://192.168.1.50:5557"  # adjust host
+EASYSHIP_URL = "http://192.168.1.50"  # production default (port 80); use :5557 for a dev checkout
 
 def fetch_shipping_costs(order_numbers: list[str]) -> dict[str, dict]:
     """Returns {order_number_as_sent: order_payload} for found orders."""
@@ -160,7 +161,7 @@ for number, o in orders.items():
 ## Example (curl)
 
 ```bash
-curl -s http://192.168.1.50:5557/api/external/orders/lookup \
+curl -s http://192.168.1.50/api/external/orders/lookup \
   -H 'Content-Type: application/json' \
   -d '{"order_numbers":["1001","INV-4521"]}'
 ```
