@@ -1197,8 +1197,9 @@ table.compact th, table.compact td { padding: 9px 8px; }
 .parcels-table th.pin-num { box-shadow: inset 0 -1px 0 var(--outline-strong); }
 .parcels-table th.pin-ref { box-shadow: inset -1px 0 0 var(--outline), inset 0 -1px 0 var(--outline-strong); }
 .parcels-table th.actions { box-shadow: inset 1px 0 0 var(--outline), inset 0 -1px 0 var(--outline-strong); }
-.parcels-table td.actions .btn { padding: 0 7px; }
-.parcels-table td.actions .btn + .btn { margin-left: 2px; }
+.parcels-table th.actions, .parcels-table td.actions { width: 1%; text-align: center; }
+.table-wrap.flush.parcels-wrap th.actions,
+.table-wrap.flush.parcels-wrap td.actions { padding-left: 6px; padding-right: 12px; }
 table.striped.parcels-table tbody tr:nth-child(even) td.pin-num,
 table.striped.parcels-table tbody tr:nth-child(even) td.pin-ref,
 table.striped.parcels-table tbody tr:nth-child(even) td.actions { background: var(--row-alt); }
@@ -1231,6 +1232,73 @@ table.striped.parcels-table tbody tr:hover td.actions { background: var(--surfac
 }
 .parcels-wrap.shadow-start .pin-ref::before { opacity: 1; }
 .parcels-wrap.shadow-end .actions::after { opacity: 1; }
+
+/* ---------- Row-action popover (recalled from the "⋯" column) ---------- */
+.row-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.row-menu-btn svg { width: 18px; height: 18px; fill: currentColor; }
+.row-menu-btn:hover { background: var(--surface-sunken); color: var(--on-surface); }
+.row-menu-btn.open { background: var(--primary-light); color: var(--primary); }
+.row-menu-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--primary-ring); }
+
+.row-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 190px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: 10px;
+  box-shadow: var(--shadow-2);
+  animation: row-menu-in 0.12s ease;
+}
+@keyframes row-menu-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+}
+.row-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--on-surface);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.row-menu-item:hover { background: var(--surface-sunken); }
+.row-menu-item svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--text-secondary);
+}
+.row-menu-item.danger { color: var(--error); }
+.row-menu-item.danger:hover { background: var(--error-light); }
+.row-menu-item.danger svg { color: var(--error); }
+.row-menu-sep { height: 1px; margin: 6px 4px; background: var(--outline); }
 
 /* ---------- Table toolbar (summary + column toggle + refresh) ---------- */
 .table-toolbar {

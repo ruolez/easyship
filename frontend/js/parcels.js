@@ -85,6 +85,7 @@ async function loadUsers() {
 
 /* ---------- Client-side sorting & column filters over the fetched page ---------- */
 let allRows = [];
+let renderedRows = [];
 let sortKey = null;
 let sortDir = 1;
 
@@ -202,10 +203,97 @@ function renderTotals(rows) {
     <td class="actions"></td></tr>`;
 }
 
+/* ---------- Row actions: a slim pinned "⋯" column recalls a popover menu,
+   so the wide button pane no longer eats table width. ---------- */
+const MENU_ICONS = {
+  resume: '<svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
+  label: '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  print: '<svg viewBox="0 0 24 24"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
+  retry: '<svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
+  undo: '<svg viewBox="0 0 24 24"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>',
+};
+const ICON_KEBAB = '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>';
+
+function rowActions(s) {
+  const ref = s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
+  const needsRetry = s.status === 'label_created' && s.box_number === 1 &&
+    ((s.source === 'shopify' && !s.writeback_shopify_at) ||
+     (s.source === 'backoffice' && !s.writeback_backoffice_at));
+  const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id
+    && s.provider_shipment_id && s.group_id;
+  const items = [];
+  if (canResume) items.push({ label: 'Resume labels', icon: MENU_ICONS.resume, run: () => resumeBuy(s.group_id) });
+  if (s.has_label) items.push({ label: 'View label', icon: MENU_ICONS.label, href: `/api/shipments/${s.id}/label` });
+  if (s.has_label) items.push({ label: 'Print label', icon: MENU_ICONS.print, run: () => reprint(s.id) });
+  if (needsRetry) items.push({ label: 'Retry writeback', icon: MENU_ICONS.retry, run: () => retryWb(s.id) });
+  if (['label_created', 'fulfilled'].includes(s.status)) {
+    items.push({ label: 'Undo shipment', icon: MENU_ICONS.undo, danger: true, run: () => voidShipment(s.id, ref, s.source, s.box_total) });
+  }
+  if (s.status === 'voided' && s.error_message) {
+    items.push({ label: 'Retry undo', icon: MENU_ICONS.undo, danger: true, run: () => retryUndo(s.id) });
+  }
+  return items;
+}
+
+let openMenu = null;
+function closeRowMenu() {
+  if (!openMenu) return;
+  openMenu.menu.remove();
+  openMenu.btn.classList.remove('open');
+  openMenu = null;
+}
+
+function openRowMenu(btn) {
+  const items = rowActions(renderedRows[Number(btn.dataset.row)]);
+  const menu = document.createElement('div');
+  menu.className = 'row-menu';
+  menu.setAttribute('role', 'menu');
+  menu.innerHTML = items.map((it, i) => {
+    const sep = it.danger && i > 0 && !items[i - 1].danger ? '<div class="row-menu-sep"></div>' : '';
+    const cls = `row-menu-item${it.danger ? ' danger' : ''}`;
+    const inner = `${it.icon}<span>${esc(it.label)}</span>`;
+    return sep + (it.href
+      ? `<a class="${cls}" role="menuitem" href="${it.href}" target="_blank" data-i="${i}">${inner}</a>`
+      : `<button class="${cls}" role="menuitem" data-i="${i}">${inner}</button>`);
+  }).join('');
+  menu.addEventListener('click', (ev) => {
+    const item = ev.target.closest('.row-menu-item');
+    if (!item) return;
+    const act = items[Number(item.dataset.i)];
+    closeRowMenu();
+    if (act.run) act.run();
+  });
+  document.body.appendChild(menu);
+  const r = btn.getBoundingClientRect();
+  const left = Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8));
+  let top = r.bottom + 4;
+  if (top + menu.offsetHeight > window.innerHeight - 8) top = r.top - menu.offsetHeight - 4;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  btn.classList.add('open');
+  openMenu = { btn, menu };
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.row-menu-btn');
+  if (!btn) {
+    if (!e.target.closest('.row-menu')) closeRowMenu();
+    return;
+  }
+  const reopen = !openMenu || openMenu.btn !== btn;
+  closeRowMenu();
+  if (reopen) openRowMenu(btn);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeRowMenu(); });
+document.addEventListener('scroll', closeRowMenu, true);
+window.addEventListener('resize', closeRowMenu);
+
 function render() {
   const tbody = document.getElementById('parcels-body');
   const empty = document.getElementById('empty');
   const rows = visibleRows();
+  closeRowMenu();
+  renderedRows = rows;
   renderTotals(rows);
   if (!rows.length) {
     tbody.innerHTML = '';
@@ -215,19 +303,14 @@ function render() {
   }
   empty.style.display = 'none';
   tbody.innerHTML = rows.map((s, rowIndex) => {
-      const ref = s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
-      const needsRetry = s.status === 'label_created' && s.box_number === 1 &&
-        ((s.source === 'shopify' && !s.writeback_shopify_at) ||
-         (s.source === 'backoffice' && !s.writeback_backoffice_at));
       const boxesCell = s.box_total > 1
         ? `<span class="chip static ${['label_created', 'fulfilled'].includes(s.status) ? 'ok' : 'warn'}">${s.box_number}/${s.box_total}</span>`
         : '1';
-      const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id
-        && s.provider_shipment_id && s.group_id;
       const numbers = (s.tracking_numbers || []).length ? s.tracking_numbers : (s.tracking_number ? [s.tracking_number] : []);
       const trackingCell = numbers.length
         ? `<span class="copy-wrap"><span class="mono">${esc(numbers[0])}</span>${numbers.length > 1 ? `<span class="chip static warn">+${numbers.length - 1}</span>` : ''}<button class="copy-btn" data-copy="${esc(numbers.join('\n'))}" title="Copy tracking number${numbers.length > 1 ? 's' : ''}" aria-label="Copy tracking">${COPY_ICON}</button></span>`
         : '';
+      const ref = s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
       return `<tr>
         <td class="num col-narrow pin-num text-secondary">${rowIndex + 1}</td>
         <td class="pin-ref"><strong>${copyable(ref, 'order number')}</strong></td>
@@ -243,14 +326,9 @@ function render() {
         <td title="${esc(numbers.join(', '))}">${trackingCell}</td>
         <td><span class="status status-${esc(s.status)}" title="${esc(s.error_message || '')}">${esc(s.status.replace('_', ' '))}</span></td>
         <td class="created">${esc(s.created_at)}</td>
-        <td class="actions">
-          ${canResume ? `<button class="btn btn-text btn-small" onclick="resumeBuy('${esc(s.group_id)}')">Resume labels</button>` : ''}
-          ${s.has_label ? `<a class="btn btn-text btn-small" href="/api/shipments/${s.id}/label" target="_blank">Label</a>` : ''}
-          ${s.has_label ? `<button class="btn btn-text btn-small" onclick="reprint(${s.id})" title="Send to printer" aria-label="Send to printer">${ICON_PRINTER}</button>` : ''}
-          ${needsRetry ? `<button class="btn btn-text btn-small" onclick="retryWb(${s.id})">Retry writeback</button>` : ''}
-          ${['label_created', 'fulfilled'].includes(s.status) ? `<button class="btn btn-danger btn-small" onclick="voidShipment(${s.id}, '${esc(ref)}', '${esc(s.source)}', ${s.box_total})">Undo</button>` : ''}
-          ${s.status === 'voided' && s.error_message ? `<button class="btn btn-danger btn-small" onclick="retryUndo(${s.id})">Retry undo</button>` : ''}
-        </td>
+        <td class="actions">${rowActions(s).length
+          ? `<button class="row-menu-btn" data-row="${rowIndex}" title="Actions" aria-label="Row actions" aria-haspopup="menu">${ICON_KEBAB}</button>`
+          : ''}</td>
       </tr>`;
   }).join('');
 }
