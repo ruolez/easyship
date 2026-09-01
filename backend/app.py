@@ -17,6 +17,7 @@ def create_app():
 
     import auth
     import backoffice_api
+    import external_api
     import manifests_api
     import reports_api
     import settings_api
@@ -32,6 +33,7 @@ def create_app():
     app.register_blueprint(shopify_api.bp)
     app.register_blueprint(backoffice_api.bp)
     app.register_blueprint(reports_api.bp)
+    app.register_blueprint(external_api.bp)
 
     app.teardown_appcontext(db.close_db)
 
