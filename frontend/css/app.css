@@ -39,6 +39,9 @@
   --warning: #d97706;
   --warning-light: #fffbeb;
 
+  /* striped-row rgba(148,163,184,.08) flattened over white; sticky cells need it opaque */
+  --row-alt: #f4f6f9;
+
   --radius-card: 10px;
   --radius-input: 6px;
   --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.06);
@@ -1140,30 +1143,47 @@ table.striped tfoot td {
 table.compact th, table.compact td { padding: 9px 8px; }
 .filter-row th.narrow select { min-width: 64px; }
 
-/* ---------- Parcels table: dense columns, actions always in view ---------- */
-/* The wrap's side padding moves into the edge cells so the sticky actions
-   column can sit flush against the card edge. */
+/* ---------- Parcels table: dense columns, pinned edges, inner scroll ---------- */
+/* The wrap's side padding moves into the edge cells so the sticky edge
+   columns can sit flush against the card edge. */
 .table-wrap.flush { padding: 0; }
 .table-wrap.flush th:first-child, .table-wrap.flush td:first-child { padding-left: 24px; }
 .table-wrap.flush th:last-child, .table-wrap.flush td:last-child { padding-right: 24px; }
+/* Both-axis inner scroll: the thead (and tfoot) sticky rules only work
+   against a bounded scroll container, and the horizontal scrollbar stays at
+   the bottom of the viewport instead of below a page-tall table. */
+.parcels-wrap {
+  --pin-num-w: 64px;
+  max-height: calc(100vh - 230px);
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--outline-strong) transparent;
+}
+.parcels-wrap::-webkit-scrollbar { width: 6px; height: 6px; }
+/* The compact header row is ~34px tall; 1px overlap so rows can't peek through. */
+.parcels-table .filter-row th { top: 33px; }
 .parcels-table th.col-narrow, .parcels-table td.col-narrow { width: 1%; }
 .parcels-table .col-size { display: none; white-space: nowrap; }
 .parcels-table.show-size .col-size { display: table-cell; }
-.page-head .col-toggle {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  user-select: none;
-}
 .parcels-table td.ellip.store { max-width: 130px; }
 .parcels-table td.ellip.address { max-width: 150px; }
 .parcels-table td.ellip.service { max-width: 160px; }
 .parcels-table td.created { padding-right: 16px; }
-.parcels-table th.actions, .parcels-table td.actions {
+/* Pinned columns. The # column gets a fixed width so Order #'s left offset
+   is a known constant. z-scale: tbody pins 1, tfoot 2/3, thead 4/5. */
+.parcels-table .pin-num, .parcels-table .pin-ref {
+  position: sticky;
+  background: var(--surface);
+  z-index: 1;
+}
+.parcels-table .pin-num {
+  left: 0;
+  width: var(--pin-num-w);
+  min-width: var(--pin-num-w);
+  max-width: var(--pin-num-w);
+}
+.parcels-table .pin-ref { left: var(--pin-num-w); box-shadow: inset -1px 0 0 var(--outline); }
+.parcels-table .actions {
   position: sticky;
   right: 0;
   background: var(--surface);
@@ -1171,11 +1191,68 @@ table.compact th, table.compact td { padding: 9px 8px; }
   white-space: nowrap;
   z-index: 1;
 }
-.parcels-table th.actions { z-index: 2; }
+.parcels-table th { z-index: 4; }
+.parcels-table th.pin-num, .parcels-table th.pin-ref, .parcels-table th.actions { z-index: 5; }
+/* Keep the header's bottom hairline that these box-shadows would otherwise drop. */
+.parcels-table th.pin-num { box-shadow: inset 0 -1px 0 var(--outline-strong); }
+.parcels-table th.pin-ref { box-shadow: inset -1px 0 0 var(--outline), inset 0 -1px 0 var(--outline-strong); }
+.parcels-table th.actions { box-shadow: inset 1px 0 0 var(--outline), inset 0 -1px 0 var(--outline-strong); }
 .parcels-table td.actions .btn { padding: 0 7px; }
 .parcels-table td.actions .btn + .btn { margin-left: 2px; }
-table.striped.parcels-table tbody tr:nth-child(even) td.actions { background: #f4f6f9; }
+table.striped.parcels-table tbody tr:nth-child(even) td.pin-num,
+table.striped.parcels-table tbody tr:nth-child(even) td.pin-ref,
+table.striped.parcels-table tbody tr:nth-child(even) td.actions { background: var(--row-alt); }
+table.striped.parcels-table tbody tr:hover td.pin-num,
+table.striped.parcels-table tbody tr:hover td.pin-ref,
 table.striped.parcels-table tbody tr:hover td.actions { background: var(--surface-sunken); }
+/* Totals stay in view at the bottom of the inner scroll container. */
+.parcels-table tfoot td { position: sticky; bottom: 0; background: var(--surface); z-index: 2; }
+.parcels-table tfoot td.pin-num, .parcels-table tfoot td.pin-ref,
+.parcels-table tfoot td.actions { z-index: 3; }
+/* Edge shadows hinting at content hidden under the pinned panes — ::before on
+   pin-ref because th.sortable's ::after draws the sort arrow. */
+.parcels-table .pin-ref::before, .parcels-table .actions::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.parcels-table .pin-ref::before {
+  left: 100%;
+  background: linear-gradient(to right, rgba(15, 23, 42, 0.10), transparent);
+}
+.parcels-table .actions::after {
+  right: 100%;
+  background: linear-gradient(to left, rgba(15, 23, 42, 0.10), transparent);
+}
+.parcels-wrap.shadow-start .pin-ref::before { opacity: 1; }
+.parcels-wrap.shadow-end .actions::after { opacity: 1; }
+
+/* ---------- Table toolbar (summary + column toggle + refresh) ---------- */
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding-bottom: 12px;
+}
+.table-toolbar .table-summary { padding-bottom: 0; }
+.table-toolbar-right { margin-left: auto; display: inline-flex; align-items: center; gap: 16px; }
+.table-toolbar .switch { gap: 8px; font-size: 13px; color: var(--text-secondary); }
+
+/* Must come after the base .parcels-wrap/.flush rules — same specificity,
+   source order decides. Card padding shrinks to 16px on mobile. */
+@media (max-width: 768px) {
+  .parcels-wrap { --pin-num-w: 56px; }
+  .table-wrap.flush.parcels-wrap th:first-child,
+  .table-wrap.flush.parcels-wrap td:first-child { padding-left: 16px; }
+  .table-wrap.flush.parcels-wrap th:last-child,
+  .table-wrap.flush.parcels-wrap td:last-child { padding-right: 16px; }
+}
 
 .copy-wrap { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
 .copy-btn {

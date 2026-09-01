@@ -192,9 +192,14 @@ function renderTotals(rows) {
     <span><strong>${rows.length}</strong> parcel${rows.length === 1 ? '' : 's'}</span>
     <span>Shipping total <strong>${money(cost)}</strong></span>`;
   foot.innerHTML = `<tr>
-    <td colspan="9">Total — ${shipments} shipment${shipments === 1 ? '' : 's'}, ${rows.length} parcel${rows.length === 1 ? '' : 's'}</td>
+    <td class="pin-num"></td>
+    <td class="pin-ref">Total</td>
+    <td colspan="4">${shipments} shipment${shipments === 1 ? '' : 's'}, ${rows.length} parcel${rows.length === 1 ? '' : 's'}</td>
     <td class="col-size"></td>
-    <td class="num">${money(cost)}</td><td colspan="4"></td></tr>`;
+    <td colspan="3"></td>
+    <td class="num">${money(cost)}</td>
+    <td colspan="3"></td>
+    <td class="actions"></td></tr>`;
 }
 
 function render() {
@@ -224,8 +229,8 @@ function render() {
         ? `<span class="copy-wrap"><span class="mono">${esc(numbers[0])}</span>${numbers.length > 1 ? `<span class="chip static warn">+${numbers.length - 1}</span>` : ''}<button class="copy-btn" data-copy="${esc(numbers.join('\n'))}" title="Copy tracking number${numbers.length > 1 ? 's' : ''}" aria-label="Copy tracking">${COPY_ICON}</button></span>`
         : '';
       return `<tr>
-        <td class="num col-narrow text-secondary">${rowIndex + 1}</td>
-        <td><strong>${copyable(ref, 'order number')}</strong></td>
+        <td class="num col-narrow pin-num text-secondary">${rowIndex + 1}</td>
+        <td class="pin-ref"><strong>${copyable(ref, 'order number')}</strong></td>
         <td class="col-narrow">${esc(s.created_by)}</td>
         <td class="ellip store" title="${esc(s.service_name)}">${esc(s.service_name)}</td>
         <td class="ellip address" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
@@ -391,6 +396,19 @@ showSize.addEventListener('change', () => {
   applySizeColumn();
 });
 applySizeColumn();
+
+/* Edge shadows on the pinned columns, shown only when content is actually
+   hidden in that direction. */
+const parcelsWrap = document.querySelector('.parcels-wrap');
+function updateScrollShadows() {
+  const max = parcelsWrap.scrollWidth - parcelsWrap.clientWidth;
+  parcelsWrap.classList.toggle('shadow-start', parcelsWrap.scrollLeft > 0);
+  parcelsWrap.classList.toggle('shadow-end', parcelsWrap.scrollLeft < max - 1);
+}
+parcelsWrap.addEventListener('scroll', updateScrollShadows, { passive: true });
+new ResizeObserver(updateScrollShadows).observe(parcelsWrap);
+new ResizeObserver(updateScrollShadows).observe(parcelsWrap.querySelector('table'));
+updateScrollShadows();
 
 loadUsers();
 load();

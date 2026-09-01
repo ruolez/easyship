@@ -9,17 +9,25 @@
 <body>
   <header id="appbar"></header>
   <div class="container wide">
-    <div class="page-head"><h1>Parcels</h1><span class="sub">Every label, who created it, and where the tracking went</span>
-      <label class="col-toggle"><input type="checkbox" id="show-size"> Box size</label>
-    </div>
+    <div class="page-head"><h1>Parcels</h1><span class="sub">Every label, who created it, and where the tracking went</span></div>
     <div class="card">
-      <div class="table-summary" id="parcels-summary" style="display:none"></div>
-      <div class="table-wrap flush">
+      <div class="table-toolbar">
+        <div class="table-summary" id="parcels-summary" style="display:none"></div>
+        <div class="table-toolbar-right">
+          <label class="switch">
+            <input type="checkbox" id="show-size">
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="switch-label">Box size</span>
+          </label>
+          <button class="btn btn-outlined btn-small" id="refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="table-wrap flush parcels-wrap">
         <table class="striped compact parcels-table">
           <thead>
             <tr>
-              <th class="num col-narrow">#</th>
-              <th class="sortable" data-sort="ref">Order #</th>
+              <th class="num col-narrow pin-num">#</th>
+              <th class="sortable pin-ref" data-sort="ref">Order #</th>
               <th class="sortable col-narrow" data-sort="user">User</th>
               <th class="sortable" data-sort="store">Store</th>
               <th class="sortable" data-sort="address">Address</th>
@@ -35,8 +43,8 @@
               <th class="actions"></th>
             </tr>
             <tr class="filter-row">
-              <th></th>
-              <th><input type="text" id="search" placeholder="Search…" title="Search order #, tracking, customer, city" style="min-width:90px"></th>
+              <th class="pin-num"></th>
+              <th class="pin-ref"><input type="text" id="search" placeholder="Search…" title="Search order #, tracking, customer, city" style="min-width:90px"></th>
               <th class="narrow"><select id="user-filter"><option value="">All</option></select></th>
               <th><select id="store-filter"><option value="">All</option></select></th>
               <th></th>
@@ -64,7 +72,7 @@
                   <input type="date" id="date-to" title="Created to">
                 </div>
               </th>
-              <th class="actions"><button class="btn btn-outlined btn-small" id="refresh">Refresh</button></th>
+              <th class="actions"></th>
             </tr>
           </thead>
           <tbody id="parcels-body"></tbody>
