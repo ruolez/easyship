@@ -9,7 +9,9 @@
 <body>
   <header id="appbar"></header>
   <div class="container wide">
-    <div class="page-head"><h1>Parcels</h1><span class="sub">Every label, who created it, and where the tracking went</span></div>
+    <div class="page-head"><h1>Parcels</h1><span class="sub">Every label, who created it, and where the tracking went</span>
+      <label class="col-toggle"><input type="checkbox" id="show-size"> Box size</label>
+    </div>
     <div class="card">
       <div class="table-summary" id="parcels-summary" style="display:none"></div>
       <div class="table-wrap flush">
@@ -22,6 +24,7 @@
               <th class="sortable" data-sort="store">Store</th>
               <th class="sortable" data-sort="address">Address</th>
               <th class="num sortable col-narrow" data-sort="boxes">Boxes</th>
+              <th class="sortable col-narrow col-size" data-sort="size">Size (in)</th>
               <th class="num sortable col-narrow" data-sort="weight">Weight</th>
               <th class="sortable" data-sort="courier">Service</th>
               <th class="sortable" data-sort="carrier">Carrier</th>
@@ -38,6 +41,7 @@
               <th><select id="store-filter"><option value="">All</option></select></th>
               <th></th>
               <th></th>
+              <th class="col-size"><select id="size-filter"><option value="">All</option></select></th>
               <th></th>
               <th><select id="service-filter"><option value="">All</option></select></th>
               <th><select id="carrier-filter"><option value="">All</option></select></th>

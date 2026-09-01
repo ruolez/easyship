@@ -52,6 +52,18 @@ function signatureChip(options) {
   return '';
 }
 
+function boxSize(s) {
+  const p = (s.parcels || [])[0] || {};
+  const dims = [p.length, p.width, p.height].map(Number);
+  if (dims.some((d) => !d || d <= 0)) return '';
+  return dims.map((d) => String(d)).join('×');
+}
+
+function boxVolume(s) {
+  const p = (s.parcels || [])[0] || {};
+  return (Number(p.length) || 0) * (Number(p.width) || 0) * (Number(p.height) || 0);
+}
+
 function formatAddress(d) {
   if (!d) return '';
   const parts = [
@@ -82,6 +94,7 @@ const SORT_VALUE = {
   store: (s) => (s.service_name || '').toLowerCase(),
   address: (s) => formatAddress(s.destination).toLowerCase(),
   boxes: (s) => s.box_total || 1,
+  size: (s) => boxVolume(s) || -1,
   weight: (s) => s.total_weight_lb ?? -1,
   courier: (s) => (s.courier_name || '').toLowerCase(),
   carrier: (s) => (s.courier_umbrella_name || '').toLowerCase(),
@@ -114,10 +127,12 @@ function visibleRows() {
   const store = document.getElementById('store-filter').value;
   const carrier = document.getElementById('carrier-filter').value;
   const service = document.getElementById('service-filter').value;
+  const size = document.getElementById('size-filter').value;
   let rows = allRows.filter((s) =>
     (!store || s.service_name === store)
     && (!carrier || s.courier_umbrella_name === carrier)
-    && (!service || s.courier_name === service));
+    && (!service || s.courier_name === service)
+    && (!size || boxSize(s) === size));
   if (sortKey) {
     const val = SORT_VALUE[sortKey];
     rows = [...rows].sort((a, b) => {
@@ -139,13 +154,16 @@ async function load() {
   const tbody = document.getElementById('parcels-body');
   const empty = document.getElementById('empty');
   empty.style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="14"><span class="spinner"></span> Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="15"><span class="spinner"></span> Loading…</td></tr>';
   try {
     allRows = await api(`/api/shipments?${params}`);
     const uniq = (vals) => [...new Set(vals.filter(Boolean))].sort();
     fillOptions('store-filter', uniq(allRows.map((s) => s.service_name)));
     fillOptions('carrier-filter', uniq(allRows.map((s) => s.courier_umbrella_name)));
     fillOptions('service-filter', uniq(allRows.map((s) => s.courier_name)));
+    const sizes = [...new Map(allRows.filter(boxSize).map((s) => [boxSize(s), boxVolume(s)]))]
+      .sort((a, b) => a[1] - b[1]).map(([label]) => label);
+    fillOptions('size-filter', sizes);
     render();
   } catch (err) {
     allRows = [];
@@ -175,6 +193,7 @@ function renderTotals(rows) {
     <span>Shipping total <strong>${money(cost)}</strong></span>`;
   foot.innerHTML = `<tr>
     <td colspan="9">Total — ${shipments} shipment${shipments === 1 ? '' : 's'}, ${rows.length} parcel${rows.length === 1 ? '' : 's'}</td>
+    <td class="col-size"></td>
     <td class="num">${money(cost)}</td><td colspan="4"></td></tr>`;
 }
 
@@ -211,6 +230,7 @@ function render() {
         <td class="ellip store" title="${esc(s.service_name)}">${esc(s.service_name)}</td>
         <td class="ellip address" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
         <td class="num col-narrow">${boxesCell}</td>
+        <td class="col-narrow col-size">${esc(boxSize(s))}</td>
         <td class="num col-narrow">${s.total_weight_lb ?? ''}</td>
         <td class="ellip service" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}${signatureChip(s.options)}</td>
         <td>${esc(s.courier_umbrella_name || '')}</td>
@@ -352,9 +372,25 @@ document.getElementById('search').addEventListener('keydown', (e) => {
 ['status-filter', 'user-filter', 'date-from', 'date-to'].forEach((id) => {
   document.getElementById(id).addEventListener('change', load);
 });
-['store-filter', 'carrier-filter', 'service-filter'].forEach((id) => {
+['store-filter', 'carrier-filter', 'service-filter', 'size-filter'].forEach((id) => {
   document.getElementById(id).addEventListener('change', render);
 });
+
+const showSize = document.getElementById('show-size');
+showSize.checked = localStorage.getItem('parcels.showSize') === '1';
+function applySizeColumn() {
+  document.querySelector('.parcels-table').classList.toggle('show-size', showSize.checked);
+}
+showSize.addEventListener('change', () => {
+  localStorage.setItem('parcels.showSize', showSize.checked ? '1' : '0');
+  const sizeFilter = document.getElementById('size-filter');
+  if (!showSize.checked && sizeFilter.value) {
+    sizeFilter.value = '';
+    render();
+  }
+  applySizeColumn();
+});
+applySizeColumn();
 
 loadUsers();
 load();
