@@ -11,8 +11,6 @@ let clientSettings = { placeholder_email: '', print_mode: 'browser', countdown_s
 let savedBoxes = [];
 let lastLabelUrl = null;
 let providerLabels = {};
-let enabledProviders = [];
-let orderCompany = ''; // company from the order lookup, so a provider switch can restore it
 let preferredService = ''; // courier service a tag rule asked for
 let preferredServiceId = ''; // Auto Mode preset service id (when no tag rule names one)
 
@@ -28,7 +26,6 @@ async function init() {
   clientSettings = settings;
   savedBoxes = boxes;
   providerLabels = Object.fromEntries(providers.map((p) => [p.name, p.label]));
-  enabledProviders = providers;
   addParcelRow();
   const loaded = await prefill();
   applyPlaceholderEmail();
@@ -146,26 +143,10 @@ function confirmReship(what, numbers, note) {
   });
 }
 
-/* The active integration can require labels without a company name — then the
-   form's Company field stays blank so the packer sees what will print. The
-   backend blanks it again at rate time as the guarantee. */
-function activeNoCompany() {
-  const name = (window.activeProvider && window.activeProvider()) || '';
-  const p = enabledProviders.find((x) => x.name === name);
-  return !!(p && p.no_company);
-}
-
-window.addEventListener('easyship:provider', () => {
-  const el = document.getElementById('d-company');
-  if (activeNoCompany()) el.value = '';
-  else if (!el.value.trim() && orderCompany) el.value = orderCompany;
-});
-
 function fillDestination(d) {
   if (!d) return;
-  orderCompany = d.company || '';
   const map = {
-    'd-company': activeNoCompany() ? '' : d.company, 'd-contact': d.contact, 'd-address1': d.address1,
+    'd-company': d.company, 'd-contact': d.contact, 'd-address1': d.address1,
     'd-address2': d.address2, 'd-city': d.city, 'd-state': d.state,
     'd-zip': d.zip, 'd-phone': d.phone, 'd-email': d.email,
   };

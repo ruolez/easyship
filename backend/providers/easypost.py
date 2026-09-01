@@ -32,7 +32,6 @@ from providers.base import (
     ShipmentState,
     ShippingProvider,
     missing_origin_fields,
-    no_company_field,
     origin_descriptor,
 )
 
@@ -534,7 +533,6 @@ class EasyPostProvider(ShippingProvider):
                      {"value": "ZPL", "label": "ZPL"},
                      {"value": "PNG", "label": "PNG"},
                  ]},
-                no_company_field(self.name),
             ],
             "test_endpoint": f"/api/providers/{self.name}/test",
             "supports": {"service_exclusions": False},

@@ -143,12 +143,6 @@ def missing_origin_fields(origin, required):
     return [label for k, label in required.items() if not (origin.get(k) or "").strip()]
 
 
-def no_company_field(key):
-    """Descriptor field for the per-instance No Company checkbox."""
-    return {"key": f"{key}_no_company", "label": "No Company", "type": "checkbox",
-            "hint": "Leave the customer's company name blank on labels from this integration"}
-
-
 class ShippingProvider(ABC):
     """Everything the shipping routes need from a platform. All methods may raise
     ProviderError; parallel helpers return per-id ProviderError instead.
@@ -179,16 +173,6 @@ class ShippingProvider(ABC):
 
     def origin(self):
         return origin_settings(self.name)
-
-    def no_company(self):
-        """Whether labels from this instance must omit the customer's company."""
-        return self.setting("no_company") == "true"
-
-    def prepare_destination(self, destination):
-        """Instance-level ship-to adjustments applied before drafting."""
-        if self.no_company():
-            return {**destination, "company": ""}
-        return destination
 
     # ---- rating / drafting (POST /rates) ----
     @abstractmethod
