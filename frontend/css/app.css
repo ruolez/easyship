@@ -1271,6 +1271,9 @@ table.compact th, table.compact td { padding: 9px 8px; }
   max-width: var(--pin-num-w);
 }
 .parcels-table .pin-ref { left: var(--pin-num-w); box-shadow: inset -1px 0 0 var(--outline); }
+/* The search box's intrinsic width would otherwise force the pinned
+   Order # column far wider than the order numbers need. */
+.parcels-table th.pin-ref input { width: 110px; min-width: 0; }
 .parcels-table .actions {
   position: sticky;
   right: 0;
