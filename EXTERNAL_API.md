@@ -134,7 +134,7 @@ There is no rate limit, but be a good citizen: batch lookups (up to 500 per call
 ```python
 import requests
 
-EASYSHIP_URL = "http://192.168.1.50"  # production default (port 80); use :5557 for a dev checkout
+EASYSHIP_URL = "http://192.168.89.14"  # production default (port 80); use :5557 for a dev checkout
 
 def fetch_shipping_costs(order_numbers: list[str]) -> dict[str, dict]:
     """Returns {order_number_as_sent: order_payload} for found orders."""
@@ -161,7 +161,7 @@ for number, o in orders.items():
 ## Example (curl)
 
 ```bash
-curl -s http://192.168.1.50/api/external/orders/lookup \
+curl -s http://192.168.89.14/api/external/orders/lookup \
   -H 'Content-Type: application/json' \
   -d '{"order_numbers":["1001","INV-4521"]}'
 ```
