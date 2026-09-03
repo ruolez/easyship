@@ -315,6 +315,22 @@ def provider_services(name):
     return jsonify({"services": services, "excluded": excluded})
 
 
+@bp.get("/providers/<name>/carriers")
+@admin_required
+def provider_carriers(name):
+    """Options for a carrier-picker field. Always a 200 list headed by an empty
+    placeholder, so an unsaved choice never displays as the first real carrier
+    and a missing/bad key reads as a message rather than a blank select."""
+    provider = _provider_or_404(name)
+    if not provider or not hasattr(provider, "list_carriers"):
+        return api_error("Unknown provider", 404)
+    try:
+        carriers = provider.list_carriers()
+    except ProviderError as e:
+        return jsonify([{"value": "", "label": f"— {e}"}])
+    return jsonify([{"value": "", "label": "— choose a carrier —"}, *carriers])
+
+
 @bp.get("/providers/<name>/services/available")
 @login_required
 def provider_available_services(name):

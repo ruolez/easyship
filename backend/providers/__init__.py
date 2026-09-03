@@ -40,10 +40,12 @@ def _load_registry():
         from .shippo import ShippoProvider
         from .easypost import EasyPostProvider
         from .shipstation import ShipStationProvider
+        from .endicia import EndiciaProvider
         _REGISTRY["easyship"] = EasyshipProvider
         _REGISTRY["shippo"] = ShippoProvider
         _REGISTRY["easypost"] = EasyPostProvider
         _REGISTRY["shipstation"] = ShipStationProvider
+        _REGISTRY["endicia"] = EndiciaProvider
     return _REGISTRY
 
 

@@ -24,7 +24,8 @@ bp = Blueprint("manifests", __name__, url_prefix="/api/manifests")
 
 # Which labeled shipments may go on a USPS manifest: today's (Central) USPS
 # labels for the chosen instance, not yet on a manifest. 'stamps' covers
-# ShipStation accounts whose USPS connection is named Stamps.com.
+# ShipStation accounts whose USPS connection is named Stamps.com; 'endicia'
+# the Endicia-via-ShipStation instances, whose labels carry the alias.
 ELIGIBLE_WHERE = """
     s.provider = %s
     AND s.status IN ('label_created', 'fulfilled')
@@ -32,6 +33,7 @@ ELIGIBLE_WHERE = """
     AND s.easyship_shipment_id IS NOT NULL
     AND (s.courier_umbrella_name ILIKE '%%usps%%'
          OR s.courier_umbrella_name ILIKE '%%stamps%%'
+         OR s.courier_umbrella_name ILIKE '%%endicia%%'
          OR s.courier_name ILIKE '%%usps%%')
     AND (s.label_created_at AT TIME ZONE 'America/Chicago')::date
         = (now() AT TIME ZONE 'America/Chicago')::date

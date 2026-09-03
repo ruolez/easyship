@@ -223,6 +223,7 @@ window.deleteBox = async (id) => {
    Save / Discard flow. Add / rename / delete go through /api/provider-instances
    and re-render the cards. */
 let instanceByKey = {};
+let renderedProviders = [];
 
 async function renderProviders() {
   const container = document.getElementById('providers-container');
@@ -234,6 +235,7 @@ async function renderProviders() {
     return;
   }
   instanceByKey = Object.fromEntries((meta.instances || []).map((i) => [i.key, i]));
+  renderedProviders = list;
   // Register every instance field as a persistable setting (fresh on each re-render).
   SETTING_IDS = [...BASE_SETTING_IDS];
   list.forEach((p) => {
@@ -665,6 +667,13 @@ document.getElementById('save-settings').addEventListener('click', async () => {
   try {
     await api('/api/settings', { method: 'PUT', body });
     snackbar('Settings saved', 'success');
+    // Option lists that depend on a credential (e.g. a carrier picker) can
+    // only fill once the key is saved — refresh them before restoring values.
+    for (const p of renderedProviders) {
+      for (const f of p.fields) {
+        if (f.type === 'select' && f.options_endpoint) await loadFieldOptions(f);
+      }
+    }
     await loadSettings();
     setDirty(false);
     initNav('settings');

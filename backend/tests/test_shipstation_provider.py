@@ -319,6 +319,38 @@ class DescriptorTest(unittest.TestCase):
             ("shipstation-5", "East", "shipstation", "ShipStation", True,
              "/api/providers/shipstation-5/services"))
 
+    def test_default_hooks_pass_carriers_through(self):
+        provider = ss.ShipStationProvider()
+        carriers = [{"carrier_id": UPS, "carrier_code": "ups", "friendly_name": "UPS"},
+                    {"carrier_id": FEDEX, "carrier_code": "fedex", "friendly_name": "FedEx"}]
+        self.assertEqual((provider.rating_carriers(carriers), provider.carrier_names(carriers)),
+                         (carriers, NAMES))
+
+    def test_list_carriers_uses_disambiguated_names(self):
+        orig = (ss._carriers, ss.db.get_setting)
+        ss._carriers = lambda auth, force=False: [
+            {"carrier_id": "se-1", "carrier_code": "ups", "friendly_name": "UPS", "nickname": "Main"},
+            {"carrier_id": "se-2", "carrier_code": "ups", "friendly_name": "UPS", "nickname": "Returns"},
+            {"carrier_id": "se-3", "carrier_code": "stamps_com", "friendly_name": "Stamps.com", "nickname": "Endicia"}]
+        ss.db.get_setting = lambda key, default=None: "key" if key.endswith("_api_key") else default
+        try:
+            out = ss.ShipStationProvider().list_carriers()
+        finally:
+            ss._carriers, ss.db.get_setting = orig
+        self.assertEqual(out, [{"value": "se-1", "label": "UPS · Main"},
+                               {"value": "se-2", "label": "UPS · Returns"},
+                               {"value": "se-3", "label": "Stamps.com"}])
+
+    def test_connection_summary_lists_carriers_and_test_mode(self):
+        orig = ss.db.get_setting
+        ss.db.get_setting = lambda key, default=None: {"shipstation_test_labels": "true"}.get(key, default)
+        try:
+            summary = ss.ShipStationProvider()._connection_summary(
+                [{"friendly_name": "UPS"}, {"carrier_code": "stamps_com"}])
+        finally:
+            ss.db.get_setting = orig
+        self.assertEqual(summary, "2 carrier(s): UPS, stamps_com — test labels ON (no charge)")
+
     def test_rates_are_tagged_with_the_instance_key(self):
         orig = (ss._request, ss._carriers, ss._origin_address, ss.db.get_setting)
         ss._request = lambda *a, **k: {"shipment_id": "se-s-1",

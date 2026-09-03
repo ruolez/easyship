@@ -490,10 +490,28 @@ class ShipStationProvider(ShippingProvider):
     label = "ShipStation"
     modes = ()
 
+    # ---- carrier hooks ----
+    # A subclass locked to a subset of the account's carriers (see endicia.py)
+    # overrides these; every carrier-list consumer below goes through them.
+    def rating_carriers(self, carriers):
+        """The connected carriers this instance quotes and lists services for."""
+        return carriers
+
+    def carrier_names(self, carriers):
+        """{carrier_id: umbrella name} shown on rates and labels."""
+        return _carrier_names(carriers)
+
+    def list_carriers(self):
+        """Every connected carrier as picker options [{value, label}]."""
+        carriers = _carriers(_auth(self.name), force=True)
+        names = _carrier_names(carriers)
+        return [{"value": c["carrier_id"], "label": names.get(c["carrier_id"]) or c["carrier_id"]}
+                for c in carriers if c.get("carrier_id")]
+
     # ---- rating / drafting ----
     def create_draft_shipments(self, destination, parcels, items, options=None):
         auth = _auth(self.name)
-        carriers = _carriers(auth)
+        carriers = self.rating_carriers(_carriers(auth))
         carrier_ids = [c["carrier_id"] for c in carriers if c.get("carrier_id")]
         if not carrier_ids:
             raise ProviderError("No carriers are connected to this ShipStation account")
@@ -524,7 +542,7 @@ class ShipStationProvider(ShippingProvider):
         if not shipment_id:
             raise ProviderError("ShipStation did not return a shipment id")
         drafts = [DraftShipment(_box_id(shipment_id, i, len(parcels))) for i in range(len(parcels))]
-        return drafts, _combine_rates(rates, _service_catalog(carriers), _carrier_names(carriers),
+        return drafts, _combine_rates(rates, _service_catalog(carriers), self.carrier_names(carriers),
                                       provider=self.name), []
 
     def get_excluded_service_ids(self):
@@ -565,7 +583,7 @@ class ShipStationProvider(ShippingProvider):
         label_format = _label_format(self.name)
         test_label = _test_labels(self.name)
         carriers = _carriers(auth)
-        catalog, names = _service_catalog(carriers), _carrier_names(carriers)
+        catalog, names = _service_catalog(carriers), self.carrier_names(carriers)
         origin = _origin_address(self.origin())  # settings are read here, not in worker threads
 
         # Several box ids can share one multi-package shipment — purchase once
@@ -611,7 +629,7 @@ class ShipStationProvider(ShippingProvider):
     def poll_shipments(self, provider_shipment_ids, service_id=None):
         auth = _auth(self.name)
         carriers = _carriers(auth)
-        catalog, names = _service_catalog(carriers), _carrier_names(carriers)
+        catalog, names = _service_catalog(carriers), self.carrier_names(carriers)
 
         by_base = {}
         for bid in provider_shipment_ids:
@@ -772,8 +790,8 @@ class ShipStationProvider(ShippingProvider):
         return []
 
     def list_courier_services(self):
-        carriers = _carriers(_auth(self.name), force=True)
-        names = _carrier_names(carriers)
+        carriers = self.rating_carriers(_carriers(_auth(self.name), force=True))
+        names = self.carrier_names(carriers)
         services = {}
         for c in carriers:
             for s in c.get("services") or []:
@@ -813,14 +831,19 @@ class ShipStationProvider(ShippingProvider):
                 carriers = (resp.json() or {}).get("carriers") or []
             except ValueError:
                 carriers = []
-            names = sorted({c.get("friendly_name") or c.get("carrier_code") or "" for c in carriers} - {""})
-            summary = f"{len(carriers)} carrier(s)" + (": " + ", ".join(names) if names else "")
-            if _test_labels(self.name):
-                summary += " — test labels ON (no charge)"
-            return {"ok": True, "account": summary}
+            return {"ok": True, "account": self._connection_summary(carriers)}
         if resp.status_code in (401, 403):
             raise ProviderError(f"API key rejected ({resp.status_code}) — check the key")
         raise ProviderError(f"ShipStation returned {resp.status_code}: {(resp.text or '')[:200]}")
+
+    def _connection_summary(self, carriers):
+        """The 'Connected' line on the Settings card, from the raw carrier list."""
+        names = sorted({c.get("friendly_name") or c.get("carrier_code") or "" for c in carriers} - {""})
+        summary = f"{len(carriers)} carrier(s)" + (": " + ", ".join(names) if names else "")
+        return summary + self._test_labels_suffix()
+
+    def _test_labels_suffix(self):
+        return " — test labels ON (no charge)" if _test_labels(self.name) else ""
 
     def descriptor(self):
         return {
@@ -835,18 +858,7 @@ class ShipStationProvider(ShippingProvider):
             "fields": [
                 {"key": self.setting_key("api_key"), "label": "API key (v2)", "type": "secret",
                  "hint": "ShipStation → Settings → Account → API Settings. Needs a Standard plan or higher."},
-                {"key": self.setting_key("label_format"), "label": "Label format", "type": "select",
-                 "options": [
-                     {"value": "pdf", "label": "PDF (4x6)"},
-                     {"value": "zpl", "label": "ZPL"},
-                     {"value": "png", "label": "PNG"},
-                 ]},
-                {"key": self.setting_key("test_labels"), "label": "Test labels", "type": "select",
-                 "options": [
-                     {"value": "false", "label": "Off — live labels (cost money)"},
-                     {"value": "true", "label": "On — test labels, no charge (not valid for shipping)"},
-                 ],
-                 "hint": "ShipStation has no sandbox; test labels are free but cannot be shipped. Shows the SANDBOX badge."},
+                *self._label_fields(),
             ],
             "test_endpoint": f"/api/providers/{self.name}/test",
             "supports": {"service_exclusions": True},
@@ -854,3 +866,20 @@ class ShipStationProvider(ShippingProvider):
             "excluded_endpoint": f"/api/providers/{self.name}/excluded-services",
             **origin_descriptor(self.name),
         }
+
+    def _label_fields(self):
+        """Descriptor fields every ShipStation-backed instance shares."""
+        return [
+            {"key": self.setting_key("label_format"), "label": "Label format", "type": "select",
+             "options": [
+                 {"value": "pdf", "label": "PDF (4x6)"},
+                 {"value": "zpl", "label": "ZPL"},
+                 {"value": "png", "label": "PNG"},
+             ]},
+            {"key": self.setting_key("test_labels"), "label": "Test labels", "type": "select",
+             "options": [
+                 {"value": "false", "label": "Off — live labels (cost money)"},
+                 {"value": "true", "label": "On — test labels, no charge (not valid for shipping)"},
+             ],
+             "hint": "ShipStation has no sandbox; test labels are free but cannot be shipped. Shows the SANDBOX badge."},
+        ]
