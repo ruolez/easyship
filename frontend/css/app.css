@@ -1241,7 +1241,7 @@ table.compact th, table.compact td { padding: 9px 8px; }
    against a bounded scroll container, and the horizontal scrollbar stays at
    the bottom of the viewport instead of below a page-tall table. */
 .parcels-wrap {
-  --pin-num-w: 64px;
+  --pin-num-w: 48px;
   max-height: calc(100vh - 230px);
   overflow: auto;
   scrollbar-width: thin;
@@ -1251,10 +1251,13 @@ table.compact th, table.compact td { padding: 9px 8px; }
 /* The compact header row is ~34px tall; 1px overlap so rows can't peek through. */
 .parcels-table .filter-row th { top: 33px; }
 .parcels-table th.col-narrow, .parcels-table td.col-narrow { width: 1%; }
-.parcels-table .col-size { display: none; white-space: nowrap; }
+/* Compact columns: everything shrinks to its content and the table's spare
+   width all goes to the address column, which is the one being truncated. */
+.parcels-table th, .parcels-table td { white-space: nowrap; }
+.parcels-table .col-size { display: none; }
 .parcels-table.show-size .col-size { display: table-cell; }
 .parcels-table td.ellip.store { max-width: 130px; }
-.parcels-table td.ellip.address { max-width: 150px; }
+.parcels-table td.ellip.address { width: 99%; max-width: 0; min-width: 140px; }
 .parcels-table td.ellip.service { max-width: 160px; }
 .parcels-table td.created { padding-right: 16px; }
 /* Pinned columns. The # column gets a fixed width so Order #'s left offset
@@ -1272,8 +1275,9 @@ table.compact th, table.compact td { padding: 9px 8px; }
 }
 .parcels-table .pin-ref { left: var(--pin-num-w); box-shadow: inset -1px 0 0 var(--outline); }
 /* The search box's intrinsic width would otherwise force the pinned
-   Order # column far wider than the order numbers need. */
-.parcels-table th.pin-ref input { width: 110px; min-width: 0; }
+   Order # column far wider than the order numbers need; span whatever
+   width the order numbers give the column instead. */
+.parcels-table th.pin-ref input { width: 100%; min-width: 0; }
 .parcels-table .actions {
   position: sticky;
   right: 0;
@@ -1406,7 +1410,7 @@ table.striped.parcels-table tbody tr:hover td.actions { background: var(--surfac
 /* Must come after the base .parcels-wrap/.flush rules — same specificity,
    source order decides. Card padding shrinks to 16px on mobile. */
 @media (max-width: 768px) {
-  .parcels-wrap { --pin-num-w: 56px; }
+  .parcels-wrap { --pin-num-w: 44px; }
   .table-wrap.flush.parcels-wrap th:first-child,
   .table-wrap.flush.parcels-wrap td:first-child { padding-left: 16px; }
   .table-wrap.flush.parcels-wrap th:last-child,
