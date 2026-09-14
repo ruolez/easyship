@@ -686,6 +686,32 @@ def group_print(group_id):
 
 # ============================================================ writebacks
 
+def _ensure_shopify_order(rows):
+    """The order gid for the group. When the ship page never got it (Shopify
+    was unreachable at scan time) it is looked up from the scanned order
+    number and saved, so the real order name shows everywhere afterwards."""
+    import shopify_client
+    primary = rows[0]
+    if primary["shopify_order_id"]:
+        return primary["shopify_order_id"]
+    if not primary["shopify_store_id"]:
+        raise shopify_client.ShopifyError(
+            "No Shopify store linked to this shipment — use Send to Shopify in Parcels to pick the store and order")
+    number = (primary["shopify_order_name"] or "").strip()
+    if not number:
+        raise shopify_client.ShopifyError(
+            "No Shopify order number recorded — use Send to Shopify in Parcels to enter it")
+    order = shopify_client.resolve_order(primary["shopify_store_id"], number)
+    if not order:
+        raise shopify_client.ShopifyError(f"Order {number} not found in the Shopify store")
+    for r in rows:
+        db.execute(
+            "UPDATE shipments SET shopify_order_id=%s, shopify_order_name=%s, updated_at=now() WHERE id=%s",
+            (order["id"], order["name"], r["id"]),
+        )
+    return order["id"]
+
+
 def run_group_writebacks(group_id):
     """Write tracking for the WHOLE group once: box 1's number to the order's
     tracking field, the rest appended (BackOffice Notes / Shopify numbers)."""
@@ -707,8 +733,9 @@ def run_group_writebacks(group_id):
     if primary["source"] == "shopify" and not primary["writeback_shopify_at"]:
         try:
             import shopify_client
+            order_gid = _ensure_shopify_order(rows)
             fulfillment = shopify_client.fulfill_order(
-                primary["shopify_store_id"], primary["shopify_order_id"],
+                primary["shopify_store_id"], order_gid,
                 numbers[0], primary["courier_name"],
                 all_numbers=numbers,
             )
@@ -721,7 +748,9 @@ def run_group_writebacks(group_id):
             results["shopify"] = "ok"
         except Exception as e:
             results["shopify"] = f"error: {e}"
-            errors.append(f"Shopify: {e}")
+            # An unavailable Shopify already names itself; keep that message
+            # verbatim so the packer sees it is a retry-later situation.
+            errors.append(str(e) if isinstance(e, shopify_client.ShopifyUnavailable) else f"Shopify: {e}")
 
     if primary["source"] == "backoffice" and not primary["writeback_backoffice_at"]:
         try:
@@ -774,6 +803,51 @@ def retry_writeback(shipment_id):
         results = run_group_writebacks(row["group_id"])
     else:
         results = _run_legacy_writebacks(shipment_id)
+    updated = _get_with_username(shipment_id)
+    return jsonify({**_row_to_json(updated), "writebacks": results})
+
+
+@bp.post("/<int:shipment_id>/shopify-link")
+@login_required
+def link_shopify_order(shipment_id):
+    """Attach a store + order number to a Shopify shipment that was bought
+    without them, then push its tracking. Covers labels bought while Shopify
+    was unreachable and rows that lost their order on the way."""
+    import shopify_client
+    data = request.get_json(silent=True) or {}
+    store_id = data.get("store_id")
+    number = (data.get("order_number") or "").strip()
+    if not store_id or not number:
+        return api_error("store_id and order_number are required")
+    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
+    if not row:
+        return api_error("Shipment not found", 404)
+    if row["source"] != "shopify":
+        return api_error("Only Shopify shipments can be linked to a Shopify order")
+    if row["status"] not in ("label_created", "fulfilled"):
+        return api_error("No label yet — nothing to send")
+    if row["writeback_shopify_at"]:
+        return api_error("This shipment's tracking is already on a Shopify order")
+    if not db.query("SELECT 1 FROM shopify_stores WHERE id = %s", (store_id,), one=True):
+        return api_error("Shopify store not found", 404)
+    try:
+        order = shopify_client.resolve_order(store_id, number)
+    except shopify_client.ShopifyError as e:
+        return api_error(str(e), 502)
+    if not order:
+        return api_error(f"Order {number} not found in that store", 404)
+    rows = _group_rows(row["group_id"]) if row["group_id"] else [row]
+    for r in rows:
+        db.execute(
+            """UPDATE shipments SET shopify_store_id=%s, shopify_order_id=%s, shopify_order_name=%s,
+               updated_at=now() WHERE id=%s""",
+            (store_id, order["id"], order["name"], r["id"]),
+        )
+    audit("shipment.link_shopify", {
+        "shipment_ids": [r["id"] for r in rows],
+        "store_id": store_id, "order_name": order["name"],
+    })
+    results = run_group_writebacks(row["group_id"]) if row["group_id"] else _run_legacy_writebacks(shipment_id)
     updated = _get_with_username(shipment_id)
     return jsonify({**_row_to_json(updated), "writebacks": results})
 

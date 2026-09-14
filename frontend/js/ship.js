@@ -78,7 +78,22 @@ async function prefill() {
     if (source === 'shopify') {
       const storeId = params.get('store_id');
       const orderId = params.get('order_id');
-      const o = await api(`/api/shopify/orders/${encodeURIComponent(orderId)}?store_id=${storeId}`);
+      const orderName = (params.get('order_name') || '').trim();
+      // The scanned number is known before Shopify answers — keep it on the
+      // shipment no matter what happens next, so the tracking can be pushed
+      // to the right order later.
+      orderContext = { source, store_id: Number(storeId), order_id: orderId || null, order_name: orderName || null };
+      let o;
+      try {
+        o = orderId
+          ? await api(`/api/shopify/orders/${encodeURIComponent(orderId)}?store_id=${storeId}`)
+          : await api(`/api/shopify/lookup?store_id=${storeId}&number=${encodeURIComponent(orderName)}`);
+      } catch (err) {
+        if (!orderName) throw err;
+        showOrderSummary(`Shopify order <strong>${esc(orderName)}</strong>`,
+          `<div class="rule-banner warn"><span>Shopify did not answer (${esc(err.message)}). Enter the address by hand — the tracking is sent to Shopify after the label, or later from Parcels › Send to Shopify.</span></div>`);
+        return false;
+      }
       orderContext = {
         source, store_id: Number(storeId), order_id: o.id, order_name: o.name,
       };
@@ -522,7 +537,7 @@ function showResult(s) {
   if (s.source === 'shopify') {
     chips.push(s.writeback_shopify_at
       ? '<span class="chip static ok">✓ Shopify fulfilled</span>'
-      : `<span class="chip static err">✕ Shopify update failed</span> <button class="btn btn-text btn-small" onclick="retryWriteback()">Retry</button>`);
+      : `<span class="chip static err">✕ Shopify NOT updated — tracking was not sent</span> <button class="btn btn-text btn-small" onclick="retryWriteback()">Send to Shopify</button> <span class="text-secondary">or later from Parcels › Send to Shopify</span>`);
   }
   if (s.source === 'backoffice') {
     chips.push(s.writeback_backoffice_at

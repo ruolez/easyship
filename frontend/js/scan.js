@@ -326,7 +326,24 @@ async function lookup() {
       }
       location.href = `/ship.html?source=backoffice&db_id=${id}&invoice_id=${inv.invoice_id}&reship_ack=1${autoReady() ? '&auto=1' : ''}`;
     } else {
-      const order = await api(`/api/shopify/lookup?store_id=${id}&number=${encodeURIComponent(number)}`);
+      let order;
+      try {
+        order = await api(`/api/shopify/lookup?store_id=${id}&number=${encodeURIComponent(number)}`);
+      } catch (err) {
+        // 502 = the store could not be reached (not a typo). The scanned
+        // number is still recorded on the shipment and the tracking is pushed
+        // to Shopify once it is back, so the box does not have to wait.
+        if (err.status !== 502) throw err;
+        statusEl.innerHTML = '';
+        if (!(await confirmProceed('Shopify is not responding',
+          `Order ${number} could not be loaded: ${err.message}`,
+          '<p class="text-secondary" style="margin-top:8px">Continue to enter the address by hand. The order number is kept on the label, and the tracking is sent to Shopify when it is reachable again — from the ship page or later from Parcels.</p>'))) {
+          stayOnScan();
+          return;
+        }
+        location.href = `/ship.html?source=shopify&store_id=${id}&order_name=${encodeURIComponent(number)}&reship_ack=1`;
+        return;
+      }
       if (!(await reshipGate(`Shopify order ${order.name}`, order.existing_tracking || [],
         "New tracking numbers are added to the order's existing fulfillment — it stays fulfilled."))) {
         stayOnScan();
@@ -336,7 +353,7 @@ async function lookup() {
         stayOnScan();
         return;
       }
-      location.href = `/ship.html?source=shopify&store_id=${id}&order_id=${encodeURIComponent(order.id)}&reship_ack=1${autoReady() ? '&auto=1' : ''}`;
+      location.href = `/ship.html?source=shopify&store_id=${id}&order_id=${encodeURIComponent(order.id)}&order_name=${encodeURIComponent(order.name)}&reship_ack=1${autoReady() ? '&auto=1' : ''}`;
     }
   } catch (err) {
     statusEl.innerHTML = `<span class="chip static err">✕ ${esc(err.message)}</span>`;

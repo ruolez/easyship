@@ -308,15 +308,16 @@ const ICON_KEBAB = '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.7"/><ci
 
 function rowActions(s) {
   const ref = s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
-  const needsRetry = s.status === 'label_created' && s.box_number === 1 &&
-    ((s.source === 'shopify' && !s.writeback_shopify_at) ||
-     (s.source === 'backoffice' && !s.writeback_backoffice_at));
+  const hasLabel = s.status === 'label_created' && s.box_number === 1;
+  const needsShopifyPush = hasLabel && s.source === 'shopify' && !s.writeback_shopify_at;
+  const needsRetry = hasLabel && s.source === 'backoffice' && !s.writeback_backoffice_at;
   const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id
     && s.provider_shipment_id && s.group_id;
   const items = [];
   if (canResume) items.push({ label: 'Resume labels', icon: MENU_ICONS.resume, run: () => resumeBuy(s.group_id) });
   if (s.has_label) items.push({ label: 'View label', icon: MENU_ICONS.label, href: `/api/shipments/${s.id}/label` });
   if (s.has_label) items.push({ label: 'Print label', icon: MENU_ICONS.print, run: () => reprint(s.id) });
+  if (needsShopifyPush) items.push({ label: 'Send to Shopify', icon: MENU_ICONS.retry, run: () => sendToShopify(s) });
   if (needsRetry) items.push({ label: 'Retry writeback', icon: MENU_ICONS.retry, run: () => retryWb(s.id) });
   if (['label_created', 'fulfilled'].includes(s.status)) {
     items.push({ label: 'Undo shipment', icon: MENU_ICONS.undo, danger: true, run: () => voidShipment(s.id, ref, s.source, s.box_total) });
@@ -478,12 +479,78 @@ window.reprint = async (id) => {
   }
 };
 
+/* Push the group's tracking to its Shopify order. A shipment bought while
+   Shopify was unreachable may carry only the scanned number (the backend
+   resolves it) or, for older rows, no store at all — then ask for both. */
+window.sendToShopify = (s) => {
+  if (s.shopify_store_id && (s.shopify_order_id || s.shopify_order_name)) {
+    retryWb(s.id);
+    return;
+  }
+  linkShopifyOrder(s);
+};
+
+async function linkShopifyOrder(s) {
+  let stores = [];
+  try {
+    stores = (await api('/api/shopify-stores')).filter((st) => st.is_active || st.id === s.shopify_store_id);
+  } catch (err) {
+    snackbar(err.message, 'error');
+    return;
+  }
+  if (!stores.length) { snackbar('No Shopify stores are configured', 'error'); return; }
+  const backdrop = document.getElementById('modal-backdrop');
+  const boxNote = s.box_total > 1 ? ` All ${s.box_total} boxes are linked together.` : '';
+  document.getElementById('modal').innerHTML = `
+    <h3>Send to Shopify</h3>
+    <p>This label has no Shopify order attached. Pick the store and enter the order number; the tracking is sent right away.${boxNote}</p>
+    <div class="field mb-16" style="margin-top:12px">
+      <label for="m-store">Store</label>
+      <select id="m-store">${stores.map((st) => `<option value="${st.id}"${st.id === s.shopify_store_id ? ' selected' : ''}>${esc(st.name)}</option>`).join('')}</select>
+    </div>
+    <div class="field">
+      <label for="m-number">Order number</label>
+      <input id="m-number" type="text" autocomplete="off" placeholder="#1234" value="${esc(s.shopify_order_name || '')}">
+    </div>
+    <div class="actions">
+      <button class="btn btn-text" id="m-cancel">Cancel</button>
+      <button class="btn btn-primary" id="m-send">Send to Shopify</button>
+    </div>`;
+  backdrop.classList.add('show');
+  const number = document.getElementById('m-number');
+  number.focus();
+  document.getElementById('m-cancel').addEventListener('click', () => backdrop.classList.remove('show'));
+  const submit = async () => {
+    const orderNumber = number.value.trim();
+    if (!orderNumber) { number.focus(); return; }
+    const btn = document.getElementById('m-send');
+    btn.disabled = true;
+    try {
+      const res = await api(`/api/shipments/${s.id}/shopify-link`, {
+        method: 'POST',
+        body: { store_id: Number(document.getElementById('m-store').value), order_number: orderNumber },
+      });
+      backdrop.classList.remove('show');
+      reportWriteback(res.writebacks || {});
+      load();
+    } catch (err) {
+      btn.disabled = false;
+      snackbar(err.message, 'error');
+    }
+  };
+  document.getElementById('m-send').addEventListener('click', submit);
+  number.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') submit(); });
+}
+
+function reportWriteback(wb) {
+  const failed = Object.values(wb).some((v) => String(v).startsWith('error'));
+  snackbar(failed ? Object.entries(wb).map(([k, v]) => `${k}: ${v}`).join('; ') : 'Sent to Shopify', failed ? 'error' : 'success');
+}
+
 window.retryWb = async (id) => {
   try {
     const res = await api(`/api/shipments/${id}/writeback`, { method: 'POST' });
-    const wb = res.writebacks || {};
-    const failed = Object.values(wb).some((v) => String(v).startsWith('error'));
-    snackbar(failed ? Object.entries(wb).map(([k, v]) => `${k}: ${v}`).join('; ') : 'Writeback complete', failed ? 'error' : 'success');
+    reportWriteback(res.writebacks || {});
     load();
   } catch (err) {
     snackbar(err.message, 'error');

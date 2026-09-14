@@ -1,3 +1,5 @@
+import time
+
 import requests
 
 import config
@@ -6,6 +8,15 @@ import db
 
 class ShopifyError(Exception):
     pass
+
+
+class ShopifyUnavailable(ShopifyError):
+    """Shopify could not be reached or was overloaded — a retry later can succeed."""
+
+
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = (1.0, 3.0)
+_sleep = time.sleep
 
 
 def _store(store_id):
@@ -18,21 +29,34 @@ def _store(store_id):
 def _graphql(store_id, query, variables=None):
     store = _store(store_id)
     url = f"https://{store['shop_domain']}/admin/api/{config.SHOPIFY_API_VERSION}/graphql.json"
-    try:
-        resp = requests.post(
-            url,
-            headers={"X-Shopify-Access-Token": store["access_token"]},
-            json={"query": query, "variables": variables or {}},
-            timeout=30,
-        )
-    except requests.RequestException as e:
-        raise ShopifyError(f"Shopify request failed: {e}")
-    if resp.status_code != 200:
-        raise ShopifyError(f"Shopify returned {resp.status_code}: {resp.text[:300]}")
-    data = resp.json()
-    if data.get("errors"):
-        raise ShopifyError(f"Shopify GraphQL error: {data['errors']}")
-    return data["data"]
+    last_transient = None
+    for attempt in range(RETRY_ATTEMPTS):
+        if attempt:
+            _sleep(RETRY_BACKOFF_SECONDS[min(attempt - 1, len(RETRY_BACKOFF_SECONDS) - 1)])
+        try:
+            resp = requests.post(
+                url,
+                headers={"X-Shopify-Access-Token": store["access_token"]},
+                json={"query": query, "variables": variables or {}},
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            last_transient = f"Shopify request failed: {e}"
+            continue
+        if resp.status_code == 429 or resp.status_code >= 500:
+            last_transient = f"Shopify returned {resp.status_code}: {resp.text[:300]}"
+            continue
+        if resp.status_code != 200:
+            raise ShopifyError(f"Shopify returned {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        errors = data.get("errors")
+        if errors:
+            if any((e.get("extensions") or {}).get("code") == "THROTTLED" for e in errors):
+                last_transient = f"Shopify throttled the request: {errors}"
+                continue
+            raise ShopifyError(f"Shopify GraphQL error: {errors}")
+        return data["data"]
+    raise ShopifyUnavailable(f"Shopify unavailable after {RETRY_ATTEMPTS} attempts — {last_transient}")
 
 
 ORDERS_QUERY = """
@@ -180,16 +204,21 @@ query orderByName($query: String!) {
 """
 
 
-def find_order_by_number(store_id, number):
+def resolve_order(store_id, number):
     """Look up an order by its number (with or without the # prefix).
-    Returns the order gid or None."""
+    Returns {"id": gid, "name": real order name} or None."""
     number = (number or "").strip().lstrip("#")
     data = _graphql(store_id, ORDER_ID_BY_NAME_QUERY, {"query": f"name:#{number}"})
     nodes = data["orders"]["nodes"]
     if not nodes:
         data = _graphql(store_id, ORDER_ID_BY_NAME_QUERY, {"query": f"name:{number}"})
         nodes = data["orders"]["nodes"]
-    return nodes[0]["id"] if nodes else None
+    return nodes[0] if nodes else None
+
+
+def find_order_by_number(store_id, number):
+    order = resolve_order(store_id, number)
+    return order["id"] if order else None
 
 
 def get_order(store_id, order_gid):
