@@ -308,7 +308,8 @@ const ICON_KEBAB = '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.7"/><ci
 
 function rowActions(s) {
   const ref = s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
-  const hasLabel = s.status === 'label_created' && s.box_number === 1;
+  // Sending tracking covers the whole group, so offer it on every box.
+  const hasLabel = s.status === 'label_created';
   const needsShopifyPush = hasLabel && s.source === 'shopify' && !s.writeback_shopify_at;
   const needsRetry = hasLabel && s.source === 'backoffice' && !s.writeback_backoffice_at;
   const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id
