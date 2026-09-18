@@ -19,7 +19,8 @@ def row(**overrides):
     base = {
         "id": 348, "group_id": "g1", "box_number": 1, "source": "shopify",
         "shopify_store_id": STORE, "shopify_order_id": None, "shopify_order_name": "1234",
-        "tracking_number": TRACKING, "tracking_numbers": [TRACKING], "courier_name": "UPS",
+        "tracking_number": TRACKING, "tracking_numbers": [TRACKING], "courier_name": "UPS® Ground",
+        "courier_umbrella_name": "UPS",
         "writeback_shopify_at": None, "writeback_backoffice_at": None,
         "status": "label_created", "shipping_cost": 10.0,
     }
@@ -54,7 +55,10 @@ class GroupWritebackResolutionTest(unittest.TestCase):
         results = shipments_api.run_group_writebacks("g1")
         self.assertEqual(results, {"shopify": "ok"})
         self.assertEqual(self.order_updates(), [(GID, NAME, 348)])
-        self.assertEqual(self.fulfilled[0][0], (STORE, GID, TRACKING, "UPS"))
+        self.assertEqual(self.fulfilled[0], (
+            (STORE, GID, TRACKING, "UPS® Ground"),
+            {"all_numbers": [TRACKING], "umbrella_name": "UPS"},
+        ))
 
     def test_missing_store_fails_without_calling_shopify(self):
         self.rows = [row(shopify_store_id=None)]

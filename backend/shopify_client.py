@@ -281,7 +281,35 @@ def get_order(store_id, order_gid):
     }
 
 
-def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_numbers=None):
+# Shopify builds tracking links only for carrier names spelled exactly as on
+# its supported-companies list, and other apps on the store (Tracktor) rewrite
+# the tracking info — dropping every number but one — when they see anything
+# else. Ordered: the first keyword found in the provider's name wins.
+SHOPIFY_TRACKING_COMPANIES = (
+    ("usps", "USPS"),
+    ("stamps", "USPS"),
+    ("endicia", "USPS"),
+    ("fedex", "FedEx"),
+    ("dhlecommerce", "DHL eCommerce"),
+    ("dhl", "DHL Express"),
+    ("ups", "UPS"),
+    ("canadapost", "Canada Post"),
+    ("ontrac", "OnTrac"),
+    ("lasership", "Lasership"),
+)
+
+
+def tracking_company(umbrella_name, courier_name):
+    for name in (umbrella_name, courier_name):
+        squashed = "".join(ch for ch in (name or "").lower() if ch.isalnum())
+        for keyword, company in SHOPIFY_TRACKING_COMPANIES:
+            if keyword in squashed:
+                return company
+    return courier_name or "Other"
+
+
+def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_numbers=None, umbrella_name=None):
+    company = tracking_company(umbrella_name, courier_name)
     data = _graphql(store_id, FULFILLMENT_ORDERS_QUERY, {"id": order_gid})
     order = data.get("order")
     if not order:
@@ -292,8 +320,8 @@ def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_number
     ]
     if not open_fos:
         numbers = list(all_numbers or ([tracking_number] if tracking_number else []))
-        return _append_tracking(store_id, order_gid, numbers, courier_name)
-    tracking_info = {"company": courier_name or "Other"}
+        return _append_tracking(store_id, order_gid, numbers, company)
+    tracking_info = {"company": company}
     if all_numbers and len(all_numbers) > 1:
         tracking_info["numbers"] = all_numbers
     else:
@@ -316,7 +344,7 @@ def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_number
         # lands in _append_tracking, which merges the missing numbers back in.
         _update_tracking(
             store_id, created["id"],
-            {"company": courier_name or "Other", "numbers": list(all_numbers)},
+            {"company": company, "numbers": list(all_numbers)},
             notify=False,
         )
     return created
@@ -342,7 +370,7 @@ def _update_tracking(store_id, fulfillment_gid, tracking_info, notify):
     return result["fulfillment"]
 
 
-def _append_tracking(store_id, order_gid, numbers, courier_name):
+def _append_tracking(store_id, order_gid, numbers, new_company):
     """Re-ship of an already-fulfilled order: add the new numbers to the latest
     existing fulfillment's tracking info — the order stays fulfilled."""
     fulfillments = _active_fulfillments(store_id, order_gid)
@@ -357,7 +385,7 @@ def _append_tracking(store_id, order_gid, numbers, courier_name):
         (t.get("company") for t in target.get("trackingInfo") or [] if t.get("company")),
         None,
     )
-    tracking_info = {"company": company or courier_name or "Other", "numbers": merged}
+    tracking_info = {"company": tracking_company(None, company) if company else new_company, "numbers": merged}
     return _update_tracking(store_id, target["id"], tracking_info, notify=True)
 
 

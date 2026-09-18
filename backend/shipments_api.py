@@ -738,6 +738,7 @@ def run_group_writebacks(group_id):
                 primary["shopify_store_id"], order_gid,
                 numbers[0], primary["courier_name"],
                 all_numbers=numbers,
+                umbrella_name=primary["courier_umbrella_name"],
             )
             for r in rows:
                 db.execute(
@@ -865,6 +866,7 @@ def _run_legacy_writebacks(shipment_id):
                 row["shopify_store_id"], row["shopify_order_id"],
                 row["tracking_number"], row["courier_name"],
                 all_numbers=row["tracking_numbers"] or None,
+                umbrella_name=row["courier_umbrella_name"],
             )
             db.execute(
                 """UPDATE shipments SET writeback_shopify_at=now(), status='fulfilled',
