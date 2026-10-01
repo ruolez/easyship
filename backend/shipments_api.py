@@ -902,6 +902,7 @@ def list_shipments():
     q = (request.args.get("q") or "").strip()
     status = (request.args.get("status") or "").strip()
     user = (request.args.get("user") or "").strip()
+    provider = (request.args.get("provider") or "").strip()
     date_from = (request.args.get("from") or "").strip()
     date_to = (request.args.get("to") or "").strip()
     limit = min(int(request.args.get("limit") or 200), 1000)
@@ -919,6 +920,9 @@ def list_shipments():
     if user:
         sql += " AND u.username = ANY(%s)"
         params.append(user.split(","))
+    if provider:
+        sql += " AND s.provider = ANY(%s)"
+        params.append(provider.split(","))
     if date_from:
         sql += " AND (s.created_at AT TIME ZONE 'America/Chicago')::date >= %s"
         params.append(date_from)
@@ -939,6 +943,23 @@ def creators():
            JOIN users u ON u.id = s.created_by ORDER BY u.username"""
     )
     return jsonify([r["username"] for r in rows])
+
+
+@bp.get("/providers")
+@login_required
+def shipped_providers():
+    """Every shipping account that ever bought a label, as filter options —
+    including accounts since disabled or deleted, which /api/providers/enabled
+    would hide. Live alias first, then the snapshot kept on the parcel."""
+    rows = db.query(
+        """SELECT DISTINCT s.provider AS value,
+                  COALESCE(pi.label, s.provider_label, s.provider) AS label
+           FROM shipments s
+           LEFT JOIN provider_instances pi ON pi.key = s.provider
+           WHERE s.provider IS NOT NULL
+           ORDER BY label"""
+    )
+    return jsonify([{"value": r["value"], "label": r["label"]} for r in rows])
 
 
 @bp.get("/<int:shipment_id>")

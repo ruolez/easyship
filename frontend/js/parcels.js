@@ -81,6 +81,13 @@ async function loadUsers() {
   } catch { /* filter stays open */ }
 }
 
+async function loadAccounts() {
+  try {
+    const accounts = await api('/api/shipments/providers');
+    accountFilter.setOptions(accounts);
+  } catch { /* filter stays open */ }
+}
+
 /* ---------- Multi-select column filters: a compact button in the filter row
    recalls a checkbox popover; empty selection means "All". ---------- */
 const FM_CARET = '<svg class="fm-caret" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>';
@@ -171,6 +178,7 @@ const statusFilter = multiFilter('status-filter', {
   onChange: () => load(),
 });
 const userFilter = multiFilter('user-filter', { onChange: () => load() });
+const accountFilter = multiFilter('account-filter', { onChange: () => load() });
 const storeFilter = multiFilter('store-filter', { onChange: () => render() });
 const serviceFilter = multiFilter('service-filter', { onChange: () => render() });
 const carrierFilter = multiFilter('carrier-filter', { onChange: () => render() });
@@ -189,6 +197,7 @@ const SORT_VALUE = {
   boxes: (s) => s.box_total || 1,
   size: (s) => boxVolume(s) || -1,
   weight: (s) => s.total_weight_lb ?? -1,
+  account: (s) => (s.provider_label || '').toLowerCase(),
   courier: (s) => (s.courier_name || '').toLowerCase(),
   carrier: (s) => (s.courier_umbrella_name || '').toLowerCase(),
   cost: (s) => s.shipping_cost ?? -1,
@@ -241,13 +250,14 @@ async function load() {
     q: document.getElementById('search').value.trim(),
     status: [...statusFilter.values].join(','),
     user: [...userFilter.values].join(','),
+    provider: [...accountFilter.values].join(','),
     from: document.getElementById('date-from').value,
     to: document.getElementById('date-to').value,
   });
   const tbody = document.getElementById('parcels-body');
   const empty = document.getElementById('empty');
   empty.style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="15"><span class="spinner"></span> Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="16"><span class="spinner"></span> Loading…</td></tr>';
   try {
     allRows = await api(`/api/shipments?${params}`);
     const uniq = (vals) => [...new Set(vals.filter(Boolean))].sort();
@@ -289,7 +299,7 @@ function renderTotals(rows) {
     <td class="pin-ref">Total</td>
     <td colspan="4">${shipments} shipment${shipments === 1 ? '' : 's'}, ${rows.length} parcel${rows.length === 1 ? '' : 's'}</td>
     <td class="col-size"></td>
-    <td colspan="3"></td>
+    <td colspan="4"></td>
     <td class="num">${money(cost)}</td>
     <td colspan="3"></td>
     <td class="actions"></td></tr>`;
@@ -420,6 +430,7 @@ function render() {
         <td class="num col-narrow">${boxesCell}</td>
         <td class="col-narrow col-size">${esc(boxSize(s))}</td>
         <td class="num col-narrow">${s.total_weight_lb ?? ''}</td>
+        <td class="ellip account" title="${esc(s.provider_label || '')}">${esc(s.provider_label || '')}</td>
         <td class="ellip service" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}${signatureChip(s.options)}</td>
         <td>${esc(s.courier_umbrella_name || '')}</td>
         <td class="num">${money(s.shipping_cost)}</td>
@@ -653,4 +664,5 @@ new ResizeObserver(updateScrollShadows).observe(parcelsWrap.querySelector('table
 updateScrollShadows();
 
 loadUsers();
+loadAccounts();
 load();

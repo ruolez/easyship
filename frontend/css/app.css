@@ -1257,6 +1257,7 @@ table.compact th, table.compact td { padding: 9px 8px; }
 .parcels-table .col-size { display: none; }
 .parcels-table.show-size .col-size { display: table-cell; }
 .parcels-table td.ellip.store { max-width: 130px; }
+.parcels-table td.ellip.account { max-width: 120px; }
 .parcels-table td.ellip.address { width: 99%; max-width: 0; min-width: 140px; }
 .parcels-table td.ellip.service { max-width: 160px; }
 .parcels-table td.created { padding-right: 16px; }
