@@ -5,9 +5,11 @@ import time
 import uuid
 
 from flask import Blueprint, current_app, jsonify, request, send_file, session
+from werkzeug.security import check_password_hash
 
 import config
 import db
+import profit
 import providers
 import tag_rules
 from auth import admin_required, login_required
@@ -295,6 +297,19 @@ def get_rates():
             warnings.append(f"Preferred service \"{preferred_service}\" was not offered for this shipment.")
         else:
             warnings.append("The Auto Mode preset service was not offered for this shipment.")
+
+    # Profit check: the order's economics are fetched here, by the server, and
+    # snapshotted with the offered rates so the buy gate judges the real price.
+    thresholds = profit.load_thresholds()
+    economics = None
+    if thresholds["enabled"] and source in profit.GATED_SOURCES:
+        economics = profit.fetch_economics(source, data)
+        for ui in all_rates:
+            ui["profit"] = profit.evaluate(economics, ui["total_charge"], ui.get("currency"), thresholds)
+        db.execute(
+            "UPDATE shipments SET profit_check=%s, updated_at=now() WHERE id=%s",
+            (json.dumps(profit.snapshot(economics, all_rates)), row_ids[0]),
+        )
     return jsonify({
         "group_id": group_id,
         "shipment_id": row_ids[0],
@@ -303,6 +318,7 @@ def get_rates():
         "rates": all_rates,
         "options": options,
         "warnings": warnings,
+        "economics": economics,
     })
 
 
@@ -384,6 +400,38 @@ def group_buy(group_id):
     targets = [r for r in rows if r["status"] in ("rated", "error") and _draft_id(r)]
     if not targets:
         return api_error("Nothing to purchase — all boxes already have labels or were voided")
+
+    # Profit gate: a rate below the thresholds needs the bypass password. Once
+    # cleared (either way) a Resume of the same rate is never asked again.
+    thresholds = profit.load_thresholds()
+    gate = profit.gate_for_buy(primary, provider_name, courier_service_id, thresholds)
+    if gate and not profit.already_cleared(primary, provider_name, courier_service_id):
+        if gate["below_threshold"]:
+            supplied = data.get("bypass_password") or ""
+            if not supplied:
+                return jsonify({
+                    "error": "This order is below the profit threshold — the bypass password is required",
+                    "code": "profit_gate", "bypass": "required", "profit": gate,
+                }), 403
+            stored = db.get_setting(profit.SETTING_PASSWORD) or ""
+            if not stored or not check_password_hash(stored, supplied):
+                audit("profit.bypass_denied", {
+                    "group_id": group_id, "provider": provider_name,
+                    "courier_service_id": courier_service_id,
+                })
+                return jsonify({
+                    "error": "Bypass password is incorrect",
+                    "code": "profit_gate", "bypass": "wrong_password", "profit": gate,
+                }), 403
+            audit("profit.bypass", {
+                "group_id": group_id, "source": primary["source"],
+                "order": primary["shopify_order_name"] or primary["backoffice_invoice_number"],
+                "provider": provider_name, "courier_service_id": courier_service_id,
+                **{k: gate[k] for k in ("revenue", "items_cost", "label_cost", "profit",
+                                        "margin_pct", "reasons", "thresholds")},
+            })
+        profit.mark_cleared(primary["id"], provider_name, courier_service_id,
+                            bypassed=gate["below_threshold"])
 
     for r in rows:
         # Never rewrite a finalized box — its easyship_shipment_id already holds

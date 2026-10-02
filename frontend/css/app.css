@@ -892,6 +892,20 @@ td { font-variant-numeric: tabular-nums; }
 .rate-price small { font-size: 10.5px; font-weight: 500; color: var(--text-secondary); }
 .rate-best { font-size: 10.5px; padding: 1px 6px; }
 .rate-provider { font-size: 10.5px; padding: 1px 6px; background: var(--primary-light, rgba(59,130,246,0.15)); color: var(--primary, #60a5fa); }
+.rate-profit { font-size: 12px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--success); }
+.rate-profit.bad { color: var(--error); }
+
+/* Profit check: order figures under the heading, and the bypass prompt. */
+.order-economics { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 13px; color: var(--text-secondary); }
+.order-economics strong { color: var(--on-surface); font-variant-numeric: tabular-nums; }
+.profit-table { display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+.profit-row { display: flex; justify-content: space-between; gap: 24px; }
+.profit-row .num { font-variant-numeric: tabular-nums; }
+.profit-row.total { border-top: 1px solid var(--outline-strong); padding-top: 6px; margin-top: 2px; font-weight: 650; }
+.profit-row.total.bad .num { color: var(--error); }
+.profit-reasons { margin: 12px 0 0 18px; font-size: 13px; color: var(--error); }
+.profit-reasons li + li { margin-top: 4px; }
+.profit-error { color: var(--error); font-size: 12.5px; margin-top: 6px; min-height: 16px; }
 
 /* ============================================================
    Scan screen

@@ -4,6 +4,7 @@ import requests
 
 import config
 import db
+import profit
 
 
 class ShopifyError(Exception):
@@ -87,6 +88,10 @@ query orderDetail($id: ID!) {
     displayFulfillmentStatus
     tags
     note
+    currencyCode
+    currentSubtotalPriceSet { shopMoney { amount } }
+    currentShippingPriceSet { shopMoney { amount } }
+    totalShippingPriceSet { shopMoney { amount } }
     fulfillments(first: 25) {
       status
       trackingInfo { number }
@@ -104,14 +109,18 @@ query orderDetail($id: ID!) {
       phone
     }
     lineItems(first: 100) {
+      pageInfo { hasNextPage }
       nodes {
         title
         sku
         quantity
+        currentQuantity
         unfulfilledQuantity
         originalUnitPriceSet { shopMoney { amount } }
+        discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
         variant {
           inventoryItem {
+            unitCost { amount }
             measurement { weight { unit value } }
           }
         }
@@ -221,6 +230,37 @@ def find_order_by_number(store_id, number):
     return order["id"] if order else None
 
 
+def _amount(money_set):
+    return ((money_set or {}).get("shopMoney") or {}).get("amount")
+
+
+def economics_from_order(order):
+    """Whole-order economics from the order's current (post-edit) totals:
+    revenue is the discounted subtotal plus the shipping the customer paid,
+    cost is each line's current quantity at its variant's inventory unit cost."""
+    currency = order.get("currencyCode")
+    line_items = order.get("lineItems") or {}
+    if (line_items.get("pageInfo") or {}).get("hasNextPage"):
+        return profit.unavailable("lines_truncated", currency)
+    lines = []
+    for li in line_items.get("nodes") or []:
+        qty = li.get("currentQuantity")
+        inventory_item = (li.get("variant") or {}).get("inventoryItem") or {}
+        lines.append({
+            "description": li.get("title"),
+            "sku": li.get("sku"),
+            "quantity": li.get("quantity") if qty is None else qty,
+            "unit_price": (_amount(li.get("discountedUnitPriceAfterAllDiscountsSet"))
+                           or _amount(li.get("originalUnitPriceSet"))),
+            "unit_cost": (inventory_item.get("unitCost") or {}).get("amount"),
+        })
+    shipping = _amount(order.get("currentShippingPriceSet"))
+    if shipping is None:
+        shipping = _amount(order.get("totalShippingPriceSet"))
+    return profit.compute_economics(
+        lines, _amount(order.get("currentSubtotalPriceSet")), shipping, currency)
+
+
 def get_order(store_id, order_gid):
     data = _graphql(store_id, ORDER_DETAIL_QUERY, {"id": order_gid})
     order = data.get("order")
@@ -278,6 +318,7 @@ def get_order(store_id, order_gid):
         "total_weight_lb": round(total_weight_lb, 1) if total_weight_lb else None,
         "fulfillment_status": order.get("displayFulfillmentStatus"),
         "existing_tracking": existing_tracking,
+        "economics": economics_from_order(order),
     }
 
 

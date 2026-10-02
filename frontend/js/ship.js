@@ -91,7 +91,7 @@ async function prefill() {
       } catch (err) {
         if (!orderName) throw err;
         showOrderSummary(`Shopify order <strong>${esc(orderName)}</strong>`,
-          `<div class="rule-banner warn"><span>Shopify did not answer (${esc(err.message)}). Enter the address by hand — the tracking is sent to Shopify after the label, or later from Parcels › Send to Shopify.</span></div>`);
+          `<div class="rule-banner warn"><span>Shopify did not answer (${esc(err.message)}). Enter the address by hand — the tracking is sent to Shopify after the label, or later from Parcels › Send to Shopify.</span></div>${economicsHtml(null)}`);
         return false;
       }
       orderContext = {
@@ -118,8 +118,10 @@ async function prefill() {
       };
       fillDestination(inv.destination);
       orderItems = inv.items || [];
+      const economics = economicsHtml(inv.economics);
       showOrderSummary(
-        `BackOffice invoice <strong>${esc(inv.invoice_number)}</strong> — ${esc(inv.business_name || '')}`
+        `BackOffice invoice <strong>${esc(inv.invoice_number)}</strong> — ${esc(inv.business_name || '')}`,
+        economics ? `<div class="order-extras">${economics}</div>` : ''
       );
       seedParcels(inv.no_boxes, inv.total_weight);
       if ((inv.tracking_no || '').trim() && !params.get('reship_ack')) {
@@ -155,6 +157,59 @@ function confirmReship(what, numbers, note) {
       resolve();
     });
     document.getElementById('m-continue').focus();
+  });
+}
+
+/* The profit gate's prompt: the breakdown behind the block and the bypass
+   password. Resolves the password, or null when the packer backs out. */
+function confirmProfitBypass(p, rate, errorMessage = '') {
+  return new Promise((resolve) => {
+    const backdrop = document.getElementById('modal-backdrop');
+    const row = (label, value, cls = '') =>
+      `<div class="profit-row${cls ? ' ' + cls : ''}"><span>${label}</span><span class="num">${value}</span></div>`;
+    const t = p.thresholds || {};
+    const limits = [
+      t.min_amount != null ? `profit ≥ ${money(t.min_amount)}` : '',
+      t.min_margin_pct != null ? `margin ≥ ${pct(t.min_margin_pct)}` : '',
+    ].filter(Boolean).join(' and ');
+    const missing = (p.missing_cost || []).map((m) => esc(m.sku || m.description)).join(', ');
+    const profitText = p.profit == null ? 'unknown'
+      : signedMoney(p.profit) + (p.margin_pct != null ? ` (${pct(p.margin_pct)})` : '');
+    document.getElementById('modal').innerHTML = `
+      <h3>Below profit threshold</h3>
+      <div class="profit-table">
+        ${row('Revenue', p.revenue != null ? money(p.revenue) : '—')}
+        ${row('Items cost', p.items_cost != null ? '− ' + money(p.items_cost) : '—')}
+        ${row(`Label · ${esc(rate.courier_name)}`, '− ' + money(p.label_cost != null ? p.label_cost : rate.total_charge))}
+        ${row('Profit', profitText, 'total bad')}
+      </div>
+      ${limits ? `<p class="text-secondary" style="margin-top:8px">Required: ${esc(limits)}</p>` : ''}
+      ${missing ? `<p class="text-secondary" style="margin-top:4px">No cost on file (counted at selling price): ${missing}</p>` : ''}
+      <ul class="profit-reasons">${(p.reasons || []).map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
+      <div class="field" style="margin-top:16px">
+        <label for="m-bypass">Bypass password</label>
+        <input type="password" id="m-bypass" autocomplete="off">
+      </div>
+      <div class="profit-error">${esc(errorMessage)}</div>
+      <div class="actions">
+        <button class="btn btn-text" id="m-cancel">Cancel</button>
+        <button class="btn btn-primary" id="m-override">Override and buy</button>
+      </div>`;
+    backdrop.classList.add('show');
+    const input = document.getElementById('m-bypass');
+    const close = (value) => {
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.classList.remove('show');
+      resolve(value);
+    };
+    // Captured so Escape closes the prompt without reaching Auto Mode's handler.
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(null); } };
+    const submit = () => { if (input.value) close(input.value); else input.focus(); };
+    document.addEventListener('keydown', onKey, true);
+    document.getElementById('m-cancel').addEventListener('click', () => close(null));
+    document.getElementById('m-override').addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    input.focus();
   });
 }
 
@@ -195,7 +250,25 @@ function orderExtras(o) {
     const tags = rules.matched.map((r) => `<span class="tag-chip">${esc(r.tag)}</span>`).join('');
     parts.push(`<div class="rule-banner">${tags} <span>${what.join(' · ') || 'Tag rule matched'}</span></div>`);
   }
+  const economics = economicsHtml(o.economics);
+  if (economics) parts.push(economics);
   return parts.length ? `<div class="order-extras">${parts.join('')}</div>` : '';
+}
+
+/* Revenue and cost under the order heading while the profit check is on; the
+   profit itself appears on each rate once a label cost is known. */
+function economicsHtml(econ) {
+  if (!clientSettings.profit_gate_enabled) return '';
+  let body;
+  if (!econ || !econ.available) {
+    const why = (econ && econ.reason_text) || 'the order could not be loaded';
+    body = `<span class="chip static err">Profit unknown</span><span>${esc(why)} — the bypass password is needed to buy a label</span>`;
+  } else {
+    const missing = (econ.missing_cost || []).map((m) =>
+      `<span class="chip static warn" title="No cost on file — counted at its selling price">${esc(m.sku || m.description)}: no cost</span>`).join('');
+    body = `<span>Revenue <strong>${money(econ.revenue)}</strong></span><span>Items cost <strong>${money(econ.items_cost)}</strong></span>${missing}`;
+  }
+  return `<div class="order-economics" id="order-economics">${body}</div>`;
 }
 
 function applyTagRules(rules) {
@@ -349,6 +422,9 @@ async function getRates() {
     rates = res.rates;
     renderRates();
     renderRateWarnings(res.warnings || []);
+    // Rating re-reads the order, so the summary's figures follow the rates.
+    const economics = document.getElementById('order-economics');
+    if (economics && res.economics) economics.outerHTML = economicsHtml(res.economics);
     document.getElementById('panel-rates').style.display = '';
     document.getElementById('panel-rates').scrollIntoView({ behavior: 'smooth' });
     return true;
@@ -380,6 +456,7 @@ function renderRates() {
         <span class="rate-courier">${esc(r.courier_name)}${r.preferred ? (r.preferred_by === 'preset' ? ' <span class="chip static warn rate-best" title="Your Auto Mode preset service">Auto preset</span>' : ' <span class="chip static warn rate-best" title="Chosen by an order tag rule">Tag rule</span>') : ''}${r.value_for_money_rank === 1 ? ' <span class="chip static ok rate-best">Best value</span>' : ''}${multiProvider && r.provider ? ` <span class="chip static rate-provider">${esc(providerLabel(r.provider))}</span>` : ''}</span>
         <span class="rate-days">${r.min_delivery_time ?? '?'}–${r.max_delivery_time ?? '?'} business days</span>
       </span>
+      ${rateProfitHtml(r.profit)}
       <span class="rate-price">${money(r.total_charge)} <small>${esc(r.currency || 'USD')}</small></span>
     </div>`).join('');
   const select = (row) => {
@@ -408,6 +485,15 @@ function renderRates() {
     const first = list.querySelector('.rate-row');
     if (first) first.focus();
   }
+}
+
+/* Per-rate profit: revenue − items cost − this label. */
+function rateProfitHtml(p) {
+  if (!p) return '';
+  const why = (p.reasons || []).join(' ');
+  if (p.profit == null) return `<span class="rate-profit bad" title="${esc(why)}">Profit unknown</span>`;
+  const margin = p.margin_pct != null ? ` · ${pct(p.margin_pct)}` : '';
+  return `<span class="rate-profit ${p.below_threshold ? 'bad' : 'ok'}" title="${esc(why || 'Revenue − items cost − this label')}">${signedMoney(p.profit)}${margin}</span>`;
 }
 
 function renderRateWarnings(warnings) {
@@ -460,21 +546,43 @@ async function buyLabel() {
   const btn = document.getElementById('buy-label');
   const spinner = document.getElementById('buy-spinner');
   btn.disabled = true;
-  spinner.style.display = '';
-  try {
-    await api(`/api/shipments/group/${groupId}/buy`, {
-      method: 'POST',
-      body: {
-        provider: selectedRate.provider,
-        courier_service_id: selectedRate.courier_service_id,
-        rate: selectedRate,
-      },
-    });
-  } catch (err) {
-    snackbar(err.message, 'error');
+  const giveUp = (state, message) => {
     btn.disabled = false;
     spinner.style.display = 'none';
-    return { state: 'failed', message: err.message };
+    return { state, message };
+  };
+  // Profit gate: a rate below the threshold needs the bypass password, and
+  // the server has the final say — its 403 re-opens the prompt.
+  let gate = selectedRate.profit && selectedRate.profit.below_threshold ? selectedRate.profit : null;
+  let gateError = '';
+  let bypassPassword = null;
+  for (;;) {
+    if (gate) {
+      spinner.style.display = 'none';
+      bypassPassword = await confirmProfitBypass(gate, selectedRate, gateError);
+      if (bypassPassword == null) return giveUp('cancelled', 'Not bought — below the profit threshold');
+    }
+    spinner.style.display = '';
+    try {
+      await api(`/api/shipments/group/${groupId}/buy`, {
+        method: 'POST',
+        body: {
+          provider: selectedRate.provider,
+          courier_service_id: selectedRate.courier_service_id,
+          rate: { ...selectedRate, profit: undefined },
+          ...(bypassPassword != null ? { bypass_password: bypassPassword } : {}),
+        },
+      });
+      break;
+    } catch (err) {
+      if (err.status === 403 && err.data && err.data.code === 'profit_gate') {
+        gate = err.data.profit;
+        gateError = err.data.bypass === 'wrong_password' ? 'Wrong password — try again' : '';
+        continue;
+      }
+      snackbar(err.message, 'error');
+      return giveUp('failed', err.message);
+    }
   }
   return new Promise((resolve) => {
     buyPollTimer = setInterval(async () => {
@@ -804,12 +912,20 @@ const Auto = (() => {
       setStage('choose', 'Auto Mode paused', 'Preset service not offered for this shipment — choose a rate and print', 'warn');
       return;
     }
-    setStage('buying', 'Auto Mode — buying label',
-      `${selectedRate.courier_name} · ${money(selectedRate.total_charge)}`);
+    if (selectedRate.profit && selectedRate.profit.below_threshold) {
+      // Not Escape-cancellable: Escape closes the password prompt instead.
+      setStage('gate', 'Auto Mode paused',
+        'Below the profit threshold — enter the bypass password, or cancel and choose a rate', 'warn');
+    } else {
+      setStage('buying', 'Auto Mode — buying label',
+        `${selectedRate.courier_name} · ${money(selectedRate.total_charge)}`);
+    }
     const result = await buyLabel();
     if (result.state === 'done') {
       setStage('done', 'Auto Mode — label bought', 'Printing…', 'ok');
       applyPrintOutcome();
+    } else if (result.state === 'cancelled') {
+      setStage('choose', 'Auto Mode paused', 'Below the profit threshold — choose a rate and print', 'warn');
     } else {
       fail(result.message || 'Label purchase did not complete');
     }

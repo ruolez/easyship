@@ -6,6 +6,7 @@ const BASE_SETTING_IDS = [
   'origin_city', 'origin_state', 'origin_zip', 'origin_phone', 'origin_email',
   'placeholder_email', 'print_mode', 'printer_host', 'printer_port', 'printer_dpi',
   'label_timeout_seconds', 'countdown_seconds', 'order_tag_rules',
+  'profit_min_amount', 'profit_min_margin_pct', 'profit_bypass_password',
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
 ];
 let SETTING_IDS = [...BASE_SETTING_IDS];

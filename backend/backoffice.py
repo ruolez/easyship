@@ -1,6 +1,7 @@
 import pymssql
 
 import db
+import profit
 
 
 class BackofficeError(Exception):
@@ -108,6 +109,36 @@ def find_invoice_id_by_number(db_id, number):
     return row[0] if row else None
 
 
+def _first_positive(*values):
+    for v in values:
+        if v is not None and float(v) > 0:
+            return float(v)
+    return None
+
+
+def economics_from_invoice(inv, lines):
+    """Whole-invoice economics. Shipping is billed as a line item, so revenue
+    is the subtotal less discounts; taxes and the label cost this app writes
+    into ShippingCost are never revenue. A line's cost is the first positive
+    of its own UnitCost, then the item's average, last and unit cost."""
+    econ_lines = []
+    for line in lines:
+        qty = line["QtyShipped"] if line["QtyShipped"] else line["QtyOrdered"]
+        econ_lines.append({
+            "description": line["ProductDescription"],
+            "sku": line["ProductSKU"],
+            "quantity": int(qty) if qty else 0,
+            "unit_price": float(line["UnitPrice"]) if line["UnitPrice"] is not None else 0,
+            "unit_cost": _first_positive(line["UnitCost"], line["AvrCost"], line["LastCost"],
+                                         line["ItemUnitCost"]),
+        })
+    subtotal = inv["InvoiceSubtotal"]
+    if subtotal is None:
+        subtotal = sum(l["quantity"] * l["unit_price"] for l in econ_lines)
+    revenue = float(subtotal) - float(inv["TotalDiscounts"] or 0)
+    return profit.compute_economics(econ_lines, revenue, 0, "USD")
+
+
 def get_invoice(db_id, invoice_id):
     no_company = bool(get_db_config(db_id).get("no_company"))
     conn = _connect(db_id)
@@ -116,7 +147,8 @@ def get_invoice(db_id, invoice_id):
             cur.execute(
                 """SELECT InvoiceID, InvoiceNumber, BusinessName, Shipto, ShipAddress1,
                           ShipAddress2, ShipContact, ShipCity, ShipState, ShipZipCode,
-                          ShipPhoneNo, NoBoxes, TotalWeight, InvoiceTotal, TrackingNo
+                          ShipPhoneNo, NoBoxes, TotalWeight, InvoiceTotal, TrackingNo,
+                          InvoiceSubtotal, TotalDiscounts
                    FROM Invoices_tbl WHERE InvoiceID = %s""",
                 (invoice_id,),
             )
@@ -124,10 +156,12 @@ def get_invoice(db_id, invoice_id):
             if not inv:
                 raise BackofficeError("Invoice not found")
             cur.execute(
-                """SELECT ProductSKU, ProductDescription, QtyShipped, QtyOrdered,
-                          UnitPrice, ItemWeight
-                   FROM InvoicesDetails_tbl
-                   WHERE InvoiceID = %s AND (Void IS NULL OR Void = 0)""",
+                """SELECT d.ProductSKU, d.ProductDescription, d.QtyShipped, d.QtyOrdered,
+                          d.UnitPrice, d.ItemWeight, d.UnitCost,
+                          i.AvrCost, i.LastCost, i.UnitCost AS ItemUnitCost
+                   FROM InvoicesDetails_tbl d
+                   LEFT JOIN Items_tbl i ON i.ProductID = d.ProductID
+                   WHERE d.InvoiceID = %s AND (d.Void IS NULL OR d.Void = 0)""",
                 (invoice_id,),
             )
             lines = cur.fetchall()
@@ -168,6 +202,7 @@ def get_invoice(db_id, invoice_id):
             "country": "US",
         },
         "items": items,
+        "economics": economics_from_invoice(inv, lines),
     }
 
 

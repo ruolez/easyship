@@ -21,6 +21,7 @@ async function api(path, options = {}) {
   if (!res.ok) {
     const err = new Error((data && data.error) || `Request failed (${res.status})`);
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
@@ -56,6 +57,18 @@ const ICON_PRINTER = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">'
 function money(v) {
   if (v == null || v === '') return '';
   return '$' + Number(v).toFixed(2);
+}
+
+/* Profit figures carry their sign: "+$12.40", "−$3.10". */
+function signedMoney(v) {
+  if (v == null || v === '') return '';
+  const n = Number(v);
+  return (n < 0 ? '−' : '+') + '$' + Math.abs(n).toFixed(2);
+}
+
+function pct(v) {
+  if (v == null || v === '') return '';
+  return Number(v).toFixed(1) + '%';
 }
 
 // Print a PDF (often multi-page — one page per box on a multi-box shipment)

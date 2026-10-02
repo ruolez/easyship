@@ -6,6 +6,7 @@ from werkzeug.security import generate_password_hash
 
 import config
 import db
+import profit
 import providers
 import tag_rules
 from auth import admin_required, login_required
@@ -37,6 +38,9 @@ BASE_SETTING_KEYS = [
     "label_timeout_seconds",
     "countdown_seconds",
     "order_tag_rules",
+    profit.SETTING_MIN_AMOUNT,
+    profit.SETTING_MIN_PCT,
+    profit.SETTING_PASSWORD,
     "shipper_host",
     "shipper_port",
     "shipper_db",
@@ -44,7 +48,7 @@ BASE_SETTING_KEYS = [
     "shipper_password",
 ]
 
-BASE_SECRET_KEYS = {"shipper_password"}
+BASE_SECRET_KEYS = {"shipper_password", profit.SETTING_PASSWORD}
 
 
 def _provider_setting_keys():
@@ -106,12 +110,44 @@ def get_settings():
     return jsonify(out)
 
 
+def _profit_settings_error(data):
+    """Thresholds must be numbers, and a hard block needs a bypass password on
+    file or in this save — otherwise no flagged label could ever be bought."""
+    limits = {profit.SETTING_MIN_AMOUNT: ("Minimum profit", None),
+              profit.SETTING_MIN_PCT: ("Minimum margin", 100)}
+    enabled = False
+    for key, (label, maximum) in limits.items():
+        raw = str((data.get(key) if key in data else db.get_setting(key)) or "").strip()
+        if not raw:
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            return f"{label} must be a number"
+        if value < 0:
+            return f"{label} cannot be negative"
+        if maximum is not None and value > maximum:
+            return f"{label} cannot exceed {maximum}"
+        enabled = True
+    if profit.SETTING_PASSWORD in data:
+        supplied = str(data[profit.SETTING_PASSWORD] or "").strip()
+        has_password = bool(supplied) and (supplied != MASK or bool(db.get_setting(profit.SETTING_PASSWORD)))
+    else:
+        has_password = bool(db.get_setting(profit.SETTING_PASSWORD))
+    if enabled and not has_password:
+        return "Set a bypass password before turning on the profit check"
+    return None
+
+
 @bp.put("/settings")
 @admin_required
 def put_settings():
     data = request.get_json(silent=True) or {}
     keys = set(_setting_keys())
     secret_keys = _secret_keys()
+    error = _profit_settings_error(data)
+    if error:
+        return api_error(error)
     for key, value in data.items():
         if key not in keys:
             continue
@@ -119,6 +155,9 @@ def put_settings():
             continue
         if key == tag_rules.RULES_KEY:
             value = json.dumps(tag_rules.parse_rules(value)) if (value or "").strip() else ""
+        if key == profit.SETTING_PASSWORD and (value or "").strip():
+            # Only ever compared, never replayed — so it is stored hashed.
+            value = generate_password_hash(value.strip())
         db.set_setting(key, (value or "").strip())
     audit("settings.update", {"keys": [k for k in data if k in keys]})
     return jsonify({"ok": True})
@@ -140,6 +179,7 @@ def client_settings():
         "placeholder_email": db.get_setting("placeholder_email") or "",
         "print_mode": db.get_setting("print_mode") or "browser",
         "countdown_seconds": int(db.get_setting("countdown_seconds") or 5),
+        "profit_gate_enabled": profit.load_thresholds()["enabled"],
     })
 
 
