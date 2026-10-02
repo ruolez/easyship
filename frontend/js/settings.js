@@ -25,10 +25,11 @@ initNav('settings').then(async () => {
   await loadDbs();
   await loadBoxes();
   await loadUsers();
+  await loadAudit();
 });
 
 /* ---------- Tabs ---------- */
-const ADMIN_TABS = ['providers', 'shipping', 'printing', 'boxes', 'integrations', 'users'];
+const ADMIN_TABS = ['providers', 'shipping', 'printing', 'boxes', 'integrations', 'users', 'audit'];
 
 function initTabs(isAdmin) {
   const buttons = [...document.querySelectorAll('#settings-tabs .tab')];
@@ -1027,6 +1028,69 @@ window.editUserProviders = async (id, username) => {
     }
   });
 };
+
+/* ---------- Audit log ---------- */
+const AUDIT_PAGE = 100;
+const AUDIT_GROUP_LABELS = {
+  profit: 'Profit check', label: 'Labels', shipment: 'Shipments', manifest: 'Manifests',
+  settings: 'Settings', user: 'Users', auth: 'Sign-ins', backoffice: 'BackOffice', shopify: 'Shopify',
+  provider_instance: 'Providers',
+};
+let auditOffset = 0;
+
+async function loadAudit(more = false) {
+  const select = document.getElementById('audit-group');
+  auditOffset = more ? auditOffset + AUDIT_PAGE : 0;
+  let res;
+  try {
+    res = await api(`/api/audit?group=${encodeURIComponent(select.value)}&limit=${AUDIT_PAGE}&offset=${auditOffset}`);
+  } catch (err) {
+    snackbar(`Could not load the audit log: ${err.message}`, 'error');
+    return;
+  }
+  if (select.options.length === 1) {
+    res.groups.forEach((g) => {
+      const opt = document.createElement('option');
+      opt.value = g;
+      opt.textContent = AUDIT_GROUP_LABELS[g] || g;
+      select.appendChild(opt);
+    });
+  }
+  const tbody = document.getElementById('audit-body');
+  const html = res.rows.map(auditRowHtml).join('');
+  if (more) tbody.insertAdjacentHTML('beforeend', html);
+  else tbody.innerHTML = html || '<tr><td colspan="4" class="text-secondary">Nothing recorded yet</td></tr>';
+  const shown = Math.min(auditOffset + res.rows.length, res.total);
+  document.getElementById('audit-count').textContent = res.total ? `${shown} of ${res.total}` : '';
+  document.getElementById('audit-more').style.display = shown < res.total ? '' : 'none';
+}
+
+function auditRowHtml(r) {
+  const tone = r.action === 'profit.bypass' ? ' warn'
+    : (r.action === 'profit.bypass_denied' || r.action === 'label.void') ? ' err' : '';
+  return `<tr>
+    <td style="white-space:nowrap">${esc(r.created_at)}</td>
+    <td>${esc(r.username || '—')}</td>
+    <td><span class="chip static${tone}">${esc(r.action)}</span></td>
+    <td class="wrap">${auditDetailHtml(r.action, r.detail || {})}</td>
+  </tr>`;
+}
+
+/* Profit overrides get a readable breakdown; everything else lists its
+   detail fields as key: value. */
+function auditDetailHtml(action, d) {
+  if (action === 'profit.bypass') {
+    const margin = d.margin_pct != null ? ` (${pct(d.margin_pct)})` : '';
+    const service = [d.courier_name, d.provider].filter(Boolean).join(' · ');
+    return `<strong>${esc(d.order || '')}</strong>${service ? ` · ${esc(service)}` : ''} · profit <strong>${signedMoney(d.profit)}</strong>${margin}
+      <div class="text-secondary">Revenue ${money(d.revenue)} − items ${money(d.items_cost)} − label ${money(d.label_cost)}${(d.reasons || []).length ? ' — ' + d.reasons.map(esc).join('; ') : ''}</div>`;
+  }
+  return Object.entries(d).map(([k, v]) =>
+    `<span class="audit-kv"><span class="text-secondary">${esc(k)}:</span> ${esc(v != null && typeof v === 'object' ? JSON.stringify(v) : v)}</span>`).join(' ');
+}
+
+document.getElementById('audit-group').addEventListener('change', () => loadAudit());
+document.getElementById('audit-more').addEventListener('click', () => loadAudit(true));
 
 document.getElementById('add-user').addEventListener('click', async () => {
   await loadAllProviders();

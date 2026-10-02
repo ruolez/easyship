@@ -111,7 +111,8 @@ class ProfitGateTest(unittest.TestCase):
         self.assertEqual((status, body), (200, {"started": True, "box_count": 1}))
         self.assertEqual(self.audits, [("profit.bypass", {
             "group_id": "g1", "source": "shopify", "order": "#1001", "provider": "fake",
-            "courier_service_id": "svc-1", "revenue": 20.0, "items_cost": 15.0, "label_cost": 12.35,
+            "courier_service_id": "svc-1", "courier_name": "Fake Ground",
+            "revenue": 20.0, "items_cost": 15.0, "label_cost": 12.35,
             "profit": -7.35, "margin_pct": -36.8,
             "reasons": ["Profit -$7.35 is below the $10.00 minimum"],
             "thresholds": {"min_amount": 10.0, "min_margin_pct": None}})])

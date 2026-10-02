@@ -907,6 +907,9 @@ td { font-variant-numeric: tabular-nums; }
 .profit-reasons li + li { margin-top: 4px; }
 .profit-error { color: var(--error); font-size: 12.5px; margin-top: 6px; min-height: 16px; }
 
+/* Audit log: detail fields read as "key: value" pairs. */
+.audit-kv { display: inline-block; margin-right: 10px; white-space: nowrap; font-size: 12.5px; }
+
 /* ============================================================
    Scan screen
    ============================================================ */

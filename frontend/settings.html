@@ -23,6 +23,7 @@
       <button class="tab" data-tab="boxes">Boxes</button>
       <button class="tab" data-tab="integrations">Integrations</button>
       <button class="tab" data-tab="users">Users</button>
+      <button class="tab" data-tab="audit">Audit</button>
       <button class="tab" data-tab="account">My account</button>
     </nav>
 
@@ -238,6 +239,28 @@
           </table>
         </div>
         <button class="btn btn-text mt-16" id="add-user">+ Add user</button>
+      </div>
+    </section>
+
+    <!-- ================= Audit ================= -->
+    <section class="tab-panel" data-panel="audit">
+      <div class="card" id="card-audit">
+        <h2>Audit log</h2>
+        <p class="hint mb-16">Who did what, newest first: label purchases and voids, profit-check overrides (and refused attempts), settings and user changes.</p>
+        <div class="row mb-16" style="align-items:flex-end">
+          <div class="field fixed" style="min-width:220px">
+            <label>Show</label>
+            <select id="audit-group"><option value="">Everything</option></select>
+          </div>
+          <div class="fixed hint" id="audit-count" style="padding-bottom:9px"></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>When</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
+            <tbody id="audit-body"></tbody>
+          </table>
+        </div>
+        <button class="btn btn-text mt-16" id="audit-more" style="display:none">Load more</button>
       </div>
     </section>
 

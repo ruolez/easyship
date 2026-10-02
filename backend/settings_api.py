@@ -11,7 +11,7 @@ import providers
 import tag_rules
 from auth import admin_required, login_required
 from providers.base import ProviderError
-from util import api_error, audit
+from util import api_error, audit, central_time
 
 bp = Blueprint("settings", __name__, url_prefix="/api")
 
@@ -180,6 +180,47 @@ def client_settings():
         "print_mode": db.get_setting("print_mode") or "browser",
         "countdown_seconds": int(db.get_setting("countdown_seconds") or 5),
         "profit_gate_enabled": profit.load_thresholds()["enabled"],
+    })
+
+
+AUDIT_PAGE_DEFAULT = 100
+AUDIT_PAGE_MAX = 500
+
+
+@bp.get("/audit")
+@admin_required
+def list_audit():
+    """The audit log, newest first. `group` keeps one family of actions
+    (the part before the dot: profit, label, settings…), `action` one exact
+    action."""
+    try:
+        limit = min(max(int(request.args.get("limit") or AUDIT_PAGE_DEFAULT), 1), AUDIT_PAGE_MAX)
+        offset = max(int(request.args.get("offset") or 0), 0)
+    except ValueError:
+        return api_error("limit and offset must be whole numbers")
+    clauses, params = [], []
+    group = (request.args.get("group") or "").strip()
+    action = (request.args.get("action") or "").strip()
+    if group:
+        clauses.append("split_part(a.action, '.', 1) = %s")
+        params.append(group)
+    if action:
+        clauses.append("a.action = %s")
+        params.append(action)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    total = db.query(f"SELECT COUNT(*) AS total FROM audit_log a{where}", params, one=True)["total"]
+    rows = db.query(
+        f"""SELECT a.id, a.action, a.detail, a.created_at, u.username
+            FROM audit_log a LEFT JOIN users u ON u.id = a.user_id{where}
+            ORDER BY a.created_at DESC, a.id DESC LIMIT %s OFFSET %s""",
+        params + [limit, offset],
+    ) if total else []
+    groups = db.query("SELECT DISTINCT split_part(action, '.', 1) AS value FROM audit_log ORDER BY value")
+    return jsonify({
+        "rows": [{"id": r["id"], "action": r["action"], "detail": r["detail"],
+                  "created_at": central_time(r["created_at"]), "username": r["username"]} for r in rows],
+        "total": total, "limit": limit, "offset": offset,
+        "groups": [g["value"] for g in groups or []],
     })
 
 

@@ -427,6 +427,7 @@ def group_buy(group_id):
                 "group_id": group_id, "source": primary["source"],
                 "order": primary["shopify_order_name"] or primary["backoffice_invoice_number"],
                 "provider": provider_name, "courier_service_id": courier_service_id,
+                "courier_name": (rate or {}).get("courier_name"),
                 **{k: gate[k] for k in ("revenue", "items_cost", "label_cost", "profit",
                                         "margin_pct", "reasons", "thresholds")},
             })
