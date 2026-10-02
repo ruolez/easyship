@@ -49,7 +49,7 @@ class EconomicsFromInvoiceTest(unittest.TestCase):
                  detail("D", 1.0, 1.0, "10.00")]
         econ = backoffice.economics_from_invoice(invoice(), lines)
         self.assertEqual((econ["items_cost"], econ["missing_cost"]),
-                         (19.0, [{"description": "d", "sku": "D", "quantity": 1}]))
+                         (18.0, [{"description": "d", "sku": "D", "quantity": 1}]))
 
     def test_ordered_quantity_is_used_when_nothing_shipped_yet(self):
         econ = backoffice.economics_from_invoice(invoice(), [detail("A", None, 3.0, "10.00", unit_cost="1.00")])

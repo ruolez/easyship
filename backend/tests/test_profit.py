@@ -29,10 +29,10 @@ class ComputeEconomicsTest(unittest.TestCase):
             "items_subtotal": 90.0, "shipping_paid": 10.0, "revenue": 100.0,
             "items_cost": 46.0, "line_count": 2, "missing_cost": []})
 
-    def test_missing_or_zero_cost_is_charged_at_selling_price_and_flagged(self):
+    def test_missing_or_zero_cost_is_charged_at_ninety_percent_of_price_and_flagged(self):
         lines = [dict(LINES[0], unit_cost=None), dict(LINES[1], unit_cost=0)]
         econ = profit.compute_economics(lines, 90.0, 0, "USD")
-        self.assertEqual((econ["items_cost"], econ["missing_cost"]), (90.0, [
+        self.assertEqual((econ["items_cost"], econ["missing_cost"]), (81.0, [
             {"description": "Widget", "sku": "W-1", "quantity": 2},
             {"description": "Gadget", "sku": "G-1", "quantity": 1}]))
 

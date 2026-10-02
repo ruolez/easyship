@@ -44,13 +44,13 @@ def order(**over):
 class EconomicsFromOrderTest(unittest.TestCase):
     """Whole-order economics come from the order's current (post-edit)
     totals; line costs are the variant's inventory unit cost, and a line
-    without one is costed at its discounted selling price."""
+    without one is costed at 90% of its discounted selling price."""
 
     def test_current_totals_and_unit_costs_make_the_economics(self):
         self.assertEqual(shopify_client.economics_from_order(order()), {
             "available": True, "reason": None, "reason_text": None, "currency": "USD",
             "items_subtotal": 85.0, "shipping_paid": 7.5, "revenue": 92.5,
-            "items_cost": 66.0,  # 2×8 + 1×50 (no cost → price)
+            "items_cost": 61.0,  # 2×8 + 1×50×0.9 (no cost → 90% of price)
             "line_count": 2,
             "missing_cost": [{"description": "Gadget", "sku": "G-1", "quantity": 1}]})
 
@@ -61,7 +61,7 @@ class EconomicsFromOrderTest(unittest.TestCase):
     def test_quantity_falls_back_when_current_quantity_is_absent(self):
         li = dict(line("Widget", "W-1", 2, "20.00", None), currentQuantity=None)
         econ = shopify_client.economics_from_order(order(lineItems={"nodes": [li]}))
-        self.assertEqual((econ["line_count"], econ["items_cost"]), (1, 60.0))
+        self.assertEqual((econ["line_count"], econ["items_cost"]), (1, 54.0))
 
     def test_more_than_a_page_of_lines_is_unavailable(self):
         econ = shopify_client.economics_from_order(

@@ -11,6 +11,10 @@ SETTING_PASSWORD = "profit_bypass_password"
 
 GATED_SOURCES = ("shopify", "backoffice")
 
+# A line with no cost on file is assumed to carry a 10% margin, so a single
+# uncosted product does not block an otherwise healthy order.
+MISSING_COST_FACTOR = 0.9
+
 UNAVAILABLE_TEXT = {
     "no_order_id": "the order could not be loaded from Shopify",
     "no_invoice_id": "the invoice could not be loaded from BackOffice",
@@ -50,7 +54,8 @@ def unavailable(reason, currency=None):
 
 def compute_economics(lines, items_subtotal, shipping_paid, currency):
     """Whole-order revenue and cost. A line without a usable unit cost is
-    costed at its selling price (zero profit) and listed in missing_cost."""
+    costed at MISSING_COST_FACTOR × its selling price and listed in
+    missing_cost."""
     items_cost = 0.0
     missing = []
     line_count = 0
@@ -62,7 +67,7 @@ def compute_economics(lines, items_subtotal, shipping_paid, currency):
         price = _num(line.get("unit_price")) or 0.0
         cost = _num(line.get("unit_cost"))
         if cost is None or cost <= 0:
-            cost = price
+            cost = price * MISSING_COST_FACTOR
             missing.append({"description": line.get("description"), "sku": line.get("sku"),
                             "quantity": line.get("quantity")})
         items_cost += cost * qty

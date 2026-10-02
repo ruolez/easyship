@@ -91,7 +91,7 @@
 
       <div class="card" id="card-profit">
         <h2>Profit check</h2>
-        <p class="hint mb-16">Before a label is bought, the order's profit (items after discounts + shipping paid − product costs − the label) is checked against these minimums. If either fails, the purchase is blocked until the bypass password is entered; every override is recorded in the audit log. Leave both blank to turn the check off. Costs come from Shopify's inventory unit cost and BackOffice's invoice line cost — an item without a cost counts at its selling price.</p>
+        <p class="hint mb-16">Before a label is bought, the order's profit (items after discounts + shipping paid − product costs − the label) is checked against these minimums. If either fails, the purchase is blocked until the bypass password is entered; every override is recorded in the audit log. Leave both blank to turn the check off. Costs come from Shopify's inventory unit cost and BackOffice's invoice line cost — an item without a cost counts at 90% of its selling price (an assumed 10% margin, so one uncosted product does not block an order).</p>
         <div class="row">
           <div class="field fixed" style="min-width:200px">
             <label>Minimum profit ($)</label>

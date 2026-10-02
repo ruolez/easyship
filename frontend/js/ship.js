@@ -184,7 +184,7 @@ function confirmProfitBypass(p, rate, errorMessage = '') {
         ${row('Profit', profitText, 'total bad')}
       </div>
       ${limits ? `<p class="text-secondary" style="margin-top:8px">Required: ${esc(limits)}</p>` : ''}
-      ${missing ? `<p class="text-secondary" style="margin-top:4px">No cost on file (counted at selling price): ${missing}</p>` : ''}
+      ${missing ? `<p class="text-secondary" style="margin-top:4px">No cost on file (counted at 90% of selling price): ${missing}</p>` : ''}
       <ul class="profit-reasons">${(p.reasons || []).map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
       <div class="field" style="margin-top:16px">
         <label for="m-bypass">Bypass password</label>
@@ -265,7 +265,7 @@ function economicsHtml(econ) {
     body = `<span class="chip static err">Profit unknown</span><span>${esc(why)} — the bypass password is needed to buy a label</span>`;
   } else {
     const missing = (econ.missing_cost || []).map((m) =>
-      `<span class="chip static warn" title="No cost on file — counted at its selling price">${esc(m.sku || m.description)}: no cost</span>`).join('');
+      `<span class="chip static warn" title="No cost on file — counted at 90% of its selling price">${esc(m.sku || m.description)}: no cost</span>`).join('');
     body = `<span>Revenue <strong>${money(econ.revenue)}</strong></span><span>Items cost <strong>${money(econ.items_cost)}</strong></span>${missing}`;
   }
   return `<div class="order-economics" id="order-economics">${body}</div>`;
