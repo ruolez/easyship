@@ -19,16 +19,70 @@ bp = Blueprint("shipments", __name__, url_prefix="/api/shipments")
 
 LABEL_MIMETYPES = {"pdf": "application/pdf", "png": "image/png", "zpl": "text/plain"}
 
-LIST_SELECT = """
-    SELECT s.*, u.username AS created_by_username,
-           ss.name AS store_name, bd.name AS db_name,
-           pi.label AS provider_current_label
+
+# Parcel dims are JSON strings straight from <input type=number>; the regex
+# guard keeps a stray non-numeric value from aborting the whole query, and
+# ::float8::text prints "12" / "12.5" the way the UI always labelled sizes.
+def _dim(key):
+    return (f"CASE WHEN s.parcels->0->>'{key}' ~ '^[0-9]*\\.?[0-9]+$' "
+            f"THEN (s.parcels->0->>'{key}')::float8 END")
+
+
+LIST_FROM = f"""
     FROM shipments s
     JOIN users u ON u.id = s.created_by
     LEFT JOIN shopify_stores ss ON ss.id = s.shopify_store_id
     LEFT JOIN backoffice_dbs bd ON bd.id = s.backoffice_db_id
     LEFT JOIN provider_instances pi ON pi.key = s.provider
+    CROSS JOIN LATERAL (SELECT {_dim('length')} AS l, {_dim('width')} AS w, {_dim('height')} AS h) d
 """
+
+# The Parcels list filters and sorts on these in SQL; they mirror the values
+# _row_to_json derives in Python (service_name, courier_umbrella_name,
+# provider_label), so a filter option always matches the rows it came from.
+SERVICE_NAME_SQL = ("COALESCE(NULLIF(ss.name, ''), NULLIF(bd.name, ''), "
+                    "CASE WHEN s.source = 'manual' THEN 'Manual' ELSE s.source END)")
+CARRIER_SQL = "COALESCE(s.courier_umbrella_name, s.rate->>'umbrella_name')"
+ACCOUNT_SQL = "COALESCE(pi.label, s.provider_label, s.provider, '')"
+BOX_VOLUME_SQL = "CASE WHEN d.l > 0 AND d.w > 0 AND d.h > 0 THEN d.l * d.w * d.h END"
+BOX_SIZE_SQL = ("CASE WHEN d.l > 0 AND d.w > 0 AND d.h > 0 "
+                "THEN d.l::text || '×' || d.w::text || '×' || d.h::text END")
+
+LIST_SELECT = f"""
+    SELECT s.*, u.username AS created_by_username,
+           ss.name AS store_name, bd.name AS db_name,
+           pi.label AS provider_current_label,
+           {BOX_SIZE_SQL} AS box_size
+    {LIST_FROM}
+"""
+
+# Column sorts for the Parcels list. Missing numerics sort as -1 and missing
+# text as '' (what the page did client-side), so no NULLS FIRST/LAST juggling.
+SORT_SQL = {
+    "ref": "LOWER(COALESCE(s.shopify_order_name, s.backoffice_invoice_number, '#' || s.id::text))",
+    "user": "LOWER(u.username)",
+    "store": f"LOWER({SERVICE_NAME_SQL})",
+    "address": """LOWER(concat_ws(', ', NULLIF(s.destination->>'contact', ''),
+        CASE WHEN s.destination->>'company' IS DISTINCT FROM s.destination->>'contact'
+             THEN NULLIF(s.destination->>'company', '') END,
+        NULLIF(s.destination->>'address1', ''), NULLIF(s.destination->>'address2', ''),
+        NULLIF(s.destination->>'city', ''),
+        NULLIF(concat_ws(' ', NULLIF(s.destination->>'state', ''), NULLIF(s.destination->>'zip', '')), '')))""",
+    "boxes": "s.box_total",
+    "size": f"COALESCE({BOX_VOLUME_SQL}, -1)",
+    "weight": "COALESCE(s.total_weight_lb, -1)",
+    "account": f"LOWER({ACCOUNT_SQL})",
+    "courier": "LOWER(COALESCE(s.courier_name, ''))",
+    "carrier": f"LOWER(COALESCE({CARRIER_SQL}, ''))",
+    "cost": "COALESCE(s.shipping_cost, -1)",
+    "tracking": "COALESCE(s.tracking_number, '')",
+    "status": "s.status",
+    "created": "s.created_at",
+}
+# The id tiebreak keeps pages disjoint when rows share every sort value.
+DEFAULT_ORDER = "s.created_at DESC, s.box_number ASC, s.id ASC"
+LIST_PAGE_MAX = 500
+LIST_PAGE_DEFAULT = 100
 
 REMOVED_PROVIDER = "This shipping integration has been removed — the label can no longer be managed here"
 
@@ -60,6 +114,7 @@ def _row_to_json(row):
         "backoffice_invoice_number": row["backoffice_invoice_number"],
         "destination": row["destination"],
         "parcels": row["parcels"],
+        "box_size": row.get("box_size") or "",
         "items": row["items"],
         "provider": row.get("provider") or "easyship",
         # Live alias while the instance exists, the snapshot after it's deleted.
@@ -896,43 +951,80 @@ def _run_legacy_writebacks(shipment_id):
 
 # ============================================================ list / detail
 
-@bp.get("")
-@login_required
-def list_shipments():
-    q = (request.args.get("q") or "").strip()
-    status = (request.args.get("status") or "").strip()
-    user = (request.args.get("user") or "").strip()
-    provider = (request.args.get("provider") or "").strip()
-    date_from = (request.args.get("from") or "").strip()
-    date_to = (request.args.get("to") or "").strip()
-    limit = min(int(request.args.get("limit") or 200), 1000)
-    sql = LIST_SELECT + " WHERE TRUE"
+def _int_arg(name, default, lo, hi):
+    raw = (request.args.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(lo, min(int(raw), hi))
+    except ValueError:
+        raise ValueError(f"{name} must be a whole number")
+
+
+def _list_where(args):
+    """WHERE clause + params for the Parcels list, shared by the page query
+    and the totals query so both always describe the same set of rows."""
+    arg = lambda k: (args.get(k) or "").strip()
+    sql = "TRUE"
     params = []
+    q = arg("q")
     if q:
         sql += """ AND (s.tracking_number ILIKE %s OR s.shopify_order_name ILIKE %s
                    OR s.backoffice_invoice_number ILIKE %s OR s.destination->>'company' ILIKE %s
                    OR s.destination->>'contact' ILIKE %s OR s.destination->>'city' ILIKE %s)"""
         like = f"%{q}%"
         params += [like] * 6
-    if status:
-        sql += " AND s.status = ANY(%s)"
-        params.append(status.split(","))
-    if user:
-        sql += " AND u.username = ANY(%s)"
-        params.append(user.split(","))
-    if provider:
-        sql += " AND s.provider = ANY(%s)"
-        params.append(provider.split(","))
-    if date_from:
+    for key, expr in (("status", "s.status"), ("user", "u.username"), ("provider", "s.provider"),
+                      ("store", SERVICE_NAME_SQL), ("service", "s.courier_name"),
+                      ("carrier", CARRIER_SQL), ("size", BOX_SIZE_SQL)):
+        if arg(key):
+            sql += f" AND {expr} = ANY(%s)"
+            params.append(arg(key).split(","))
+    if arg("from"):
         sql += " AND (s.created_at AT TIME ZONE 'America/Chicago')::date >= %s"
-        params.append(date_from)
-    if date_to:
+        params.append(arg("from"))
+    if arg("to"):
         sql += " AND (s.created_at AT TIME ZONE 'America/Chicago')::date <= %s"
-        params.append(date_to)
-    sql += " ORDER BY s.created_at DESC, s.box_number ASC LIMIT %s"
-    params.append(limit)
-    rows = db.query(sql, params)
-    return jsonify([_row_to_json(r) for r in rows])
+        params.append(arg("to"))
+    return sql, params
+
+
+@bp.get("")
+@login_required
+def list_shipments():
+    try:
+        limit = _int_arg("limit", LIST_PAGE_DEFAULT, 1, LIST_PAGE_MAX)
+        offset = _int_arg("offset", 0, 0, 10**9)
+    except ValueError as e:
+        return api_error(str(e))
+    order = DEFAULT_ORDER
+    sort = SORT_SQL.get((request.args.get("sort") or "").strip())
+    if sort:
+        order = f"{sort} {'DESC' if request.args.get('dir') == 'desc' else 'ASC'}, {DEFAULT_ORDER}"
+    where, params = _list_where(request.args)
+    agg = db.query(
+        f"""SELECT COUNT(*) AS total,
+                   COUNT(DISTINCT COALESCE(s.group_id, '#' || s.id::text)) AS shipments,
+                   COALESCE(SUM(s.shipping_cost), 0) AS shipping_cost
+            {LIST_FROM} WHERE {where}""",
+        params, one=True)
+    total = agg["total"]
+    rows = []
+    if total:
+        # Rows voided or deleted while paging can leave the client past the
+        # end; answer with the last page and echo the offset we actually used.
+        if offset >= total:
+            offset = ((total - 1) // limit) * limit
+        rows = db.query(f"{LIST_SELECT} WHERE {where} ORDER BY {order} LIMIT %s OFFSET %s",
+                        params + [limit, offset])
+    return jsonify({
+        "rows": [_row_to_json(r) for r in rows],
+        "total": total,
+        "shipments": agg["shipments"],
+        "shipping_cost": float(agg["shipping_cost"]),
+        "offset": offset,
+        "limit": limit,
+    })
 
 
 @bp.get("/creators")
@@ -960,6 +1052,23 @@ def shipped_providers():
            ORDER BY label"""
     )
     return jsonify([{"value": r["value"], "label": r["label"]} for r in rows])
+
+
+@bp.get("/filter-options")
+@login_required
+def filter_options():
+    """Distinct values for the Parcels list's Store / Service / Carrier / Size
+    filters, drawn from every parcel rather than the page on screen."""
+    def values(select, where="", order="ORDER BY 1"):
+        return [r["value"] for r in db.query(
+            f"SELECT DISTINCT {select} {LIST_FROM} WHERE {where or 'TRUE'} {order}")]
+    return jsonify({
+        "stores": values(f"{SERVICE_NAME_SQL} AS value"),
+        "services": values("s.courier_name AS value", "s.courier_name IS NOT NULL AND s.courier_name <> ''"),
+        "carriers": values(f"{CARRIER_SQL} AS value", f"{CARRIER_SQL} IS NOT NULL"),
+        "sizes": values(f"{BOX_SIZE_SQL} AS value, {BOX_VOLUME_SQL} AS volume",
+                        f"{BOX_SIZE_SQL} IS NOT NULL", "ORDER BY volume, value"),
+    })
 
 
 @bp.get("/<int:shipment_id>")

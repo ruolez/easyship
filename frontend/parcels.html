@@ -71,6 +71,14 @@
           <tfoot id="parcels-foot"></tfoot>
         </table>
       </div>
+      <div class="table-pager" id="pager" style="display:none">
+        <label class="pager-size">Rows per page
+          <select id="page-size"><option>50</option><option>100</option><option>200</option><option>500</option></select>
+        </label>
+        <span class="pager-range" id="pager-range"></span>
+        <button type="button" class="btn btn-outlined btn-small pager-btn" id="page-prev" aria-label="Previous page">‹</button>
+        <button type="button" class="btn btn-outlined btn-small pager-btn" id="page-next" aria-label="Next page">›</button>
+      </div>
       <div class="empty" id="empty" style="display:none"></div>
     </div>
   </div>

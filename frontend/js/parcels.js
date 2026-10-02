@@ -52,18 +52,6 @@ function signatureChip(options) {
   return '';
 }
 
-function boxSize(s) {
-  const p = (s.parcels || [])[0] || {};
-  const dims = [p.length, p.width, p.height].map(Number);
-  if (dims.some((d) => !d || d <= 0)) return '';
-  return dims.map((d) => String(d)).join('×');
-}
-
-function boxVolume(s) {
-  const p = (s.parcels || [])[0] || {};
-  return (Number(p.length) || 0) * (Number(p.width) || 0) * (Number(p.height) || 0);
-}
-
 function formatAddress(d) {
   if (!d) return '';
   const parts = [
@@ -86,6 +74,16 @@ async function loadAccounts() {
     const accounts = await api('/api/shipments/providers');
     accountFilter.setOptions(accounts);
   } catch { /* filter stays open */ }
+}
+
+async function loadFilterOptions() {
+  try {
+    const o = await api('/api/shipments/filter-options');
+    storeFilter.setOptions(o.stores);
+    serviceFilter.setOptions(o.services);
+    carrierFilter.setOptions(o.carriers);
+    fillOptions('size-filter', o.sizes);
+  } catch { /* filters stay open */ }
 }
 
 /* ---------- Multi-select column filters: a compact button in the filter row
@@ -175,36 +173,25 @@ const statusFilter = multiFilter('status-filter', {
     { value: 'voided', label: 'Voided' },
     { value: 'error', label: 'Error' },
   ],
-  onChange: () => load(),
+  onChange: () => refetch(),
 });
-const userFilter = multiFilter('user-filter', { onChange: () => load() });
-const accountFilter = multiFilter('account-filter', { onChange: () => load() });
-const storeFilter = multiFilter('store-filter', { onChange: () => render() });
-const serviceFilter = multiFilter('service-filter', { onChange: () => render() });
-const carrierFilter = multiFilter('carrier-filter', { onChange: () => render() });
+const userFilter = multiFilter('user-filter', { onChange: () => refetch() });
+const accountFilter = multiFilter('account-filter', { onChange: () => refetch() });
+const storeFilter = multiFilter('store-filter', { onChange: () => refetch() });
+const serviceFilter = multiFilter('service-filter', { onChange: () => refetch() });
+const carrierFilter = multiFilter('carrier-filter', { onChange: () => refetch() });
 
-/* ---------- Client-side sorting & column filters over the fetched page ---------- */
+/* ---------- Server-side paging, sorting and filtering: allRows is the page
+   on screen; totals and filter options describe the whole table. ---------- */
+const PAGE_SIZES = [50, 100, 200, 500];
 let allRows = [];
-let renderedRows = [];
+let page = 1;
+let total = 0;
+let pageSize = Number(localStorage.getItem('parcels.pageSize'));
+if (!PAGE_SIZES.includes(pageSize)) pageSize = 100;
 let sortKey = null;
 let sortDir = 1;
-
-const SORT_VALUE = {
-  ref: (s) => (s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`).toLowerCase(),
-  user: (s) => (s.created_by || '').toLowerCase(),
-  store: (s) => (s.service_name || '').toLowerCase(),
-  address: (s) => formatAddress(s.destination).toLowerCase(),
-  boxes: (s) => s.box_total || 1,
-  size: (s) => boxVolume(s) || -1,
-  weight: (s) => s.total_weight_lb ?? -1,
-  account: (s) => (s.provider_label || '').toLowerCase(),
-  courier: (s) => (s.courier_name || '').toLowerCase(),
-  carrier: (s) => (s.courier_umbrella_name || '').toLowerCase(),
-  cost: (s) => s.shipping_cost ?? -1,
-  tracking: (s) => s.tracking_number || '',
-  status: (s) => s.status || '',
-  created: (s) => s.created_at || '',
-};
+const offset = () => (page - 1) * pageSize;
 
 document.querySelectorAll('th.sortable').forEach((th) => {
   th.addEventListener('click', () => {
@@ -213,7 +200,7 @@ document.querySelectorAll('th.sortable').forEach((th) => {
     else { sortKey = key; sortDir = 1; }
     document.querySelectorAll('th.sortable').forEach((h) => h.classList.remove('asc', 'desc'));
     th.classList.add(sortDir === 1 ? 'asc' : 'desc');
-    render();
+    refetch();
   });
 });
 
@@ -225,24 +212,11 @@ function fillOptions(id, values) {
   if (values.includes(current)) el.value = current;
 }
 
-function visibleRows() {
-  const stores = storeFilter.values;
-  const carriers = carrierFilter.values;
-  const services = serviceFilter.values;
-  const size = document.getElementById('size-filter').value;
-  let rows = allRows.filter((s) =>
-    (!stores.size || stores.has(s.service_name))
-    && (!carriers.size || carriers.has(s.courier_umbrella_name))
-    && (!services.size || services.has(s.courier_name))
-    && (!size || boxSize(s) === size));
-  if (sortKey) {
-    const val = SORT_VALUE[sortKey];
-    rows = [...rows].sort((a, b) => {
-      const va = val(a); const vb = val(b);
-      return ((va > vb) - (va < vb)) * sortDir;
-    });
-  }
-  return rows;
+/* Any change to what is being looked at starts over from page 1; load() alone
+   keeps the page for Refresh, the pager and row actions. */
+function refetch() {
+  page = 1;
+  return load();
 }
 
 async function load() {
@@ -251,58 +225,74 @@ async function load() {
     status: [...statusFilter.values].join(','),
     user: [...userFilter.values].join(','),
     provider: [...accountFilter.values].join(','),
+    store: [...storeFilter.values].join(','),
+    service: [...serviceFilter.values].join(','),
+    carrier: [...carrierFilter.values].join(','),
+    size: document.getElementById('size-filter').value,
     from: document.getElementById('date-from').value,
     to: document.getElementById('date-to').value,
+    sort: sortKey || '',
+    dir: sortDir === 1 ? 'asc' : 'desc',
+    limit: pageSize,
+    offset: offset(),
   });
   const tbody = document.getElementById('parcels-body');
   const empty = document.getElementById('empty');
   empty.style.display = 'none';
   tbody.innerHTML = '<tr><td colspan="16"><span class="spinner"></span> Loading…</td></tr>';
   try {
-    allRows = await api(`/api/shipments?${params}`);
-    const uniq = (vals) => [...new Set(vals.filter(Boolean))].sort();
-    storeFilter.setOptions(uniq(allRows.map((s) => s.service_name)));
-    carrierFilter.setOptions(uniq(allRows.map((s) => s.courier_umbrella_name)));
-    serviceFilter.setOptions(uniq(allRows.map((s) => s.courier_name)));
-    const sizes = [...new Map(allRows.filter(boxSize).map((s) => [boxSize(s), boxVolume(s)]))]
-      .sort((a, b) => a[1] - b[1]).map(([label]) => label);
-    fillOptions('size-filter', sizes);
+    const res = await api(`/api/shipments?${params}`);
+    allRows = res.rows;
+    total = res.total;
+    page = Math.floor(res.offset / pageSize) + 1;
+    renderTotals(res);
     render();
   } catch (err) {
     allRows = [];
-    renderTotals([]);
+    total = 0;
+    renderTotals({ total: 0 });
     tbody.innerHTML = '';
     empty.textContent = err.message;
     empty.style.display = '';
   }
+  renderPager();
 }
 
 /* Filter-aware totals: a summary line above the table and a totals row under
-   it, so the packer sees how many parcels/shipments the current view covers
-   and what the shipping cost added up to. */
-function renderTotals(rows) {
+   it, covering every parcel the current filters match — not just this page. */
+function renderTotals({ total: parcels, shipments, shipping_cost: cost }) {
   const bar = document.getElementById('parcels-summary');
   const foot = document.getElementById('parcels-foot');
-  if (!rows.length) {
+  if (!parcels) {
     bar.style.display = 'none';
     foot.innerHTML = '';
     return;
   }
-  const cost = rows.reduce((sum, s) => sum + (s.shipping_cost || 0), 0);
-  const shipments = new Set(rows.map((s) => s.group_id || `#${s.id}`)).size;
+  const n = (v) => v.toLocaleString();
   bar.style.display = '';
-  bar.innerHTML = `<span><strong>${shipments}</strong> shipment${shipments === 1 ? '' : 's'}</span>
-    <span><strong>${rows.length}</strong> parcel${rows.length === 1 ? '' : 's'}</span>
+  bar.innerHTML = `<span><strong>${n(shipments)}</strong> shipment${shipments === 1 ? '' : 's'}</span>
+    <span><strong>${n(parcels)}</strong> parcel${parcels === 1 ? '' : 's'}</span>
     <span>Shipping total <strong>${money(cost)}</strong></span>`;
   foot.innerHTML = `<tr>
     <td class="pin-num"></td>
     <td class="pin-ref">Total</td>
-    <td colspan="4">${shipments} shipment${shipments === 1 ? '' : 's'}, ${rows.length} parcel${rows.length === 1 ? '' : 's'}</td>
+    <td colspan="4">${n(shipments)} shipment${shipments === 1 ? '' : 's'}, ${n(parcels)} parcel${parcels === 1 ? '' : 's'}</td>
     <td class="col-size"></td>
     <td colspan="4"></td>
     <td class="num">${money(cost)}</td>
     <td colspan="3"></td>
     <td class="actions"></td></tr>`;
+}
+
+function renderPager() {
+  document.getElementById('pager').style.display = total ? '' : 'none';
+  if (!total) return;
+  const first = offset() + 1;
+  const last = Math.min(offset() + allRows.length, total);
+  document.getElementById('pager-range').textContent =
+    `${first.toLocaleString()}–${last.toLocaleString()} of ${total.toLocaleString()}`;
+  document.getElementById('page-prev').disabled = page <= 1;
+  document.getElementById('page-next').disabled = offset() + pageSize >= total;
 }
 
 /* ---------- Row actions: a slim pinned "⋯" column recalls a popover menu,
@@ -348,7 +338,7 @@ function closeRowMenu() {
 }
 
 function openRowMenu(btn) {
-  const items = rowActions(renderedRows[Number(btn.dataset.row)]);
+  const items = rowActions(allRows[Number(btn.dataset.row)]);
   const menu = document.createElement('div');
   menu.className = 'row-menu';
   menu.setAttribute('role', 'menu');
@@ -401,10 +391,8 @@ window.addEventListener('resize', () => { closeRowMenu(); closeFilterMenu(); });
 function render() {
   const tbody = document.getElementById('parcels-body');
   const empty = document.getElementById('empty');
-  const rows = visibleRows();
+  const rows = allRows;
   closeRowMenu();
-  renderedRows = rows;
-  renderTotals(rows);
   if (!rows.length) {
     tbody.innerHTML = '';
     empty.textContent = 'No parcels found.';
@@ -422,13 +410,13 @@ function render() {
         : '';
       const ref = s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
       return `<tr>
-        <td class="num col-narrow pin-num text-secondary">${rowIndex + 1}</td>
+        <td class="num col-narrow pin-num text-secondary">${offset() + rowIndex + 1}</td>
         <td class="pin-ref"><strong>${copyable(ref, 'order number')}</strong></td>
         <td class="col-narrow">${esc(s.created_by)}</td>
         <td class="ellip store" title="${esc(s.service_name)}">${esc(s.service_name)}</td>
         <td class="ellip address" title="${esc(formatAddress(s.destination))}">${esc(formatAddress(s.destination))}</td>
         <td class="num col-narrow">${boxesCell}</td>
-        <td class="col-narrow col-size">${esc(boxSize(s))}</td>
+        <td class="col-narrow col-size">${esc(s.box_size)}</td>
         <td class="num col-narrow">${s.total_weight_lb ?? ''}</td>
         <td class="ellip account" title="${esc(s.provider_label || '')}">${esc(s.provider_label || '')}</td>
         <td class="ellip service" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}${signatureChip(s.options)}</td>
@@ -625,14 +613,28 @@ window.retryUndo = async (id) => {
   }
 };
 
-document.getElementById('refresh').addEventListener('click', load);
+document.getElementById('refresh').addEventListener('click', () => { loadFilterOptions(); load(); });
 document.getElementById('search').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') load();
+  if (e.key === 'Enter') refetch();
 });
 ['date-from', 'date-to'].forEach((id) => {
-  document.getElementById(id).addEventListener('change', load);
+  document.getElementById(id).addEventListener('change', refetch);
 });
-document.getElementById('size-filter').addEventListener('change', render);
+document.getElementById('size-filter').addEventListener('change', refetch);
+
+const pageSizeSelect = document.getElementById('page-size');
+pageSizeSelect.value = String(pageSize);
+pageSizeSelect.addEventListener('change', () => {
+  pageSize = Number(pageSizeSelect.value);
+  localStorage.setItem('parcels.pageSize', String(pageSize));
+  refetch();
+});
+document.getElementById('page-prev').addEventListener('click', () => {
+  if (page > 1) { page -= 1; load(); }
+});
+document.getElementById('page-next').addEventListener('click', () => {
+  if (offset() + pageSize < total) { page += 1; load(); }
+});
 
 const showSize = document.getElementById('show-size');
 showSize.checked = localStorage.getItem('parcels.showSize') === '1';
@@ -644,7 +646,7 @@ showSize.addEventListener('change', () => {
   const sizeFilter = document.getElementById('size-filter');
   if (!showSize.checked && sizeFilter.value) {
     sizeFilter.value = '';
-    render();
+    refetch();
   }
   applySizeColumn();
 });
@@ -665,4 +667,5 @@ updateScrollShadows();
 
 loadUsers();
 loadAccounts();
+loadFilterOptions();
 load();

@@ -1118,6 +1118,31 @@ table.striped tfoot td {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- Pager under a server-paged table ---------- */
+.table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.table-pager .pager-size { display: inline-flex; align-items: center; gap: 8px; }
+.table-pager select {
+  height: 30px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--on-surface);
+  background: var(--surface);
+  border: 1px solid var(--outline-strong);
+  border-radius: 6px;
+}
+.table-pager .pager-range { font-variant-numeric: tabular-nums; min-width: 11ch; text-align: right; }
+.table-pager .pager-btn { width: 30px; padding: 0; font-size: 16px; line-height: 1; }
+.table-pager .pager-btn:disabled { opacity: .45; cursor: default; }
+
 /* ---------- In-table filter row ---------- */
 .filter-row th { padding: 12px 8px 14px; top: 36px; }
 .filter-row input, .filter-row select {
@@ -1242,7 +1267,7 @@ table.compact th, table.compact td { padding: 9px 8px; }
    the bottom of the viewport instead of below a page-tall table. */
 .parcels-wrap {
   --pin-num-w: 48px;
-  max-height: calc(100vh - 230px);
+  max-height: calc(100vh - 272px);
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--outline-strong) transparent;
