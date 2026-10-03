@@ -9,6 +9,7 @@ from werkzeug.security import check_password_hash
 
 import config
 import db
+import po_box
 import profit
 import providers
 import tag_rules
@@ -280,7 +281,23 @@ def get_rates():
                     (only_name, only_label, sid, json.dumps([sid]), rid),
                 )
 
+    # A provider that failed while another quoted would otherwise vanish silently.
+    warnings.extend(provider_errors)
+
+    to_po_box = po_box.is_po_box(destination)
+    hidden_carriers = []
+    if to_po_box:
+        all_rates, hidden_carriers = po_box.split_rates(all_rates)
+        note = f" (hidden: {', '.join(hidden_carriers)})" if hidden_carriers else ""
+        warnings.append(f"PO Box destination — only USPS-deliverable services are shown{note}.")
+
     if not all_rates:
+        if hidden_carriers:
+            return api_error(
+                "This address is a PO Box — none of the quoted services deliver to PO Boxes "
+                f"(quoted: {', '.join(hidden_carriers)}). Use a USPS service or ship to a street address.",
+                422,
+            )
         if had_rates:
             return api_error(
                 "Every available courier service is excluded — adjust exclusions in Settings.", 422
@@ -319,6 +336,7 @@ def get_rates():
         "options": options,
         "warnings": warnings,
         "economics": economics,
+        "po_box": to_po_box,
     })
 
 
