@@ -1,4 +1,5 @@
 import sys
+import threading
 import types
 import unittest
 
@@ -11,17 +12,31 @@ sys.modules.setdefault("db", types.SimpleNamespace(
 from providers import shipstation as ss  # noqa: E402
 from providers.base import LabelStatus, ProviderError  # noqa: E402
 
-UPS, FEDEX = "se-100", "se-200"
+UPS, FEDEX, STAMPS = "se-100", "se-200", "se-300"
 CATALOG = {(UPS, "ups_ground"): "UPS® Ground", (UPS, "ups_nda"): "UPS Next Day Air®",
            (FEDEX, "fedex_ground"): "FedEx Ground®"}
-NAMES = {UPS: "UPS", FEDEX: "FedEx"}
+NAMES = {UPS: "UPS", FEDEX: "FedEx", STAMPS: "Stamps.com"}
+CODES = {UPS: "ups", FEDEX: "fedex", STAMPS: "stamps_com"}
+
+# UPS rates multi-package shipments; its SurePost and every USPS service only
+# rate one package at a time.
+MIXED_CARRIERS = [
+    {"carrier_id": UPS, "carrier_code": "ups", "friendly_name": "UPS",
+     "has_multi_package_supporting_services": True,
+     "services": [{"service_code": "ups_ground", "name": "UPS® Ground", "is_multi_package_supported": True},
+                  {"service_code": "ups_surepost", "name": "UPS SurePost", "is_multi_package_supported": False}]},
+    {"carrier_id": STAMPS, "carrier_code": "stamps_com", "friendly_name": "Stamps.com",
+     "has_multi_package_supporting_services": False,
+     "services": [{"service_code": "usps_priority_mail", "name": "USPS Priority Mail",
+                   "is_multi_package_supported": False}]},
+]
 
 
 def rate(carrier_id, service_code, shipping, other=0.0, confirmation=0.0, days=3, **extra):
     return {
         "rate_id": f"se-r-{carrier_id}-{service_code}-{shipping}",
         "carrier_id": carrier_id,
-        "carrier_code": "ups" if carrier_id == UPS else "fedex",
+        "carrier_code": CODES[carrier_id],
         "carrier_friendly_name": NAMES[carrier_id],
         "service_code": service_code,
         "service_type": service_code.upper(),
@@ -78,6 +93,117 @@ class CombineRatesTest(unittest.TestCase):
 
     def test_no_rates_yields_no_quotes(self):
         self.assertEqual(ss._combine_rates([]), [])
+
+    def test_per_box_quotes_keep_only_services_every_box_got_and_sum_them(self):
+        box1 = [rate(STAMPS, "usps_priority_mail", 7.0, days=2), rate(UPS, "ups_surepost", 6.0, days=5)]
+        box2 = [rate(STAMPS, "usps_priority_mail", 9.0, other=0.5, days=3)]
+        out = [(r.provider_service_id, r.total_charge, r.min_delivery_time, r.value_for_money_rank)
+               for r in ss._combine_per_box([box1, box2], CATALOG, NAMES)]
+        self.assertEqual(out, [(f"{STAMPS}:usps_priority_mail", 16.5, 3, 1)])
+
+
+class MultiPackageSupportTest(unittest.TestCase):
+    def test_service_flag_wins_then_carrier_flag_then_assumed_supported(self):
+        carriers = MIXED_CARRIERS + [{"carrier_id": FEDEX, "carrier_code": "fedex",
+                                      "services": [{"service_code": "fedex_ground"}]}]
+        self.assertEqual(
+            [ss._supports_multi_package(carriers, cid, code) for cid, code in
+             ((UPS, "ups_ground"), (UPS, "ups_surepost"), (STAMPS, "usps_priority_mail"),
+              (STAMPS, "usps_unlisted"), (FEDEX, "fedex_ground"), ("se-999", "x"))],
+            [True, False, False, False, True, True])
+
+
+class MultiBoxRatingTest(unittest.TestCase):
+    """Two or more boxes: multi-package-capable services are rated as one
+    shipment, the rest one box at a time, and the quotes are merged."""
+
+    def setUp(self):
+        self._orig = (ss._request, ss._carriers, ss._origin_address, ss.db.get_setting)
+        self.calls = []
+        ss._carriers = lambda auth, force=False: MIXED_CARRIERS
+        ss._origin_address = lambda *a, **k: {"name": "W"}
+        ss.db.get_setting = lambda key, default=None: "key" if key.endswith("_api_key") else default
+
+    def tearDown(self):
+        ss._request, ss._carriers, ss._origin_address, ss.db.get_setting = self._orig
+
+    def fake_rates(self, responses):
+        """responses: {carrier_ids tuple: response} for the multi-package call,
+        or {carrier_ids tuple: {box weight: response}} for the per-box calls,
+        which run in parallel and so cannot be answered in call order."""
+        lock = threading.Lock()
+
+        def fake_request(method, path, json_body=None, params=None, timeout=45, auth=None):
+            ids = tuple(json_body["rate_options"]["carrier_ids"])
+            packages = json_body["shipment"]["packages"]
+            with lock:
+                self.calls.append((ids, len(packages)))
+            resp = responses[ids]
+            return resp if "shipment_id" in resp else resp[packages[0]["weight"]["value"]]
+        ss._request = fake_request
+
+    def rate_boxes(self):
+        return ss.ShipStationProvider().create_draft_shipments(
+            {"address1": "PO Box 1"}, [{"weight": 1}, {"weight": 2}], [])
+
+    def test_mixed_carriers_rate_both_ways_and_share_the_multi_package_draft(self):
+        self.fake_rates({
+            (UPS,): {"shipment_id": "se-M", "rate_response": {"rates": [
+                rate(UPS, "ups_ground", 20.0), rate(UPS, "ups_surepost", 1.0)]}},
+            (UPS, STAMPS): {
+                1.0: {"shipment_id": "se-B1", "rate_response": {"rates": [
+                    rate(STAMPS, "usps_priority_mail", 7.0), rate(UPS, "ups_surepost", 6.0),
+                    rate(UPS, "ups_ground", 11.0)]}},
+                2.0: {"shipment_id": "se-B2", "rate_response": {"rates": [
+                    rate(STAMPS, "usps_priority_mail", 8.0), rate(UPS, "ups_surepost", 6.5)]}},
+            },
+        })
+        drafts, rates, warnings = self.rate_boxes()
+        self.assertEqual(sorted(self.calls), [((UPS,), 2), ((UPS, STAMPS), 1), ((UPS, STAMPS), 1)])
+        self.assertEqual(
+            ([d.provider_shipment_id for d in drafts],
+             [(r.provider_service_id, r.total_charge, r.value_for_money_rank) for r in rates], warnings),
+            (["se-M#1", "se-M#2"],
+             [(f"{UPS}:ups_surepost", 12.5, 1), (f"{STAMPS}:usps_priority_mail", 15.0, None),
+              (f"{UPS}:ups_ground", 20.0, None)],
+             []))
+
+    def test_only_single_package_carriers_draft_one_shipment_per_box(self):
+        ss._carriers = lambda auth, force=False: MIXED_CARRIERS[1:]
+        self.fake_rates({(STAMPS,): {
+            1.0: {"shipment_id": "se-B1", "rate_response": {"rates": [rate(STAMPS, "usps_priority_mail", 7.0)]}},
+            2.0: {"shipment_id": "se-B2", "rate_response": {"rates": [rate(STAMPS, "usps_priority_mail", 8.0)]}},
+        }})
+        drafts, rates, _ = self.rate_boxes()
+        self.assertEqual(([d.provider_shipment_id for d in drafts], [r.total_charge for r in rates]),
+                         (["se-B1", "se-B2"], [15.0]))
+
+    def test_a_carrier_refusal_on_the_multi_package_call_does_not_hide_per_box_quotes(self):
+        self.fake_rates({
+            (UPS,): {"shipment_id": "se-M", "rate_response": {"rates": [], "errors": [
+                {"message": "Address appears to be a PO Box. UPS does not deliver to PO Boxes."}]}},
+            (UPS, STAMPS): {
+                1.0: {"shipment_id": "se-B1", "rate_response": {"rates": [rate(STAMPS, "usps_priority_mail", 7.0)]}},
+                2.0: {"shipment_id": "se-B2", "rate_response": {"rates": [rate(STAMPS, "usps_priority_mail", 8.0)]}},
+            },
+        })
+        drafts, rates, _ = self.rate_boxes()
+        self.assertEqual(([d.provider_shipment_id for d in drafts], [r.provider_service_id for r in rates]),
+                         (["se-M#1", "se-M#2"], [f"{STAMPS}:usps_priority_mail"]))
+
+    def test_no_quotes_anywhere_raises_with_every_carrier_reason(self):
+        self.fake_rates({
+            (UPS,): {"shipment_id": "se-M", "rate_response": {"rates": [], "errors": [
+                {"message": "UPS does not deliver to PO Boxes."}]}},
+            (UPS, STAMPS): {
+                1.0: {"shipment_id": "se-B1", "rate_response": {"rates": [], "errors": [{"message": "Too heavy"}]}},
+                2.0: {"shipment_id": "se-B2", "rate_response": {"rates": []}},
+            },
+        })
+        with self.assertRaises(ProviderError) as ctx:
+            self.rate_boxes()
+        self.assertEqual(str(ctx.exception),
+                         "ShipStation rating failed: UPS does not deliver to PO Boxes. | Too heavy")
 
 
 class BoxIdTest(unittest.TestCase):
@@ -268,6 +394,47 @@ class GroupedBuyTest(unittest.TestCase):
             {"se-s-9#1": (["1Z-A"], 5.0, LabelStatus.READY),
              "se-s-9#2": (["1Z-B"], 5.0, LabelStatus.READY)})
 
+    def test_single_package_service_buys_each_box_from_its_slice_of_the_shared_draft(self):
+        ss._carriers = lambda auth, force=False: MIXED_CARRIERS
+        bodies = []
+        orig = ss._request
+
+        def fake(method, path, json_body=None, params=None, timeout=45, auth=None):
+            if (method, path) == ("POST", "/v2/labels"):
+                bodies.append(json_body["shipment"])
+                return {"label_id": f"se-l-{len(bodies)}", "status": "completed", "carrier_id": STAMPS,
+                        "carrier_code": "stamps_com", "service_code": "usps_priority_mail",
+                        "tracking_number": f"94{len(bodies)}",
+                        "shipment_cost": {"currency": "usd", "amount": 7.0},
+                        "packages": [{"tracking_number": f"94{len(bodies)}"}]}
+            return orig(method, path, json_body, params, timeout, auth)
+
+        ss._request = fake
+        out = ss.ShipStationProvider().buy_labels(["se-s-9#1", "se-s-9#2"], f"{STAMPS}:usps_priority_mail")
+        self.assertEqual(
+            sorted((b["external_shipment_id"], b["packages"]) for b in bodies),
+            [("se-s-9#1", [{"weight": {"value": 1, "unit": "pound"}}]),
+             ("se-s-9#2", [{"weight": {"value": 2, "unit": "pound"}}])])
+        self.assertEqual(
+            {bid: (len(st.tracking_numbers), st.cost, st.label_status) for bid, st in out.items()},
+            {"se-s-9#1": (1, 7.0, LabelStatus.READY), "se-s-9#2": (1, 7.0, LabelStatus.READY)})
+        self.assertNotEqual(out["se-s-9#1"].provider_shipment_id, out["se-s-9#2"].provider_shipment_id)
+
+    def test_poll_finds_per_box_labels_bought_from_a_shared_draft(self):
+        orig = ss._request
+
+        def fake(method, path, json_body=None, params=None, timeout=45, auth=None):
+            if (method, path) == ("GET", "/v2/labels") and "#" in params["external_shipment_id"]:
+                return {"labels": [{"label_id": f"se-l-{params['external_shipment_id'][-1]}",
+                                    "status": "completed", "carrier_id": UPS, "carrier_code": "ups",
+                                    "service_code": "ups_surepost", "tracking_number": "1Z"}]}
+            return orig(method, path, json_body, params, timeout, auth)
+
+        ss._request = fake
+        out = ss.ShipStationProvider().poll_shipments(["se-s-9#1", "se-s-9#2"])
+        self.assertEqual({bid: (st.provider_shipment_id, st.label_status) for bid, st in out.items()},
+                         {"se-s-9#1": ("se-l-1", LabelStatus.READY), "se-s-9#2": ("se-l-2", LabelStatus.READY)})
+
     def test_second_instance_reads_its_own_api_key(self):
         ss.ShipStationProvider("shipstation-5", "East").buy_labels(["se-s-9"], f"{UPS}:ups_ground")
         self.assertIn("shipstation-5_api_key", self.settings_read)
@@ -324,7 +491,7 @@ class DescriptorTest(unittest.TestCase):
         carriers = [{"carrier_id": UPS, "carrier_code": "ups", "friendly_name": "UPS"},
                     {"carrier_id": FEDEX, "carrier_code": "fedex", "friendly_name": "FedEx"}]
         self.assertEqual((provider.rating_carriers(carriers), provider.carrier_names(carriers)),
-                         (carriers, NAMES))
+                         (carriers, {UPS: "UPS", FEDEX: "FedEx"}))
 
     def test_list_carriers_uses_disambiguated_names(self):
         orig = (ss._carriers, ss.db.get_setting)

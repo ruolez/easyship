@@ -20,6 +20,12 @@ hundredweight tiers) apply. The app's group/box machinery still wants one id
 and one label per box, so the adapter hands out synthetic per-box ids
 ("<shipment_id>#<box>"): one purchase produces one label whose packages[]
 carry per-box tracking numbers and label downloads.
+
+Services that cannot rate several packages at once (every USPS service, UPS
+SurePost — `is_multi_package_supported` in the carrier catalog) are rated one
+box at a time and offered only when every box got them, priced as the sum;
+buying one slices that box's package out of the shared draft, so each box
+gets its own label, tagged "<shipment_id>#<box>" for idempotency.
 """
 import hashlib
 import json
@@ -351,33 +357,74 @@ def _cheapest_by_service(rates):
     return out
 
 
-def _combine_rates(rates, catalog=None, carrier_names=None, provider=PRIMARY_KEY):
-    """Quotes for one shipment (which may carry several packages): the cheapest
-    usable rate per service, sorted by price. The cheapest is flagged as best
-    value (ShipStation has no best-value attribute of its own). `provider` is
-    the instance key."""
-    catalog = catalog or {}
-    carrier_names = carrier_names or {}
-    combined = []
-    for sid, r in _cheapest_by_service(rates).items():
-        key = (r.get("carrier_id"), r.get("service_code"))
-        days = int(r.get("delivery_days") or 0) or None
-        combined.append(Rate(
-            provider=provider,
-            provider_service_id=sid,
-            courier_name=catalog.get(key) or r.get("service_type") or r.get("service_code") or sid,
-            umbrella_name=(carrier_names.get(r.get("carrier_id"))
-                           or r.get("carrier_friendly_name") or r.get("carrier_code") or ""),
-            total_charge=_rate_total(r),
-            currency=((r.get("shipping_amount") or {}).get("currency") or "USD").upper(),
-            min_delivery_time=days,
-            max_delivery_time=days,
-            value_for_money_rank=None,
-        ))
+def _supports_multi_package(carriers, carrier_id, service_code):
+    """Whether one label can carry several packages on this service: the
+    service's own flag, else the carrier's, else assumed (the pre-flag behaviour)."""
+    for c in carriers:
+        if c.get("carrier_id") != carrier_id:
+            continue
+        for s in c.get("services") or []:
+            if s.get("service_code") == service_code and s.get("is_multi_package_supported") is not None:
+                return bool(s["is_multi_package_supported"])
+        flag = c.get("has_multi_package_supporting_services")
+        return True if flag is None else bool(flag)
+    return True
+
+
+def _quote(r, total, days, catalog, carrier_names, provider):
+    key = (r.get("carrier_id"), r.get("service_code"))
+    return Rate(
+        provider=provider,
+        provider_service_id=_service_id(r),
+        courier_name=catalog.get(key) or r.get("service_type") or r.get("service_code") or _service_id(r),
+        umbrella_name=(carrier_names.get(r.get("carrier_id"))
+                       or r.get("carrier_friendly_name") or r.get("carrier_code") or ""),
+        total_charge=total,
+        currency=((r.get("shipping_amount") or {}).get("currency") or "USD").upper(),
+        min_delivery_time=days,
+        max_delivery_time=days,
+        value_for_money_rank=None,
+    )
+
+
+def _rank(combined):
+    """Cheapest first and flagged as best value (ShipStation has no best-value
+    attribute of its own)."""
     combined.sort(key=lambda r: r.total_charge)
+    for r in combined:
+        r.value_for_money_rank = None
     if combined:
         combined[0].value_for_money_rank = 1
     return combined
+
+
+def _combine_rates(rates, catalog=None, carrier_names=None, provider=PRIMARY_KEY):
+    """Quotes for one shipment (which may carry several packages): the cheapest
+    usable rate per service. `provider` is the instance key."""
+    catalog = catalog or {}
+    carrier_names = carrier_names or {}
+    return _rank([
+        _quote(r, _rate_total(r), int(r.get("delivery_days") or 0) or None, catalog, carrier_names, provider)
+        for r in _cheapest_by_service(rates).values()
+    ])
+
+
+def _combine_per_box(rate_lists, catalog=None, carrier_names=None, provider=PRIMARY_KEY):
+    """Quotes across one shipment per box: only services every box got, priced
+    as the sum of the per-box labels, delivery as the slowest box."""
+    catalog = catalog or {}
+    carrier_names = carrier_names or {}
+    per_box = [_cheapest_by_service(rs) for rs in rate_lists]
+    if not per_box:
+        return []
+    common = set.intersection(*(set(m) for m in per_box))
+    combined = []
+    for sid in common:
+        rs = [m[sid] for m in per_box]
+        days = max(int(r.get("delivery_days") or 0) for r in rs) or None
+        combined.append(_quote(rs[0], round(sum(_rate_total(r) for r in rs), 2), days,
+                               catalog, carrier_names, provider))
+    return _rank(combined)
 
 
 def _label_status(label):
@@ -460,14 +507,18 @@ def _map_parallel(items, fn):
     return out
 
 
-def _inline_shipment(draft, carrier_id, service_code, external_shipment_id, ship_from=None):
+def _inline_shipment(draft, carrier_id, service_code, external_shipment_id, ship_from=None,
+                     package_index=None):
     """Rebuild a purchasable shipment from a draft fetched via GET /v2/shipments:
     only whitelisted fields so read-only/draft-only properties never leak into
     the label request. `ship_from` is the origin to use when the draft carries
-    none (e.g. it was rated against a warehouse)."""
+    none (e.g. it was rated against a warehouse). `package_index` buys just
+    that one package of a multi-package draft."""
     def pick(obj, fields):
         return {k: v for k, v in (obj or {}).items() if k in fields and v not in (None, "")}
     packages = [pick(p, PACKAGE_FIELDS) for p in draft.get("packages") or []]
+    if package_index is not None:
+        packages = packages[package_index:package_index + 1]
     origin = pick(draft.get("ship_from"), ADDRESS_FIELDS) or dict(ship_from or {})
     if not packages or not draft.get("ship_to") or not origin:
         raise ProviderError("ShipStation draft shipment is missing address or package details")
@@ -519,31 +570,76 @@ class ShipStationProvider(ShippingProvider):
         ship_from = _origin_address(origin)
         ship_to = _dest_address(destination, origin.get("origin_email"))
         confirmation = CONFIRMATION.get((options or {}).get("signature") or "none")
-        # One shipment carrying every box: multi-package rating is how the
-        # ShipStation site quotes, and the only way multi-package discounts
-        # (single pickup fee, multi-piece/hundredweight tiers) apply.
-        shipment = {
-            "validate_address": "no_validation",
-            "ship_to": ship_to,
-            "ship_from": ship_from,
-            "packages": [_build_package(p) for p in parcels],
-        }
-        if confirmation:
-            shipment["confirmation"] = confirmation
-        resp = _request("POST", "/v2/rates",
-                        json_body={"shipment": shipment, "rate_options": {"carrier_ids": carrier_ids}},
-                        timeout=60, auth=auth)
-        rate_response = resp.get("rate_response") or {}
-        rates = rate_response.get("rates") or []
-        if not rates and rate_response.get("errors"):
-            msgs = [e.get("message") for e in rate_response["errors"] if isinstance(e, dict) and e.get("message")]
-            raise ProviderError("ShipStation rating failed: " + (" | ".join(msgs) or "no rates"))
-        shipment_id = resp.get("shipment_id")
-        if not shipment_id:
+        catalog, names = _service_catalog(carriers), self.carrier_names(carriers)
+        errors = []
+
+        def rate_call(packages, ids):
+            """(shipment_id, rates) for one POST /v2/rates; carrier refusals are
+            collected so one carrier's objection cannot hide another's quotes."""
+            shipment = {
+                "validate_address": "no_validation",
+                "ship_to": ship_to,
+                "ship_from": ship_from,
+                "packages": [_build_package(p) for p in packages],
+            }
+            if confirmation:
+                shipment["confirmation"] = confirmation
+            resp = _request("POST", "/v2/rates",
+                            json_body={"shipment": shipment, "rate_options": {"carrier_ids": ids}},
+                            timeout=60, auth=auth)
+            rate_response = resp.get("rate_response") or {}
+            errors.extend(e.get("message") for e in rate_response.get("errors") or []
+                          if isinstance(e, dict) and e.get("message"))
+            shipment_id = resp.get("shipment_id")
+            if not shipment_id:
+                raise ProviderError("ShipStation did not return a shipment id")
+            return shipment_id, rate_response.get("rates") or []
+
+        def multi_ok(quote):
+            return _supports_multi_package(carriers, *_split_service_id(quote.provider_service_id))
+
+        if len(parcels) == 1:
+            shipment_id, rates = rate_call(parcels, carrier_ids)
+            drafts = [DraftShipment(shipment_id)]
+            combined = _combine_rates(rates, catalog, names, provider=self.name)
+        else:
+            # One shipment carrying every box: multi-package rating is how the
+            # ShipStation site quotes, and the only way multi-package discounts
+            # (single pickup fee, multi-piece/hundredweight tiers) apply.
+            multi_ids = [c["carrier_id"] for c in carriers
+                         if c.get("carrier_id") and _supports_multi_package(carriers, c["carrier_id"], None)]
+            # Carriers with a service that rates one package at a time (USPS,
+            # UPS SurePost) are rated once per box as well.
+            single_ids = [c["carrier_id"] for c in carriers if c.get("carrier_id") and any(
+                not _supports_multi_package(carriers, c["carrier_id"], s.get("service_code"))
+                for s in c.get("services") or [])]
+            multi = rate_call(parcels, multi_ids) if multi_ids else None
+            per_box = {}
+            if single_ids:
+                per_box = _map_parallel(list(range(len(parcels))),
+                                        lambda i: rate_call([parcels[i]], single_ids))
+                failed = [r for r in per_box.values() if isinstance(r, ProviderError)]
+                if failed:
+                    errors.extend(str(e) for e in failed)
+                    per_box = {}
+            combined = []
+            if multi:
+                combined += [q for q in _combine_rates(multi[1], catalog, names, provider=self.name) if multi_ok(q)]
+            if per_box:
+                combined += [q for q in _combine_per_box([per_box[i][1] for i in range(len(parcels))],
+                                                         catalog, names, provider=self.name) if not multi_ok(q)]
+            combined = _rank(combined)
+            if multi:
+                drafts = [DraftShipment(_box_id(multi[0], i, len(parcels))) for i in range(len(parcels))]
+            elif per_box:
+                drafts = [DraftShipment(per_box[i][0]) for i in range(len(parcels))]
+            else:
+                drafts = []
+        if not combined and errors:
+            raise ProviderError("ShipStation rating failed: " + " | ".join(dict.fromkeys(errors)))
+        if not drafts:
             raise ProviderError("ShipStation did not return a shipment id")
-        drafts = [DraftShipment(_box_id(shipment_id, i, len(parcels))) for i in range(len(parcels))]
-        return drafts, _combine_rates(rates, _service_catalog(carriers), self.carrier_names(carriers),
-                                      provider=self.name), []
+        return drafts, combined, []
 
     def get_excluded_service_ids(self):
         raw = self.setting("excluded_service_ids")
@@ -588,18 +684,29 @@ class ShipStationProvider(ShippingProvider):
 
         # Several box ids can share one multi-package shipment — purchase once
         # per shipment, then hand each box its own package's view of the label.
+        # A service that cannot carry several packages is bought once per box
+        # instead, each from its own slice of the shared draft.
         by_base = {}
         for bid in provider_shipment_ids:
             base, _ = _split_box_id(bid)
             by_base.setdefault(base, []).append(bid)
+        multi_ok = _supports_multi_package(carriers, carrier_id, service_code)
+        purchases = {}  # external id -> (draft id, package index or None, box ids it covers)
+        for base, bids in by_base.items():
+            if len(bids) > 1 and not multi_ok:
+                for bid in bids:
+                    purchases[bid] = (base, _split_box_id(bid)[1], [bid])
+            else:
+                purchases[base] = (base, None, bids)
 
-        def work(base):
-            existing = self._existing_label(base, auth)
+        def work(external_id):
+            existing = self._existing_label(external_id, auth)
             if existing is not None:
                 return existing
+            base, index, _ = purchases[external_id]
             draft = _request("GET", f"/v2/shipments/{base}", auth=auth)
             body = {
-                "shipment": _inline_shipment(draft, carrier_id, service_code, base, origin),
+                "shipment": _inline_shipment(draft, carrier_id, service_code, external_id, origin, index),
                 "test_label": test_label,
                 "validate_address": "no_validation",
                 "label_format": label_format,
@@ -610,13 +717,13 @@ class ShipStationProvider(ShippingProvider):
                 return _request("POST", "/v2/labels", json_body=body, timeout=90, auth=auth)
             except ProviderError as e:
                 if e.recoverable:
-                    raise  # captured per base by _map_parallel; the buy loop re-checks
+                    raise  # captured per purchase by _map_parallel; the buy loop re-checks
                 return ("failed", e)  # deterministic rejection — don't retry it every poll
 
-        results = _map_parallel(list(by_base), work)
+        results = _map_parallel(list(purchases), work)
         out = {}
-        for base, bids in by_base.items():
-            res = results.get(base)
+        for external_id, (_, _, bids) in purchases.items():
+            res = results.get(external_id)
             for bid in bids:
                 if isinstance(res, ProviderError):
                     out[bid] = res
@@ -637,20 +744,26 @@ class ShipStationProvider(ShippingProvider):
             by_base.setdefault(base, []).append(bid)
 
         def work(base):
-            return self._existing_label(base, auth)
+            """The shared label, or — when the boxes were bought one at a time
+            from this draft — each box's own label keyed by box id."""
+            label = self._existing_label(base, auth)
+            if label is not None or len(by_base[base]) == 1:
+                return label
+            return {bid: self._existing_label(bid, auth) for bid in by_base[base]}
 
         results = _map_parallel(list(by_base), work)
         out = {}
         for base, bids in by_base.items():
             res = results.get(base)
             for bid in bids:
-                if isinstance(res, ProviderError):
-                    out[bid] = res
-                elif res is None:
+                label = res.get(bid) if isinstance(res, dict) and "label_id" not in res else res
+                if isinstance(label, ProviderError):
+                    out[bid] = label
+                elif label is None:
                     out[bid] = ShipmentState(provider_shipment_id=bid,
                                              label_status=LabelStatus.NOT_CREATED, raw={})
                 else:
-                    out[bid] = _to_state(res, catalog, names, box_id=bid)
+                    out[bid] = _to_state(label, catalog, names, box_id=bid)
         return out
 
     def fetch_labels(self, state):
