@@ -78,7 +78,7 @@ The Ship page reads a USB HID scale via WebHID and live-fills the focused weight
 - Units: UI takes **lb/in**; the backend converts to kg/cm for Easyship.
 - Multi-box: add boxes on the Ship page. If no rates come back, some couriers don't support multi-parcel — ship one box per shipment instead.
 - Easyship API version `2024-09`; sandbox base URL `https://public-api-sandbox.easyship.com`.
-- Shopify Admin GraphQL API version `2025-07` (queries validated against the schema).
+- Shopify Admin GraphQL API version `2026-01` (queries validated against the schema).
 - API tokens live in the Postgres `settings` table and are masked in all API responses; `.env` holds only infra secrets.
 
 ## Development

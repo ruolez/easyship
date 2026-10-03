@@ -7,7 +7,7 @@ sys.modules.setdefault("db", types.SimpleNamespace(
     get_setting=lambda *a, **k: None, set_setting=lambda *a, **k: None,
     query=lambda *a, **k: None, execute=lambda *a, **k: None))
 sys.modules.setdefault("config", types.SimpleNamespace(
-    SHOPIFY_API_VERSION="2025-07", EASYSHIP_BASE_URLS={}, LABELS_DIR="/tmp",
+    SHOPIFY_API_VERSION="2026-01", EASYSHIP_BASE_URLS={}, LABELS_DIR="/tmp",
     MANIFESTS_DIR="/tmp"))
 
 from flask import Flask  # noqa: E402
@@ -16,6 +16,7 @@ from werkzeug.security import generate_password_hash  # noqa: E402
 import profit  # noqa: E402
 import providers  # noqa: E402
 import shipments_api  # noqa: E402
+import shopify_client  # noqa: E402
 
 PASSWORD = "open-sesame"
 RATE = {"provider": "fake", "courier_service_id": "svc-1", "courier_name": "Fake Ground",
@@ -33,6 +34,7 @@ class FakeProvider:
 
 def row(**over):
     base = {"id": 7, "group_id": "g1", "box_number": 1, "box_total": 1, "source": "shopify",
+            "shopify_store_id": 3, "shopify_order_id": None, "order_gate": None,
             "shopify_order_name": "#1001", "backoffice_invoice_number": None, "status": "rated",
             "courier_service_id": None, "rate": None, "provider": "fake",
             "provider_drafts": {"fake": "draft-1"}, "easyship_shipment_id": None,
@@ -42,9 +44,9 @@ def row(**over):
     return base
 
 
-class ProfitGateTest(unittest.TestCase):
-    """A buy below the profit threshold is refused unless the bypass password
-    is supplied; the label cost comes from the server's own rate snapshot."""
+class BuyRouteTest(unittest.TestCase):
+    """The buy route with the database, providers, the worker thread and the
+    audit log faked; subclasses add the cases."""
 
     def setUp(self):
         app = Flask(__name__)
@@ -86,6 +88,11 @@ class ProfitGateTest(unittest.TestCase):
             if "profit_check" in sql:
                 return json.loads(params[0])["cleared"]
         return None
+
+
+class ProfitGateTest(BuyRouteTest):
+    """A buy below the profit threshold is refused unless the bypass password
+    is supplied; the label cost comes from the server's own rate snapshot."""
 
     def test_below_threshold_without_password_is_refused_with_the_breakdown(self):
         status, body = self._buy()
@@ -156,6 +163,102 @@ class ProfitGateTest(unittest.TestCase):
         self.rows = [row(status="error", profit_check=check)]
         status, body = self._buy()
         self.assertEqual((status, body["started"], self.audits), (200, True, []))
+
+
+GID = "gid://shopify/Order/1"
+SHIPPABLE = {"shippable": True, "label": None, "reasons": [], "on_hold": False, "fully_paid": True,
+             "financial_status": "PAID", "holds": [], "outstanding": 0.0, "currency": "USD"}
+HELD = dict(SHIPPABLE, shippable=False, label="On hold", on_hold=True,
+            reasons=["Fulfillment is on hold in Shopify: Awaiting payment"])
+UNPAID = dict(SHIPPABLE, shippable=False, label="Partially paid", fully_paid=False,
+              financial_status="PARTIALLY_PAID", outstanding=12.0,
+              reasons=["The order is only partially paid — $12.00 outstanding"])
+
+
+class OrderGateBuyTest(BuyRouteTest):
+    """A Shopify order on hold or not fully paid is refused outright, from
+    Shopify's live answer or the rate-time snapshot, before any profit prompt."""
+
+    def setUp(self):
+        super().setUp()
+        self.settings[profit.SETTING_MIN_AMOUNT] = "-20"   # profit gate passes
+        self.rows = [row(shopify_order_id=GID, order_gate=SHIPPABLE)]
+        self.lookups = []
+        self.live = SHIPPABLE
+        self.live_error = None
+        self._orig_gate = shopify_client.get_order_gate
+
+        def get_order_gate(store_id, gid):
+            self.lookups.append((store_id, gid))
+            if self.live_error:
+                raise self.live_error
+            return self.live
+        shopify_client.get_order_gate = get_order_gate
+
+    def tearDown(self):
+        shopify_client.get_order_gate = self._orig_gate
+        super().tearDown()
+
+    def test_held_order_is_refused_live_before_the_profit_gate(self):
+        self.settings[profit.SETTING_MIN_AMOUNT] = "10"   # would also ask for the password
+        self.live = HELD
+        status, body = self._buy()
+        self.assertEqual((status, body, self.lookups), (403, {
+            "error": "A label cannot be bought for this order — Fulfillment is on hold in Shopify: Awaiting payment",
+            "code": "order_gate", "gate": HELD, "live": True}, [(3, GID)]))
+        self.assertEqual((self.audits, self._cleared_marker()), ([("order_gate.refused", {
+            "group_id": "g1", "order": "#1001", "provider": "fake", "courier_service_id": "svc-1",
+            "live": True, "label": "On hold", "reasons": HELD["reasons"],
+            "financial_status": "PAID", "on_hold": True})], None))
+
+    def test_partially_paid_order_is_refused_with_the_payment_reason(self):
+        self.live = UNPAID
+        status, body = self._buy()
+        self.assertEqual((status, body["code"], body["gate"]["label"], body["error"]), (
+            403, "order_gate", "Partially paid",
+            "A label cannot be bought for this order — The order is only partially paid — $12.00 outstanding"))
+
+    def test_live_shippable_answer_overrides_a_stale_blocked_snapshot(self):
+        self.rows = [row(shopify_order_id=GID, order_gate=HELD)]
+        status, body = self._buy()
+        self.assertEqual((status, body["started"], self.audits), (200, True, []))
+
+    def test_unreachable_shopify_falls_back_to_the_snapshot(self):
+        self.rows = [row(shopify_order_id=GID, order_gate=HELD)]
+        self.live_error = shopify_client.ShopifyUnavailable("down")
+        status, body = self._buy()
+        self.assertEqual((status, body["code"], body["live"], self.audits[0][1]["live"]),
+                         (403, "order_gate", False, False))
+
+    def test_unreachable_shopify_with_no_snapshot_allows_the_buy(self):
+        self.rows = [row(shopify_order_id=GID, order_gate=None)]
+        self.live_error = shopify_client.ShopifyUnavailable("down")
+        status, body = self._buy()
+        self.assertEqual((status, body["started"]), (200, True))
+
+    def test_draft_that_never_loaded_its_order_is_not_checked(self):
+        self.rows = [row(shopify_order_id=None, order_gate=None)]
+        status, body = self._buy()
+        self.assertEqual((status, body["started"], self.lookups), (200, True, []))
+
+    def test_manual_and_backoffice_rows_are_not_checked(self):
+        self.live = HELD
+        for source in ("manual", "backoffice"):
+            with self.subTest(source=source):
+                self.rows = [row(source=source, shopify_order_id=None, order_gate=HELD)]
+                status, body = self._buy()
+                self.assertEqual((status, body["started"], self.lookups), (200, True, []))
+
+    def test_resume_of_an_errored_row_is_checked_again(self):
+        self.rows = [row(shopify_order_id=GID, order_gate=SHIPPABLE, status="error")]
+        self.live = HELD
+        status, body = self._buy()
+        self.assertEqual((status, body["code"]), (403, "order_gate"))
+
+    def test_shippable_order_still_meets_the_profit_gate(self):
+        self.settings[profit.SETTING_MIN_AMOUNT] = "10"
+        status, body = self._buy()
+        self.assertEqual((status, body["code"], body["bypass"]), (403, "profit_gate", "required"))
 
 
 if __name__ == "__main__":

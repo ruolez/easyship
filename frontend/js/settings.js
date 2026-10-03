@@ -1032,7 +1032,7 @@ window.editUserProviders = async (id, username) => {
 /* ---------- Audit log ---------- */
 const AUDIT_PAGE = 100;
 const AUDIT_GROUP_LABELS = {
-  profit: 'Profit check', label: 'Labels', shipment: 'Shipments', manifest: 'Manifests',
+  profit: 'Profit check', order_gate: 'Order gate', label: 'Labels', shipment: 'Shipments', manifest: 'Manifests',
   settings: 'Settings', user: 'Users', auth: 'Sign-ins', backoffice: 'BackOffice', shopify: 'Shopify',
   provider_instance: 'Providers',
 };
@@ -1067,7 +1067,7 @@ async function loadAudit(more = false) {
 
 function auditRowHtml(r) {
   const tone = r.action === 'profit.bypass' ? ' warn'
-    : (r.action === 'profit.bypass_denied' || r.action === 'label.void') ? ' err' : '';
+    : ['profit.bypass_denied', 'order_gate.refused', 'label.void'].includes(r.action) ? ' err' : '';
   return `<tr>
     <td style="white-space:nowrap">${esc(r.created_at)}</td>
     <td>${esc(r.username || '—')}</td>
@@ -1084,6 +1084,10 @@ function auditDetailHtml(action, d) {
     const service = [d.courier_name, d.provider].filter(Boolean).join(' · ');
     return `<strong>${esc(d.order || '')}</strong>${service ? ` · ${esc(service)}` : ''} · profit <strong>${signedMoney(d.profit)}</strong>${margin}
       <div class="text-secondary">Revenue ${money(d.revenue)} − items ${money(d.items_cost)} − label ${money(d.label_cost)}${(d.reasons || []).length ? ' — ' + d.reasons.map(esc).join('; ') : ''}</div>`;
+  }
+  if (action === 'order_gate.refused') {
+    return `<strong>${esc(d.order || '')}</strong> · ${esc(d.label || '')} <span class="text-secondary">(${d.live ? 'Shopify live' : 'rate-time snapshot'})</span>
+      <div class="text-secondary">${(d.reasons || []).map(esc).join('; ')}</div>`;
   }
   return Object.entries(d).map(([k, v]) =>
     `<span class="audit-kv"><span class="text-secondary">${esc(k)}:</span> ${esc(v != null && typeof v === 'object' ? JSON.stringify(v) : v)}</span>`).join(' ');

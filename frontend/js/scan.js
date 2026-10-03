@@ -109,6 +109,17 @@ async function verificationGate(kind, id, number) {
     'This order has not been verified in Shipper.');
 }
 
+/* Warn when Shopify will not let the order ship yet (on hold / not fully
+   paid): the ship page can rate it, but no label can be bought. */
+async function orderGateWarning(order) {
+  const gate = order.gate;
+  if (!gate || gate.shippable) return true;
+  statusEl.innerHTML = '';
+  return confirmProceed('Order cannot be shipped yet',
+    `${order.name} — ${gate.label}: ${(gate.reasons || []).join('; ')}`,
+    '<p class="text-secondary" style="margin-top:8px">You can get rates on the Ship page, but a label cannot be bought until this is cleared in Shopify.</p>');
+}
+
 /* Warn when the order already has tracking (previously shipped). */
 async function reshipGate(what, numbers, note) {
   if (!numbers.length) return true;
@@ -346,6 +357,10 @@ async function lookup() {
       }
       if (!(await reshipGate(`Shopify order ${order.name}`, order.existing_tracking || [],
         "New tracking numbers are added to the order's existing fulfillment — it stays fulfilled."))) {
+        stayOnScan();
+        return;
+      }
+      if (!(await orderGateWarning(order))) {
         stayOnScan();
         return;
       }

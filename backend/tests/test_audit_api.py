@@ -8,7 +8,7 @@ sys.modules.setdefault("db", types.SimpleNamespace(
     get_setting=lambda *a, **k: None, set_setting=lambda *a, **k: None,
     query=lambda *a, **k: None, execute=lambda *a, **k: None))
 sys.modules.setdefault("config", types.SimpleNamespace(
-    SHOPIFY_API_VERSION="2025-07", EASYSHIP_BASE_URLS={}, LABELS_DIR="/tmp",
+    SHOPIFY_API_VERSION="2026-01", EASYSHIP_BASE_URLS={}, LABELS_DIR="/tmp",
     MANIFESTS_DIR="/tmp"))
 
 from flask import Flask  # noqa: E402

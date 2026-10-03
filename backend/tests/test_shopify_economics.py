@@ -6,7 +6,7 @@ sys.modules.setdefault("db", types.SimpleNamespace(
     get_setting=lambda *a, **k: None, set_setting=lambda *a, **k: None,
     query=lambda *a, **k: None, execute=lambda *a, **k: None))
 sys.modules.setdefault("config", types.SimpleNamespace(
-    SHOPIFY_API_VERSION="2025-07", EASYSHIP_BASE_URLS={}, LABELS_DIR="/tmp"))
+    SHOPIFY_API_VERSION="2026-01", EASYSHIP_BASE_URLS={}, LABELS_DIR="/tmp"))
 
 import shopify_client  # noqa: E402
 
@@ -68,6 +68,44 @@ class EconomicsFromOrderTest(unittest.TestCase):
             order(lineItems={"pageInfo": {"hasNextPage": True}, "nodes": []}))
         self.assertEqual((econ["available"], econ["reason"], econ["currency"]),
                          (False, "lines_truncated", "USD"))
+
+
+class OrderGateFieldsTest(unittest.TestCase):
+    """The order queries carry the hold and payment fields the gate reads,
+    and get_order / the Orders list expose the gate built from them."""
+
+    def setUp(self):
+        self._orig = (shopify_client._graphql, shopify_client._store)
+        shopify_client._store = lambda store_id: {"no_company": False}
+
+    def tearDown(self):
+        shopify_client._graphql, shopify_client._store = self._orig
+
+    def test_queries_select_the_gate_fields(self):
+        for field in ("displayFinancialStatus", "fullyPaid", "totalOutstandingSet", "fulfillmentHolds"):
+            self.assertIn(field, shopify_client.ORDER_DETAIL_QUERY)
+            self.assertIn(field, shopify_client.ORDER_GATE_QUERY)
+        self.assertIn("displayFinancialStatus", shopify_client.ORDERS_QUERY)
+
+    def test_get_order_carries_the_gate(self):
+        node = order(id="gid://shopify/Order/1", name="#1001", displayFinancialStatus="PARTIALLY_PAID",
+                     totalOutstandingSet={"shopMoney": {"amount": "30", "currencyCode": "USD"}},
+                     fulfillmentOrders={"nodes": [{"id": "fo1", "status": "ON_HOLD", "fulfillmentHolds": []}]})
+        shopify_client._graphql = lambda store_id, query, variables=None: {"order": node}
+        gate = shopify_client.get_order(1, "gid://shopify/Order/1")["gate"]
+        self.assertEqual((gate["shippable"], gate["label"], gate["reasons"]), (False, "On hold", [
+            "Fulfillment is on hold in Shopify",
+            "The order is only partially paid — $30.00 outstanding"]))
+
+    def test_orders_list_labels_held_and_unpaid_orders(self):
+        nodes = [
+            {"id": "o1", "name": "#1", "displayFulfillmentStatus": "ON_HOLD", "displayFinancialStatus": "PAID"},
+            {"id": "o2", "name": "#2", "displayFulfillmentStatus": "UNFULFILLED", "displayFinancialStatus": "PENDING"},
+            {"id": "o3", "name": "#3", "displayFulfillmentStatus": "UNFULFILLED", "displayFinancialStatus": "PAID"},
+        ]
+        shopify_client._graphql = lambda store_id, query, variables=None: {"orders": {"nodes": nodes}}
+        self.assertEqual([o["gate_label"] for o in shopify_client.list_open_orders(1)],
+                         ["On hold", "Payment pending", None])
 
 
 if __name__ == "__main__":

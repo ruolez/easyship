@@ -19,4 +19,4 @@ EASYSHIP_BASE_URLS = {
     "sandbox": "https://public-api-sandbox.easyship.com/2024-09",
 }
 
-SHOPIFY_API_VERSION = "2025-07"
+SHOPIFY_API_VERSION = "2026-01"

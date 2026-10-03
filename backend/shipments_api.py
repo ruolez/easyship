@@ -9,9 +9,11 @@ from werkzeug.security import check_password_hash
 
 import config
 import db
+import order_gate
 import po_box
 import profit
 import providers
+import shopify_client
 import tag_rules
 from auth import admin_required, login_required
 from providers import labels
@@ -315,12 +317,31 @@ def get_rates():
         else:
             warnings.append("The Auto Mode preset service was not offered for this shipment.")
 
-    # Profit check: the order's economics are fetched here, by the server, and
-    # snapshotted with the offered rates so the buy gate judges the real price.
+    # One Shopify read, by the server, feeds both the order gate (on hold /
+    # not fully paid — rates are shown, the buy is refused) and the profit
+    # check. The gate is snapshotted for a buy made while Shopify is down.
+    order, order_error = None, None
+    if source == "shopify" and data.get("order_id"):
+        try:
+            order = shopify_client.get_order(data.get("store_id"), data["order_id"])
+        except Exception as e:
+            order_error = str(e) or e.__class__.__name__
+    gate = order["gate"] if order else None
+    if gate:
+        db.execute(
+            "UPDATE shipments SET order_gate=%s, updated_at=now() WHERE id=%s",
+            (json.dumps(gate), row_ids[0]),
+        )
+        if not gate["shippable"]:
+            warnings.append(order_gate.warning_text(gate))
+
+    # Profit check: the economics are snapshotted with the offered rates so
+    # the buy gate judges the real price.
     thresholds = profit.load_thresholds()
     economics = None
     if thresholds["enabled"] and source in profit.GATED_SOURCES:
-        economics = profit.fetch_economics(source, data)
+        economics = (profit.unavailable(order_error) if order_error
+                     else profit.fetch_economics(source, data, order=order))
         for ui in all_rates:
             ui["profit"] = profit.evaluate(economics, ui["total_charge"], ui.get("currency"), thresholds)
         db.execute(
@@ -336,6 +357,7 @@ def get_rates():
         "options": options,
         "warnings": warnings,
         "economics": economics,
+        "order_gate": gate,
         "po_box": to_po_box,
     })
 
@@ -418,6 +440,24 @@ def group_buy(group_id):
     targets = [r for r in rows if r["status"] in ("rated", "error") and _draft_id(r)]
     if not targets:
         return api_error("Nothing to purchase — all boxes already have labels or were voided")
+
+    # Order gate (Shopify only): on hold or not fully paid cannot be bought —
+    # no bypass, and a Resume is checked again. Shopify's live answer, the
+    # rate-time snapshot when Shopify is down; a draft that never loaded its
+    # order (the outage flow) is not gated.
+    if primary["source"] == "shopify":
+        gate, live = order_gate.for_buy(primary)
+        if gate and not gate["shippable"]:
+            audit("order_gate.refused", {
+                "group_id": group_id, "order": primary["shopify_order_name"],
+                "provider": provider_name, "courier_service_id": courier_service_id,
+                "live": live, "label": gate["label"], "reasons": gate["reasons"],
+                "financial_status": gate["financial_status"], "on_hold": gate["on_hold"],
+            })
+            return jsonify({
+                "error": "A label cannot be bought for this order — " + "; ".join(gate["reasons"]),
+                "code": "order_gate", "gate": gate, "live": live,
+            }), 403
 
     # Profit gate: a rate below the thresholds needs the bypass password. Once
     # cleared (either way) a Resume of the same rate is never asked again.

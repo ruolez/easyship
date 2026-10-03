@@ -13,6 +13,7 @@ let lastLabelUrl = null;
 let providerLabels = {};
 let preferredService = ''; // courier service a tag rule asked for
 let preferredServiceId = ''; // Auto Mode preset service id (when no tag rule names one)
+let orderGate = null; // Shopify hold / payment gate — rates only when not shippable
 
 const navReady = initNav('scan');
 init();
@@ -97,6 +98,7 @@ async function prefill() {
       orderContext = {
         source, store_id: Number(storeId), order_id: o.id, order_name: o.name,
       };
+      orderGate = o.gate || null;
       fillDestination(o.destination);
       orderItems = o.items || [];
       showOrderSummary(`Shopify order <strong>${esc(o.name)}</strong> — ${esc(o.customer || '')}`,
@@ -235,6 +237,8 @@ function showOrderSummary(html, extrasHtml = '') {
    under the order heading so the packer sees them before rating. */
 function orderExtras(o) {
   const parts = [];
+  const gate = orderGateHtml(o.gate);
+  if (gate) parts.push(gate);
   if ((o.tags || []).length) {
     parts.push(`<div class="order-tags">${o.tags.map((t) => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>`);
   }
@@ -269,6 +273,39 @@ function economicsHtml(econ) {
     body = `<span>Revenue <strong>${money(econ.revenue)}</strong></span><span>Items cost <strong>${money(econ.items_cost)}</strong></span>${missing}`;
   }
   return `<div class="order-economics" id="order-economics">${body}</div>`;
+}
+
+/* The hold / payment block under the order heading: the packer can rate the
+   box but the Buy button stays off until Shopify says the order can ship. */
+function orderGateHtml(gate) {
+  if (!gate || gate.shippable) return '';
+  return `<div class="rule-banner err" id="order-gate"><span class="chip static err">${esc(gate.label)}</span><span>Rates only — a label cannot be bought: ${esc((gate.reasons || []).join('; '))}</span></div>`;
+}
+
+function applyOrderGate(gate) {
+  orderGate = gate || null;
+  const el = document.getElementById('order-gate');
+  const html = orderGateHtml(orderGate);
+  if (el) el.outerHTML = html;
+  else if (html) {
+    const summary = document.getElementById('order-summary');
+    const extras = summary.querySelector('.order-extras');
+    if (extras) extras.insertAdjacentHTML('afterbegin', html);
+    else summary.insertAdjacentHTML('beforeend', `<div class="order-extras">${html}</div>`);
+  }
+  syncBuyButton();
+}
+
+function orderBlocked() {
+  return Boolean(orderGate && !orderGate.shippable);
+}
+
+function syncBuyButton() {
+  const btn = document.getElementById('buy-label');
+  const blocked = orderBlocked();
+  btn.disabled = blocked || !selectedRate;
+  btn.textContent = blocked ? `Cannot buy — ${orderGate.label.toLowerCase()}` : 'Print label';
+  btn.title = blocked ? (orderGate.reasons || []).join('; ') : '';
 }
 
 function applyTagRules(rules) {
@@ -425,6 +462,7 @@ async function getRates() {
     // Rating re-reads the order, so the summary's figures follow the rates.
     const economics = document.getElementById('order-economics');
     if (economics && res.economics) economics.outerHTML = economicsHtml(res.economics);
+    if (res.order_gate) applyOrderGate(res.order_gate);
     document.getElementById('panel-rates').style.display = '';
     document.getElementById('panel-rates').scrollIntoView({ behavior: 'smooth' });
     return true;
@@ -467,9 +505,8 @@ function renderRates() {
     row.classList.add('selected');
     row.setAttribute('aria-checked', 'true');
     selectedRate = rates[Number(row.dataset.idx)];
-    const buyBtn = document.getElementById('buy-label');
-    buyBtn.disabled = false;
-    buyBtn.focus();
+    syncBuyButton();
+    if (!orderBlocked()) document.getElementById('buy-label').focus();
   };
   list.querySelectorAll('.rate-row').forEach((row) => {
     row.addEventListener('click', () => select(row));
@@ -543,6 +580,9 @@ document.getElementById('buy-label').addEventListener('click', () => { buyLabel(
    request itself was rejected. Shared by the button and Auto Mode. */
 async function buyLabel() {
   if (!selectedRate || !groupId) return { state: 'failed', message: 'No rate selected' };
+  if (orderBlocked()) {
+    return { state: 'failed', message: `${orderGate.label} — a label cannot be bought: ${orderGate.reasons.join('; ')}` };
+  }
   const btn = document.getElementById('buy-label');
   const spinner = document.getElementById('buy-spinner');
   btn.disabled = true;
@@ -581,7 +621,10 @@ async function buyLabel() {
         continue;
       }
       snackbar(err.message, 'error');
-      return giveUp('failed', err.message);
+      const out = giveUp('failed', err.message);
+      // The order gate has no bypass: Shopify's live answer locks the button.
+      if (err.status === 403 && err.data && err.data.code === 'order_gate') applyOrderGate(err.data.gate);
+      return out;
     }
   }
   return new Promise((resolve) => {
@@ -908,6 +951,9 @@ const Auto = (() => {
     const ok = await getRates();
     if (stage !== 'rating') return; // cancelled while the request was in flight
     if (!ok) return fail('Could not get rates — finish manually');
+    if (orderBlocked()) {
+      return fail(`${orderGate.label} — a label cannot be bought: ${orderGate.reasons.join('; ')}`);
+    }
     if (!selectedRate || !selectedRate.preferred) {
       setStage('choose', 'Auto Mode paused', 'Preset service not offered for this shipment — choose a rate and print', 'warn');
       return;

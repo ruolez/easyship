@@ -121,12 +121,14 @@ def evaluate(economics, label_cost, rate_currency, thresholds):
     return out
 
 
-def fetch_economics(source, data):
-    """Economics straight from the order source at rate time. Never raises:
-    whatever stops the fetch becomes an unavailable() the gate treats as
-    below threshold."""
+def fetch_economics(source, data, order=None):
+    """Economics straight from the order source at rate time, or from an
+    order the caller already fetched. Never raises: whatever stops the fetch
+    becomes an unavailable() the gate treats as below threshold."""
     try:
         if source == "shopify":
+            if order is not None:
+                return order["economics"]
             if not data.get("order_id"):
                 return unavailable("no_order_id")
             import shopify_client

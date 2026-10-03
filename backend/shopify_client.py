@@ -4,6 +4,7 @@ import requests
 
 import config
 import db
+import order_gate
 import profit
 
 
@@ -68,6 +69,7 @@ query openOrders($query: String!) {
       name
       createdAt
       displayFulfillmentStatus
+      displayFinancialStatus
       tags
       totalPriceSet { shopMoney { amount } }
       customer { displayName }
@@ -86,6 +88,12 @@ query orderDetail($id: ID!) {
     name
     email
     displayFulfillmentStatus
+    displayFinancialStatus
+    fullyPaid
+    totalOutstandingSet { shopMoney { amount currencyCode } }
+    fulfillmentOrders(first: 10) {
+      nodes { id status fulfillmentHolds { reason reasonNotes } }
+    }
     tags
     note
     currencyCode
@@ -125,6 +133,21 @@ query orderDetail($id: ID!) {
           }
         }
       }
+    }
+  }
+}
+"""
+
+# The buy re-checks the gate live; only what order_gate needs, no line items.
+ORDER_GATE_QUERY = """
+query orderGate($id: ID!) {
+  order(id: $id) {
+    displayFulfillmentStatus
+    displayFinancialStatus
+    fullyPaid
+    totalOutstandingSet { shopMoney { amount currencyCode } }
+    fulfillmentOrders(first: 10) {
+      nodes { id status fulfillmentHolds { reason reasonNotes } }
     }
   }
 }
@@ -200,6 +223,7 @@ def list_open_orders(store_id):
             "item_count": node.get("subtotalLineItemsQuantity") or 0,
             "total": (node.get("totalPriceSet") or {}).get("shopMoney", {}).get("amount"),
             "tags": node.get("tags") or [],
+            "gate_label": order_gate.from_shopify_order(node)["label"],
         })
     return orders
 
@@ -319,7 +343,16 @@ def get_order(store_id, order_gid):
         "fulfillment_status": order.get("displayFulfillmentStatus"),
         "existing_tracking": existing_tracking,
         "economics": economics_from_order(order),
+        "gate": order_gate.from_shopify_order(order),
     }
+
+
+def get_order_gate(store_id, order_gid):
+    data = _graphql(store_id, ORDER_GATE_QUERY, {"id": order_gid})
+    order = data.get("order")
+    if not order:
+        raise ShopifyError("Order not found")
+    return order_gate.from_shopify_order(order)
 
 
 # Shopify builds tracking links only for carrier names spelled exactly as on

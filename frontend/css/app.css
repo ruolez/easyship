@@ -410,6 +410,7 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
   font-weight: 500;
 }
 .rule-banner.warn { background: var(--warning-light); border-left-color: var(--warning); }
+.rule-banner.err { background: var(--error-light); border-left-color: var(--error); }
 .rate-warnings { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
 
 /* ---------- Auto Mode presets (scan page) ---------- */
