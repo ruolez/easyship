@@ -396,6 +396,17 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
   font-size: 13px;
   white-space: pre-wrap;
 }
+.error-note {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--error-light);
+  border-left: 3px solid var(--error);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 50vh;
+  overflow: auto;
+}
 .rule-banner {
   display: flex;
   align-items: center;

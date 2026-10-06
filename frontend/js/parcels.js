@@ -303,6 +303,7 @@ const MENU_ICONS = {
   print: '<svg viewBox="0 0 24 24"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
   retry: '<svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
   undo: '<svg viewBox="0 0 24 24"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>',
+  error: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
 };
 const ICON_KEBAB = '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>';
 
@@ -315,6 +316,7 @@ function rowActions(s) {
   const canResume = ['rated', 'error'].includes(s.status) && s.courier_service_id
     && s.provider_shipment_id && s.group_id;
   const items = [];
+  if (s.error_message) items.push({ label: 'View error', icon: MENU_ICONS.error, run: () => showError(s, ref) });
   if (canResume) items.push({ label: 'Resume labels', icon: MENU_ICONS.resume, run: () => resumeBuy(s.group_id) });
   if (s.has_label) items.push({ label: 'View label', icon: MENU_ICONS.label, href: `/api/shipments/${s.id}/label` });
   if (s.has_label) items.push({ label: 'Print label', icon: MENU_ICONS.print, run: () => reprint(s.id) });
@@ -540,6 +542,20 @@ async function linkShopifyOrder(s) {
   };
   document.getElementById('m-send').addEventListener('click', submit);
   number.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') submit(); });
+}
+
+function showError(s, ref) {
+  const backdrop = document.getElementById('modal-backdrop');
+  document.getElementById('modal').innerHTML = `
+    <h3>Error on ${esc(ref)}</h3>
+    <p class="text-secondary">${esc(s.provider_label || s.provider || '')}${s.courier_name ? ` · ${esc(s.courier_name)}` : ''} · ${esc(s.status.replace('_', ' '))}</p>
+    <div class="error-note mono" style="margin-top:12px">${esc(s.error_message)}</div>
+    <div class="actions">
+      <button class="btn btn-text copy-btn" data-copy="${esc(s.error_message)}">Copy</button>
+      <button class="btn btn-primary" id="m-close">Close</button>
+    </div>`;
+  backdrop.classList.add('show');
+  document.getElementById('m-close').addEventListener('click', () => backdrop.classList.remove('show'));
 }
 
 function reportWriteback(wb) {
