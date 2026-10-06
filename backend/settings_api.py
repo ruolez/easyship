@@ -506,10 +506,10 @@ def create_box():
     data = request.get_json(silent=True) or {}
     try:
         dims = [float(data.get(k)) for k in ("length", "width", "height")]
-        if any(d <= 0 for d in dims):
+        if any(d < 0 for d in dims):
             raise ValueError
     except (TypeError, ValueError):
-        return api_error("Positive length/width/height (inches) are required")
+        return api_error("Non-negative length/width/height (inches) are required")
     # A box is identified by its dimensions — the name is derived, not chosen.
     name = "×".join(f"{d:g}" for d in dims)
     row = db.execute(
