@@ -56,7 +56,7 @@ const ICON_PRINTER = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">'
 
 function money(v) {
   if (v == null || v === '') return '';
-  return '$' + Number(v).toFixed(2);
+  return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /* Profit figures carry their sign: "+$12.40", "−$3.10". */
