@@ -94,6 +94,17 @@ class CombineRatesTest(unittest.TestCase):
     def test_no_rates_yields_no_quotes(self):
         self.assertEqual(ss._combine_rates([]), [])
 
+    def test_flat_rate_package_types_never_price_the_plain_package(self):
+        # ShipStation quotes one usps_priority_mail rate per package type; the
+        # label is bought as a plain "package", so a flat-rate envelope price
+        # must not be the one shown for the service.
+        rates = [rate(STAMPS, "usps_priority_mail", 9.92, package_type="flat_rate_envelope"),
+                 rate(STAMPS, "usps_priority_mail", 14.50, package_type="medium_flat_rate_box"),
+                 rate(STAMPS, "usps_priority_mail", 88.58, package_type="package"),
+                 rate(STAMPS, "usps_priority_mail", 88.58, package_type=None)]
+        out = [(r.provider_service_id, r.total_charge) for r in ss._combine_rates(rates)]
+        self.assertEqual(out, [(f"{STAMPS}:usps_priority_mail", 88.58)])
+
     def test_per_box_quotes_keep_only_services_every_box_got_and_sum_them(self):
         box1 = [rate(STAMPS, "usps_priority_mail", 7.0, days=2), rate(UPS, "ups_surepost", 6.0, days=5)]
         box2 = [rate(STAMPS, "usps_priority_mail", 9.0, other=0.5, days=3)]

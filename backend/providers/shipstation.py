@@ -62,6 +62,7 @@ ADDRESS_FIELDS = (
     "city_locality", "state_province", "postal_code", "country_code", "address_residential_indicator",
 )
 PACKAGE_FIELDS = ("package_code", "weight", "dimensions", "insured_value", "label_messages")
+PLAIN_PACKAGE = "package"
 
 ORIGIN_REQUIRED = {
     "origin_company": "Company",
@@ -279,6 +280,11 @@ def _usable(rate):
     if rate.get("error_messages"):
         return False
     if (rate.get("validation_status") or "").lower() == "invalid":
+        return False
+    # USPS services come back once per package type (flat-rate envelope and
+    # boxes included); the label is always bought as a plain package, so only
+    # that price is honest.
+    if (rate.get("package_type") or PLAIN_PACKAGE) != PLAIN_PACKAGE:
         return False
     return bool(rate.get("carrier_id") and rate.get("service_code"))
 
