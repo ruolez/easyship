@@ -640,7 +640,31 @@ class ShipStationProvider(ShippingProvider):
             raise ProviderError("ShipStation rating failed: " + " | ".join(dict.fromkeys(errors)))
         if not drafts:
             raise ProviderError("ShipStation did not return a shipment id")
+        self._remember_services(combined, catalog)
         return drafts, combined, []
+
+    # ---- quoted-but-uncatalogued services ----
+    # The carrier catalog (GET /v2/carriers) lists only some of the services
+    # ShipStation actually quotes — USPS Media Mail, Parcel Select Ground and
+    # Priority Mail Express come back from /v2/rates without being listed. Any
+    # quoted service the catalog lacks is remembered so Settings can exclude it.
+    def _seen_services(self):
+        try:
+            seen = json.loads(self.setting("seen_services") or "{}")
+        except (ValueError, TypeError):
+            return {}
+        return seen if isinstance(seen, dict) else {}
+
+    def _remember_services(self, quotes, catalog):
+        seen = self._seen_services()
+        new = {}
+        for q in quotes:
+            carrier_id, service_code = _split_service_id(q.provider_service_id)
+            if (carrier_id, service_code) in catalog or q.provider_service_id in seen:
+                continue
+            new[q.provider_service_id] = {"carrier_id": carrier_id, "name": q.courier_name}
+        if new:
+            db.set_setting(self.setting_key("seen_services"), json.dumps({**seen, **new}))
 
     def get_excluded_service_ids(self):
         raw = self.setting("excluded_service_ids")
@@ -917,6 +941,14 @@ class ShipStationProvider(ShippingProvider):
                     "id": sid,
                     "umbrella_name": names.get(c.get("carrier_id")) or "",
                     "name": s.get("name") or code,
+                }
+        for sid, seen in self._seen_services().items():
+            carrier_id = (seen or {}).get("carrier_id")
+            if sid not in services and carrier_id in names:
+                services[sid] = {
+                    "id": sid,
+                    "umbrella_name": names.get(carrier_id) or "",
+                    "name": seen.get("name") or sid,
                 }
         return sorted(services.values(), key=lambda s: (s["umbrella_name"].lower(), s["name"].lower()))
 

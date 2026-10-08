@@ -217,6 +217,38 @@ class MultiBoxRatingTest(unittest.TestCase):
                          "ShipStation rating failed: UPS does not deliver to PO Boxes. | Too heavy")
 
 
+class SeenServicesTest(unittest.TestCase):
+    """ShipStation's carrier catalog omits services it still quotes (USPS
+    Media Mail, Parcel Select…); once quoted they appear in the Settings list
+    so they can be excluded."""
+
+    def setUp(self):
+        self._orig = (ss._request, ss._carriers, ss._origin_address, ss.db.get_setting, ss.db.set_setting)
+        self.store = {f"{ss.PRIMARY_KEY}_api_key": "key"}
+        ss._carriers = lambda auth, force=False: [
+            {"carrier_id": STAMPS, "carrier_code": "stamps_com", "friendly_name": "Stamps.com",
+             "services": [{"service_code": "usps_priority_mail", "name": "USPS Priority Mail"}]}]
+        ss._origin_address = lambda *a, **k: {"name": "W"}
+        ss.db.get_setting = lambda key, default=None: self.store.get(key, default)
+        ss.db.set_setting = lambda key, value: self.store.__setitem__(key, value)
+        ss._request = lambda *a, **k: {"shipment_id": "se-s-1", "rate_response": {"rates": [
+            rate(STAMPS, "usps_priority_mail", 10.0),
+            rate(STAMPS, "usps_media_mail", 5.0, service_type="USPS Media Mail"),
+        ]}}
+
+    def tearDown(self):
+        ss._request, ss._carriers, ss._origin_address, ss.db.get_setting, ss.db.set_setting = self._orig
+
+    def test_quoted_services_missing_from_the_catalog_join_the_settings_list(self):
+        provider = ss.ShipStationProvider()
+        _, rates, _ = provider.create_draft_shipments({"address1": "1 Main"}, [{"weight": 1}], [])
+        self.assertEqual(
+            ([(r.provider_service_id, r.courier_name) for r in rates], provider.list_courier_services()),
+            ([(f"{STAMPS}:usps_media_mail", "USPS Media Mail"), (f"{STAMPS}:usps_priority_mail", "USPS Priority Mail")],
+             [{"id": f"{STAMPS}:usps_media_mail", "umbrella_name": "Stamps.com", "name": "USPS Media Mail"},
+              {"id": f"{STAMPS}:usps_priority_mail", "umbrella_name": "Stamps.com", "name": "USPS Priority Mail"}]))
+
+
 class BoxIdTest(unittest.TestCase):
     def test_single_box_keeps_the_plain_shipment_id(self):
         self.assertEqual(ss._box_id("se-1", 0, 1), "se-1")
