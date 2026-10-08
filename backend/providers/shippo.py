@@ -29,6 +29,7 @@ from providers.base import (
     ProviderError,
     Rate,
     ShipmentState,
+    parcel_dimensions,
     ShippingProvider,
     missing_origin_fields,
     origin_descriptor,
@@ -156,13 +157,15 @@ def _dest_address(dest, origin_email=""):
 
 
 def _build_parcel(p):
-    def dim(v):
-        v = str(v or "").strip()
-        return v if v else "1"
+    """Shippo requires dimensions, so a 0×0×0 box is refused rather than rated
+    with a made-up side (which USPS would quote at a cubic tier it never bills)."""
+    dims = parcel_dimensions(p)
+    if not dims:
+        raise ProviderError("Shippo needs the box's length, width and height — pick a box size")
     return {
-        "length": dim(p.get("length")),
-        "width": dim(p.get("width")),
-        "height": dim(p.get("height")),
+        "length": str(dims["length"]),
+        "width": str(dims["width"]),
+        "height": str(dims["height"]),
         "distance_unit": "in",
         "weight": str(p.get("weight") or "0"),
         "mass_unit": "lb",

@@ -30,6 +30,7 @@ from providers.base import (
     ProviderError,
     Rate,
     ShipmentState,
+    parcel_dimensions,
     ShippingProvider,
     missing_origin_fields,
     origin_descriptor,
@@ -169,22 +170,13 @@ def _dest_address(dest, origin_email=""):
 
 
 def _build_parcel(p):
-    def dim(v):
-        try:
-            f = float(str(v or "").strip())
-        except ValueError:
-            f = 0.0
-        return f if f > 0 else 1.0
+    """Weight in ounces (EasyPost's parcel unit); dimensions only when every
+    side is given — a 0×0×0 box is priced by weight alone."""
     try:
         weight_lb = float(str(p.get("weight") or "0").strip())
     except ValueError:
         weight_lb = 0.0
-    return {
-        "length": dim(p.get("length")),
-        "width": dim(p.get("width")),
-        "height": dim(p.get("height")),
-        "weight": round(weight_lb * 16, 2),  # EasyPost parcel weight is in ounces
-    }
+    return {**parcel_dimensions(p), "weight": round(weight_lb * 16, 2)}
 
 
 def _service_id(rate):

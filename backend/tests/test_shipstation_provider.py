@@ -300,11 +300,20 @@ class ExtractErrorTest(unittest.TestCase):
 
 
 class BuildersTest(unittest.TestCase):
-    def test_package_uses_pounds_and_inches_with_dimension_defaults(self):
-        self.assertEqual(ss._build_package({"weight": "2.5", "length": "10", "width": "", "height": "abc"}), {
+    def test_package_uses_pounds_and_inches(self):
+        self.assertEqual(ss._build_package({"weight": "2.5", "length": "10", "width": "6", "height": "4"}), {
             "weight": {"value": 2.5, "unit": "pound"},
-            "dimensions": {"unit": "inch", "length": 10.0, "width": 1.0, "height": 1.0},
+            "dimensions": {"unit": "inch", "length": 10.0, "width": 6.0, "height": 4.0},
         })
+
+    def test_package_omits_dimensions_when_any_is_missing_or_zero(self):
+        # A fabricated 1-inch side made USPS quote the smallest cubic tier for a
+        # box that is then billed by weight at purchase — weight-only instead.
+        for parcel in ({"weight": "21.3", "length": "0", "width": "0", "height": "0"},
+                       {"weight": "21.3"},
+                       {"weight": "21.3", "length": "10", "width": "", "height": "abc"}):
+            with self.subTest(parcel=parcel):
+                self.assertEqual(ss._build_package(parcel), {"weight": {"value": 21.3, "unit": "pound"}})
 
     def test_rate_total_sums_amount_objects(self):
         self.assertEqual(ss._rate_total(rate(UPS, "ups_ground", 10.0, other=1.25, confirmation=2.0,

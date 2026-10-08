@@ -47,6 +47,7 @@ from providers.base import (
     ShippingProvider,
     missing_origin_fields,
     origin_descriptor,
+    parcel_dimensions,
 )
 
 BASE_URL = "https://api.shipstation.com"
@@ -217,25 +218,19 @@ def _dest_address(dest, origin_email=""):
 
 
 def _build_package(p):
-    def dim(v):
-        try:
-            f = float(str(v or "").strip())
-        except ValueError:
-            f = 0.0
-        return f if f > 0 else 1.0
+    """Weight in pounds, dimensions in inches — or no dimensions at all when any
+    side is blank/0 (a 0×0×0 box): USPS then prices by weight and zone. A
+    made-up side would have USPS quote a cubic tier the real box is never
+    billed at."""
     try:
         weight_lb = float(str(p.get("weight") or "0").strip())
     except ValueError:
         weight_lb = 0.0
-    return {
-        "weight": {"value": round(weight_lb, 3), "unit": "pound"},
-        "dimensions": {
-            "unit": "inch",
-            "length": dim(p.get("length")),
-            "width": dim(p.get("width")),
-            "height": dim(p.get("height")),
-        },
-    }
+    package = {"weight": {"value": round(weight_lb, 3), "unit": "pound"}}
+    dims = parcel_dimensions(p)
+    if dims:
+        package["dimensions"] = {"unit": "inch", **dims}
+    return package
 
 
 def _service_id(rate):

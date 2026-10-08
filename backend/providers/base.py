@@ -143,6 +143,23 @@ def missing_origin_fields(origin, required):
     return [label for k, label in required.items() if not (origin.get(k) or "").strip()]
 
 
+def parcel_dimensions(parcel):
+    """{length, width, height} in inches as floats, or {} unless every side is
+    a positive number — a 0×0×0 box means "price by weight only". Never invent
+    a side: USPS quotes a 1-inch cube at the cheapest cubic tier but bills the
+    real package by weight."""
+    dims = {}
+    for side in ("length", "width", "height"):
+        try:
+            value = float(str(parcel.get(side) or "").strip())
+        except ValueError:
+            return {}
+        if value <= 0:
+            return {}
+        dims[side] = value
+    return dims
+
+
 class ShippingProvider(ABC):
     """Everything the shipping routes need from a platform. All methods may raise
     ProviderError; parallel helpers return per-id ProviderError instead.
