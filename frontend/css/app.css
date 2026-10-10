@@ -329,6 +329,23 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 .container { max-width: 1240px; margin: 0 auto; padding: 28px 28px 48px; }
 .container.narrow { max-width: 880px; }
 .container.wide { max-width: 1900px; }
+/* Viewport-filling page: the card shrinks to the room left under the
+   header and its table scrolls inside it, so no height goes unused. */
+.container.fill {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+.container.fill > .card {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+.container.fill .table-toolbar, .container.fill .table-pager { flex: 0 0 auto; }
 
 .page-head {
   display: flex;
@@ -340,13 +357,15 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 .page-head .sub { color: var(--text-secondary); font-size: 13px; }
 
 .card {
+  --card-x: 24px;
   background: var(--surface);
   border: 1px solid var(--outline);
   border-radius: var(--radius-card);
-  padding: 22px 24px;
+  padding: 22px var(--card-x);
   margin-bottom: 16px;
   box-shadow: var(--shadow-1);
 }
+.card.dense { --card-x: 16px; padding: 12px var(--card-x); }
 .card h2 {
   font-size: 13px;
   font-weight: 650;
@@ -455,7 +474,7 @@ body.with-sidebar { padding-left: var(--sidebar-w); }
 .ship-grid #panel-result .row.mb-16 > .fixed { flex: 1 1 auto; }
 
 /* Denser cards/fields inside the columns so everything fits without overflow. */
-.ship-grid .card { padding: 18px 18px; }
+.ship-grid .card { --card-x: 18px; padding: 18px var(--card-x); }
 .ship-grid .card h2 { flex-wrap: wrap; row-gap: 6px; margin-bottom: 14px; }
 .ship-grid .card .row { gap: 12px; }
 .ship-grid .field input,
@@ -577,7 +596,8 @@ kbd {
 /* ============================================================
    Tables
    ============================================================ */
-.table-wrap { overflow-x: auto; margin: 0 -24px; padding: 0 24px; }
+/* Bleeds through the card's side padding so wide tables scroll edge to edge. */
+.table-wrap { overflow-x: auto; margin: 0 calc(-1 * var(--card-x, 24px)); padding: 0 var(--card-x, 24px); }
 .table-wrap::-webkit-scrollbar { height: 8px; }
 .table-wrap::-webkit-scrollbar-thumb { background: var(--outline-strong); border-radius: 4px; }
 .table-wrap::-webkit-scrollbar-track { background: transparent; }
@@ -1051,10 +1071,10 @@ td { font-variant-numeric: tabular-nums; }
 
 @media (max-width: 768px) {
   .container { padding: 16px 14px 40px; }
-  .card { padding: 16px; }
+  .container.fill { height: calc(100dvh - 52px); padding: 12px; }
+  .card { --card-x: 16px; padding: 16px; }
   .ship-grid { grid-template-columns: 1fr; }
   .ship-grid .rate-list { max-height: none; }
-  .table-wrap { margin: 0 -16px; padding: 0 16px; }
   .row { flex-direction: column; align-items: stretch; }
   .row > .fixed { flex: 1; }
   .parcel-row { flex-wrap: wrap; }
@@ -1289,14 +1309,17 @@ table.compact th, table.compact td { padding: 9px 8px; }
 /* The wrap's side padding moves into the edge cells so the sticky edge
    columns can sit flush against the card edge. */
 .table-wrap.flush { padding: 0; }
-.table-wrap.flush th:first-child, .table-wrap.flush td:first-child { padding-left: 24px; }
-.table-wrap.flush th:last-child, .table-wrap.flush td:last-child { padding-right: 24px; }
+.table-wrap.flush th:first-child, .table-wrap.flush td:first-child { padding-left: var(--card-x, 24px); }
+.table-wrap.flush th:last-child, .table-wrap.flush td:last-child { padding-right: var(--card-x, 24px); }
 /* Both-axis inner scroll: the thead (and tfoot) sticky rules only work
    against a bounded scroll container, and the horizontal scrollbar stays at
-   the bottom of the viewport instead of below a page-tall table. */
+   the bottom of the viewport instead of below a page-tall table. The bound
+   comes from the .container.fill flex column: the wrap keeps its content
+   height until the card runs out of room, then shrinks and scrolls. */
 .parcels-wrap {
   --pin-num-w: 48px;
-  max-height: calc(100vh - 272px);
+  flex: 0 1 auto;
+  min-height: 0;
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--outline-strong) transparent;
@@ -1459,17 +1482,12 @@ table.striped.parcels-table tbody tr:hover td.actions { background: var(--surfac
   padding-bottom: 12px;
 }
 .table-toolbar .table-summary { padding-bottom: 0; }
+.table-toolbar .toolbar-title { font-size: 18px; font-weight: 650; letter-spacing: -0.2px; margin-right: 4px; }
 .table-toolbar-right { margin-left: auto; display: inline-flex; align-items: center; gap: 16px; }
 .table-toolbar .switch { gap: 8px; font-size: 13px; color: var(--text-secondary); }
 
-/* Must come after the base .parcels-wrap/.flush rules — same specificity,
-   source order decides. Card padding shrinks to 16px on mobile. */
 @media (max-width: 768px) {
   .parcels-wrap { --pin-num-w: 44px; }
-  .table-wrap.flush.parcels-wrap th:first-child,
-  .table-wrap.flush.parcels-wrap td:first-child { padding-left: 16px; }
-  .table-wrap.flush.parcels-wrap th:last-child,
-  .table-wrap.flush.parcels-wrap td:last-child { padding-right: 16px; }
 }
 
 .copy-wrap { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
