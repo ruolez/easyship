@@ -62,6 +62,7 @@
     <section class="tab-panel" data-panel="shipping">
       <div class="card" id="card-origin">
         <h2>Origin address (ship from)</h2>
+        <p class="hint mb-16" id="origin-overrides-note"></p>
         <div class="row">
           <div class="field"><label>Company</label><input id="origin_company"></div>
           <div class="field"><label>Contact name</label><input id="origin_contact"></div>
@@ -79,6 +80,19 @@
           <div class="field"><label>Phone</label><input id="origin_phone"></div>
           <div class="field"><label>Email</label><input id="origin_email" type="email"></div>
         </div>
+      </div>
+
+      <div class="card" id="card-origin-accounts">
+        <h2>Per-account ship-from</h2>
+        <p class="hint mb-16">A shipping account can ship from its own details. Blank fields use the global origin above (shown greyed). Filling any street-address field takes the whole street address from this account.</p>
+        <div class="row">
+          <div class="field fixed" style="min-width:300px">
+            <label>Shipping account</label>
+            <select id="origin-account-select"></select>
+          </div>
+        </div>
+        <!-- One block per provider instance, rendered by renderProviders(). -->
+        <div id="origin-accounts-container"></div>
       </div>
 
       <div class="card" id="card-tag-rules">

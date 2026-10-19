@@ -18,7 +18,9 @@ OWN = {
     "shipstation-5_origin_city": "Newark", "shipstation-5_origin_state": "NJ",
     "shipstation-5_origin_zip": "07101", "shipstation-5_origin_phone": " 777 ",
 }
-REQUIRED = {"origin_company": "Company", "origin_email": "Email", "origin_zip": "ZIP"}
+ADDRESS_REQUIRED = {
+    "origin_address1": "Address 1", "origin_city": "City", "origin_state": "State", "origin_zip": "ZIP",
+}
 
 
 def with_settings(values):
@@ -35,25 +37,55 @@ class OriginSettingsTest(unittest.TestCase):
         finally:
             base.db.get_setting = orig
 
-    def test_instance_origin_when_override_is_on_with_blanks_for_unset_fields(self):
+    def test_override_on_takes_own_address_and_falls_back_per_contact_field(self):
         orig = with_settings({**GLOBAL, **OWN, "shipstation-5_origin_override": "true"})
         try:
             out = base.origin_settings("shipstation-5")
         finally:
             base.db.get_setting = orig
         self.assertEqual(out, {
-            "origin_company": "East Co", "origin_contact": "", "origin_address1": "9 Dock",
+            "origin_company": "East Co", "origin_contact": "Ann", "origin_address1": "9 Dock",
             "origin_address2": "", "origin_city": "Newark", "origin_state": "NJ", "origin_zip": "07101",
-            "origin_phone": "777", "origin_email": "",
+            "origin_phone": "777", "origin_email": "ops@global.test",
         })
 
-    def test_partial_override_reports_the_missing_required_fields(self):
-        orig = with_settings({**GLOBAL, **OWN, "shipstation-5_origin_override": "true"})
+    def test_override_with_only_phone_and_email_keeps_the_global_address(self):
+        orig = with_settings({
+            **GLOBAL, "shipstation-5_origin_override": "true",
+            "shipstation-5_origin_phone": "777", "shipstation-5_origin_email": "east@acct.test",
+        })
         try:
-            missing = base.missing_origin_fields(base.origin_settings("shipstation-5"), REQUIRED)
+            out = base.origin_settings("shipstation-5")
         finally:
             base.db.get_setting = orig
-        self.assertEqual(missing, ["Email"])
+        self.assertEqual(out, {**GLOBAL, "origin_phone": "777", "origin_email": "east@acct.test"})
+
+    def test_own_address_never_inherits_a_global_address_line(self):
+        orig = with_settings({
+            **GLOBAL, "origin_address2": "Suite 100", **OWN, "shipstation-5_origin_override": "true",
+        })
+        try:
+            out = base.origin_settings("shipstation-5")
+        finally:
+            base.db.get_setting = orig
+        self.assertEqual((out["origin_address1"], out["origin_address2"]), ("9 Dock", ""))
+
+    def test_partial_own_address_reports_the_missing_address_fields(self):
+        orig = with_settings({
+            **GLOBAL, "shipstation-5_origin_override": "true", "shipstation-5_origin_address1": "9 Dock",
+        })
+        try:
+            missing = base.missing_origin_fields(base.origin_settings("shipstation-5"), ADDRESS_REQUIRED)
+        finally:
+            base.db.get_setting = orig
+        self.assertEqual(missing, ["City", "State", "ZIP"])
+
+    def test_override_on_with_nothing_set_is_the_global_origin(self):
+        orig = with_settings({**GLOBAL, "shipstation-5_origin_override": "true"})
+        try:
+            self.assertEqual(base.origin_settings("shipstation-5"), GLOBAL)
+        finally:
+            base.db.get_setting = orig
 
     def test_descriptor_keys_are_namespaced_by_instance(self):
         d = base.origin_descriptor("shipstation-5")
@@ -61,6 +93,12 @@ class OriginSettingsTest(unittest.TestCase):
             (d["origin_override_key"], [f["key"] for f in d["origin_fields"]][:2], len(d["origin_fields"])),
             ("shipstation-5_origin_override",
              ["shipstation-5_origin_company", "shipstation-5_origin_contact"], 9))
+
+    def test_descriptor_marks_the_street_address_fields_as_one_unit(self):
+        d = base.origin_descriptor("shipstation-5")
+        self.assertEqual(
+            [f["key"] for f in d["origin_fields"] if f.get("address")],
+            [f"shipstation-5_origin_{f}" for f in ("address1", "address2", "city", "state", "zip")])
 
 
 class ProviderIdentityTest(unittest.TestCase):

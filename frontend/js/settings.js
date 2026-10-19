@@ -252,6 +252,7 @@ async function renderProviders() {
   container.innerHTML = list.length
     ? list.map(providerCardHtml).join('')
     : '<div class="card"><p class="text-secondary">No shipping integrations yet — add one above.</p></div>';
+  renderOriginAccounts(list);
   for (const p of list) {
     wireProviderCard(p);
     for (const f of p.fields) {
@@ -329,8 +330,13 @@ async function refreshProviders(selectKey) {
   initNav('settings');
 }
 
+/* `{key}_origin_zip` → `zip`, the matching global field is `origin_zip`. */
+function originSuffix(p, f) {
+  return f.key.slice(p.name.length + '_origin_'.length);
+}
+
 function originFieldsHtml(p) {
-  const byKey = Object.fromEntries((p.origin_fields || []).map((f) => [f.key.slice(p.name.length + 8), f]));
+  const byKey = Object.fromEntries((p.origin_fields || []).map((f) => [originSuffix(p, f), f]));
   const input = (name, extra = '') => {
     const f = byKey[name];
     return f ? `<div class="field${extra ? ' fixed' : ''}"${extra ? ` style="${extra}"` : ''}><label>${esc(f.label)}</label><input id="${esc(f.key)}"${name === 'state' ? ' maxlength="2" style="text-transform:uppercase"' : ''}${name === 'email' ? ' type="email"' : ''}></div>` : '';
@@ -344,13 +350,80 @@ function originFieldsHtml(p) {
     </div>`;
 }
 
-/* Origin-override fields only show while the override box is ticked. */
-function syncOriginToggles() {
-  document.querySelectorAll('[data-origin-toggle]').forEach((box) => {
-    const fields = document.getElementById(`origin-fields-${box.dataset.originToggle}`);
-    if (fields) fields.style.display = box.checked ? '' : 'none';
+/* Shipping tab: one ship-from block per instance, one shown at a time. */
+function renderOriginAccounts(list) {
+  const container = document.getElementById('origin-accounts-container');
+  const picker = document.getElementById('origin-account-select');
+  const withOrigin = list.filter((p) => p.origin_override_key);
+  container.innerHTML = withOrigin.length ? withOrigin.map((p) => `
+    <div data-origin-account="${esc(p.name)}">
+      <div class="row mt-16">
+        <label class="svc-selectall"><input type="checkbox" id="${esc(p.origin_override_key)}" data-origin-toggle="${esc(p.name)}"> Use a different ship-from for this account</label>
+      </div>
+      ${originFieldsHtml(p)}
+    </div>`).join('')
+    : '<p class="text-secondary mt-16">No shipping integrations yet — add one on the Providers tab.</p>';
+  const previous = picker.value;
+  picker.innerHTML = withOrigin.map((p) => `<option value="${esc(p.name)}">${esc(instanceOptionText(p))}</option>`).join('');
+  picker.dataset.labels = JSON.stringify(Object.fromEntries(withOrigin.map((p) => [p.name, instanceOptionText(p)])));
+  if (withOrigin.length) picker.value = withOrigin.some((p) => p.name === previous) ? previous : withOrigin[0].name;
+  picker.onchange = () => {
+    container.querySelectorAll('[data-origin-account]').forEach((el) => {
+      el.style.display = el.dataset.originAccount === picker.value ? '' : 'none';
+    });
+  };
+  picker.onchange();
+  container.oninput = syncOriginPlaceholders;
+  container.onchange = (e) => { if (e.target.dataset.originToggle) syncOriginToggles(); };
+}
+
+function showOriginAccount(name) {
+  showTab('shipping');
+  const picker = document.getElementById('origin-account-select');
+  picker.value = name;
+  picker.onchange();
+  document.getElementById('card-origin-accounts').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* Greyed placeholders show the global value an instance field falls back to.
+   The street address falls back as a unit, so once any of the instance's
+   address fields is filled the other address fields show nothing. */
+function syncOriginPlaceholders() {
+  renderedProviders.forEach((p) => {
+    const fields = p.origin_fields || [];
+    const ownAddress = fields.some((f) => f.address && (document.getElementById(f.key)?.value || '').trim());
+    fields.forEach((f) => {
+      const el = document.getElementById(f.key);
+      const globalEl = document.getElementById(`origin_${originSuffix(p, f)}`);
+      if (el) el.placeholder = f.address && ownAddress ? '' : (globalEl?.value || '').trim();
+    });
   });
 }
+
+/* Origin-override fields only show while the override box is ticked; the
+   global card, the account picker and each Providers card say which
+   accounts ship from their own details. */
+function syncOriginToggles() {
+  const picker = document.getElementById('origin-account-select');
+  const labels = JSON.parse(picker.dataset.labels || '{}');
+  const own = [];
+  document.querySelectorAll('[data-origin-toggle]').forEach((box) => {
+    const name = box.dataset.originToggle;
+    const fields = document.getElementById(`origin-fields-${name}`);
+    if (fields) fields.style.display = box.checked ? '' : 'none';
+    const option = [...picker.options].find((o) => o.value === name);
+    if (option) option.textContent = `${labels[name] || name}${box.checked ? ' · own ship-from' : ''}`;
+    const summary = document.getElementById(`origin-summary-${name}`);
+    if (summary) summary.textContent = box.checked ? 'Ship from: own details for this account' : 'Ship from: global origin';
+    if (box.checked) own.push(labels[name] || name);
+  });
+  document.getElementById('origin-overrides-note').textContent = own.length
+    ? `Used by every shipping account except ${own.join(', ')}, which ${own.length === 1 ? 'has its' : 'have their'} own ship-from below (blank fields there still fall back to this address).`
+    : 'Used by every shipping account. To ship from different details for one account, use Per-account ship-from below.';
+  syncOriginPlaceholders();
+}
+
+document.getElementById('card-origin').addEventListener('input', syncOriginPlaceholders);
 
 /* Delete is locked while the SAVED enabled flag is on (the server refuses
    with 409 anyway). Runs after load/save/discard, when the checkboxes
@@ -405,10 +478,10 @@ function providerCardHtml(p) {
       </div>
     </div>` : '';
   const origin = p.origin_override_key ? `
-    <div class="row mt-16">
-      <label class="svc-selectall"><input type="checkbox" id="${esc(p.origin_override_key)}" data-origin-toggle="${esc(p.name)}"> Ship from a different address than the global origin</label>
-    </div>
-    ${originFieldsHtml(p)}` : '';
+    <div class="row mt-16" style="align-items:center">
+      <div class="fixed"><span class="hint" id="origin-summary-${esc(p.name)}">Ship from: global origin</span></div>
+      <div class="fixed"><button class="btn btn-text btn-small" data-origin-edit="${esc(p.name)}">Change</button></div>
+    </div>` : '';
   const deleteAttrs = p.enabled
     ? ' disabled title="Disable this integration and save before deleting it"'
     : ' title="Remove this integration and its credentials"';
@@ -435,8 +508,8 @@ function providerCardHtml(p) {
 }
 
 function wireProviderCard(p) {
-  const toggle = document.querySelector(`[data-origin-toggle="${p.name}"]`);
-  if (toggle) toggle.addEventListener('change', syncOriginToggles);
+  const originEdit = document.querySelector(`[data-origin-edit="${p.name}"]`);
+  if (originEdit) originEdit.addEventListener('click', () => showOriginAccount(p.name));
   // Delegated: the block's innerHTML is replaced on every loadUsers().
   document.getElementById(`inst-users-${p.name}`).addEventListener('click', (e) => {
     if (e.target.closest('[data-save-inst-users]')) saveInstanceUsers(p);

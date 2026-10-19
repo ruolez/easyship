@@ -115,6 +115,10 @@ ORIGIN_FIELDS = (
     ("email", "Email"),
 )
 
+# The street address is taken whole from one source, so a global "Suite 100"
+# never lands on an instance's own street.
+ADDRESS_FIELDS = ("address1", "address2", "city", "state", "zip")
+
 
 def origin_override_key(key):
     return f"{key}_origin_override"
@@ -122,11 +126,21 @@ def origin_override_key(key):
 
 def origin_settings(key):
     """The ship-from address one instance ships with, keyed like the global
-    settings (`origin_company`, ...): the instance's own `{key}_origin_*` values
-    when its override flag is on, otherwise the global origin."""
-    own = db.get_setting(origin_override_key(key)) == "true"
-    prefix = f"{key}_origin_" if own else "origin_"
-    return {f"origin_{f}": (db.get_setting(f"{prefix}{f}") or "").strip() for f, _ in ORIGIN_FIELDS}
+    settings (`origin_company`, ...). With the instance's override flag on, each
+    blank contact field falls back to the global origin, and the street address
+    comes from the instance if any of its address fields is set, otherwise from
+    the global origin."""
+    def read(prefix):
+        return {f: (db.get_setting(f"{prefix}{f}") or "").strip() for f, _ in ORIGIN_FIELDS}
+
+    merged = read("origin_")
+    if db.get_setting(origin_override_key(key)) == "true":
+        own = read(f"{key}_origin_")
+        own_address = any(own[f] for f in ADDRESS_FIELDS)
+        for f, _ in ORIGIN_FIELDS:
+            if own[f] or (f in ADDRESS_FIELDS and own_address):
+                merged[f] = own[f]
+    return {f"origin_{f}": v for f, v in merged.items()}
 
 
 def origin_descriptor(key):
@@ -134,7 +148,10 @@ def origin_descriptor(key):
     instance's ship-from override."""
     return {
         "origin_override_key": origin_override_key(key),
-        "origin_fields": [{"key": f"{key}_origin_{f}", "label": label} for f, label in ORIGIN_FIELDS],
+        "origin_fields": [
+            {"key": f"{key}_origin_{f}", "label": label, "address": f in ADDRESS_FIELDS}
+            for f, label in ORIGIN_FIELDS
+        ],
     }
 
 
