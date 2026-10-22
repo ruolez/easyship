@@ -19,6 +19,7 @@ def create_app():
     import backoffice_api
     import external_api
     import manifests_api
+    import picklists_api
     import reports_api
     import settings_api
     import shipments_api
@@ -34,6 +35,7 @@ def create_app():
     app.register_blueprint(backoffice_api.bp)
     app.register_blueprint(reports_api.bp)
     app.register_blueprint(external_api.bp)
+    app.register_blueprint(picklists_api.bp)
 
     app.teardown_appcontext(db.close_db)
 

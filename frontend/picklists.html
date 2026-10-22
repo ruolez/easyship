@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyShip — Pick lists</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header id="appbar"></header>
+  <div class="container wide">
+    <div class="page-head"><h1>Pick lists</h1><span class="sub">One picking list for many paid, unfulfilled orders</span></div>
+    <div class="tabs">
+      <button class="tab active" data-tab="new">New pick list</button>
+      <button class="tab" data-tab="history">History</button>
+    </div>
+
+    <div id="tab-new">
+      <div class="card">
+        <div class="row mb-16">
+          <div class="fixed pl-chip-row" id="pl-stores"></div>
+          <div class="fixed" style="margin-left:auto">
+            <button class="btn btn-outlined btn-small" id="pl-refresh">Refresh</button>
+          </div>
+        </div>
+        <div class="pl-chip-row mb-16" id="pl-rules" style="display:none"></div>
+        <div class="row">
+          <div class="field"><label>Order tag</label><input id="qf-tag" placeholder="contains…" autocomplete="off"></div>
+          <div class="field"><label>Customer tag</label><input id="qf-ctag" placeholder="contains…" autocomplete="off"></div>
+          <div class="field fixed" style="min-width:130px"><label>Ship-to state</label><input id="qf-state" placeholder="TX, CA" autocomplete="off"></div>
+          <div class="field"><label>Search</label><input id="qf-search" placeholder="Order # or customer" autocomplete="off"></div>
+          <div class="fixed"><button class="btn btn-text btn-small" id="qf-clear">Clear</button></div>
+        </div>
+      </div>
+
+      <div class="pl-errors" id="pl-errors"></div>
+
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Order</th><th>Store</th><th>Date</th><th>Customer</th><th>Ship to</th>
+                <th class="num">Units</th><th>Tags</th><th>Risk</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="pl-orders"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="pl-empty" style="display:none"></div>
+        <details class="pl-excluded" id="pl-excluded" style="display:none">
+          <summary id="pl-excluded-summary"></summary>
+          <div id="pl-excluded-list"></div>
+        </details>
+      </div>
+
+      <div class="pl-footer">
+        <span id="pl-summary">No orders selected</span>
+        <button class="btn btn-primary" id="pl-generate" disabled>Generate pick list</button>
+      </div>
+    </div>
+
+    <div id="tab-history" style="display:none">
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>Created</th><th>By</th><th>Quotation</th><th>Customer</th><th>Sales rep</th>
+                <th class="num">Orders</th><th class="num">Units</th><th class="num">Products</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="pl-history"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="pl-history-empty" style="display:none">No pick lists yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/picklists.js"></script>
+</body>
+</html>

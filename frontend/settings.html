@@ -22,6 +22,7 @@
       <button class="tab" data-tab="printing">Printing</button>
       <button class="tab" data-tab="boxes">Boxes</button>
       <button class="tab" data-tab="integrations">Integrations</button>
+      <button class="tab" data-tab="picklists">Pick lists</button>
       <button class="tab" data-tab="users">Users</button>
       <button class="tab" data-tab="audit">Audit</button>
       <button class="tab" data-tab="account">My account</button>
@@ -242,13 +243,37 @@
       </div>
     </section>
 
+    <!-- ================= Pick lists ================= -->
+    <section class="tab-panel" data-panel="picklists">
+      <div class="card" id="card-picklist-config">
+        <h2>Pick list quotations</h2>
+        <p class="hint mb-16">Generating a pick list writes one quotation to this BackOffice database: one line per barcode with the total quantity across the chosen orders. The customer and sales rep are picked each time.</p>
+        <div class="row mb-16">
+          <div class="field"><label>BackOffice database</label><select id="picklist_backoffice_db_id"></select></div>
+          <div class="field fixed" style="min-width:140px"><label>Quotation status</label><input id="picklist_quote_status" inputmode="numeric" placeholder="1"></div>
+        </div>
+        <div class="row">
+          <div class="field fixed" style="min-width:160px"><label>Title prefix</label><input id="picklist_title_prefix" maxlength="20" placeholder="PL"><span class="hint">Title becomes “PL 42”</span></div>
+          <div class="field fixed" style="min-width:160px"><label>Number tag</label><input id="picklist_number_tag" inputmode="numeric" maxlength="4" placeholder="19"><span class="hint">Number = MMDDYYYY + tag + counter</span></div>
+        </div>
+      </div>
+
+      <div class="card" id="card-picklist-rules">
+        <h2>Pick list rules</h2>
+        <p class="hint mb-16">Named filters people switch on as chips on the Pick lists page. A rule either hides the orders it matches or keeps only those. Tags compare without case; states are two-letter codes, comma-separated.</p>
+        <input type="hidden" id="picklist_rules">
+        <div id="pl-rules-list"></div>
+        <button class="btn btn-text" id="add-pl-rule">+ Add rule</button>
+      </div>
+    </section>
+
     <!-- ================= Users ================= -->
     <section class="tab-panel" data-panel="users">
       <div class="card" id="card-users">
         <h2>Users</h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Username</th><th>Role</th><th>Integrations</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Username</th><th>Role</th><th>Integrations</th><th>Sections</th><th>Status</th><th></th></tr></thead>
             <tbody id="users-body"></tbody>
           </table>
         </div>

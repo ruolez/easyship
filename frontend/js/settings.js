@@ -8,6 +8,8 @@ const BASE_SETTING_IDS = [
   'label_timeout_seconds', 'countdown_seconds', 'order_tag_rules',
   'profit_min_amount', 'profit_min_margin_pct', 'profit_bypass_password',
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
+  'picklist_backoffice_db_id', 'picklist_quote_status', 'picklist_title_prefix',
+  'picklist_number_tag', 'picklist_rules',
 ];
 let SETTING_IDS = [...BASE_SETTING_IDS];
 
@@ -16,6 +18,7 @@ initNav('settings').then(async () => {
   initTabs(isAdmin);
   if (!isAdmin) return;
   await renderProviders();
+  await loadPicklistOptions();
   await loadSettings();
   updatePrintModeUI();
   renderTagRules();
@@ -29,7 +32,7 @@ initNav('settings').then(async () => {
 });
 
 /* ---------- Tabs ---------- */
-const ADMIN_TABS = ['providers', 'shipping', 'printing', 'boxes', 'integrations', 'users', 'audit'];
+const ADMIN_TABS = ['providers', 'shipping', 'printing', 'boxes', 'integrations', 'picklists', 'users', 'audit'];
 
 function initTabs(isAdmin) {
   const buttons = [...document.querySelectorAll('#settings-tabs .tab')];
@@ -145,6 +148,149 @@ document.getElementById('add-tag-rule').addEventListener('click', () => {
   renderTagRules();
   const rows = document.querySelectorAll('#tag-rules-list .tr-tag');
   if (rows.length) rows[rows.length - 1].focus();
+});
+
+/* ---------- Pick list rules ----------
+   Stored as JSON in the hidden #picklist_rules input, like the tag rules, so
+   they ride along with Save / Discard. The server assigns each rule its id. */
+const PL_FIELDS = {
+  order_tag: 'Order tag', customer_tag: 'Customer tag', ship_state: 'Ship-to state', store: 'Store',
+};
+const PL_OPS = {
+  order_tag: [['has', 'has'], ['not_has', 'doesn’t have']],
+  customer_tag: [['has', 'has'], ['not_has', 'doesn’t have']],
+  ship_state: [['in', 'is one of'], ['not_in', 'is not one of']],
+  store: [['in', 'is'], ['not_in', 'is not']],
+};
+let plStores = [];
+
+/* BackOffice databases and stores for the Pick lists tab; filled before the
+   saved values are applied so the selects can show them. */
+async function loadPicklistOptions() {
+  let dbs = [];
+  try {
+    [dbs, plStores] = await Promise.all([api('/api/backoffice-dbs'), api('/api/shopify-stores')]);
+  } catch { /* selects stay empty */ }
+  document.getElementById('picklist_backoffice_db_id').innerHTML = '<option value="">— Not set —</option>'
+    + dbs.map((d) => `<option value="${d.id}">${esc(d.name)}${d.is_active ? '' : ' (inactive)'}</option>`).join('');
+}
+
+function readPlRules() {
+  try {
+    const rules = JSON.parse(document.getElementById('picklist_rules').value || '[]');
+    return Array.isArray(rules) ? rules : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePlRules(rules) {
+  document.getElementById('picklist_rules').value = JSON.stringify(rules);
+  setDirty(true);
+}
+
+function plValueHtml(c) {
+  if (c.field === 'store') {
+    const current = String((c.value || [])[0] || '');
+    return `<select class="pl-value">${plStores.map((s) => `<option value="${s.id}" ${String(s.id) === current ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
+  }
+  const value = Array.isArray(c.value) ? c.value.join(', ') : (c.value || '');
+  const placeholder = c.field === 'ship_state' ? 'TX, CA' : 'tag';
+  return `<input class="pl-value" value="${esc(value)}" placeholder="${placeholder}">`;
+}
+
+function plConditionHtml(c, j) {
+  return `<div class="row pl-cond" data-cidx="${j}">
+    <div class="field fixed" style="min-width:150px"><select class="pl-field">${Object.entries(PL_FIELDS).map(([v, l]) => `<option value="${v}" ${c.field === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field fixed" style="min-width:140px"><select class="pl-op">${PL_OPS[c.field].map(([v, l]) => `<option value="${v}" ${c.op === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field">${plValueHtml(c)}</div>
+    <div class="fixed"><button class="btn btn-text btn-small pl-cond-remove" title="Remove condition">✕</button></div>
+  </div>`;
+}
+
+function renderPlRules() {
+  const list = document.getElementById('pl-rules-list');
+  if (!list) return;
+  const rules = readPlRules();
+  if (!rules.length) {
+    list.innerHTML = '<p class="text-secondary mb-16">No rules yet — the Pick lists page still has its quick filters.</p>';
+    return;
+  }
+  list.innerHTML = rules.map((r, i) => `
+    <div class="pl-rule" data-idx="${i}" data-id="${esc(r.id || '')}">
+      <div class="row mb-16">
+        <div class="field"><label>Name</label><input class="pl-name" value="${esc(r.name || '')}" placeholder="e.g. Wholesale" maxlength="40"></div>
+        <div class="field fixed" style="min-width:220px"><label>When switched on</label>
+          <select class="pl-action">
+            <option value="hide" ${r.action !== 'keep' ? 'selected' : ''}>Hide matching orders</option>
+            <option value="keep" ${r.action === 'keep' ? 'selected' : ''}>Show only matching orders</option>
+          </select></div>
+        <div class="field fixed" style="min-width:170px"><label>Orders match when</label>
+          <select class="pl-match">
+            <option value="all" ${r.match !== 'any' ? 'selected' : ''}>all conditions hold</option>
+            <option value="any" ${r.match === 'any' ? 'selected' : ''}>any condition holds</option>
+          </select></div>
+        <div class="fixed"><button class="btn btn-danger btn-small pl-remove">Remove</button></div>
+      </div>
+      ${(r.conditions || []).map(plConditionHtml).join('')}
+      <button class="btn btn-text btn-small pl-cond-add">+ Add condition</button>
+    </div>`).join('');
+}
+
+function syncPlRulesFromDom() {
+  const rules = [...document.querySelectorAll('#pl-rules-list .pl-rule')].map((el) => ({
+    id: el.dataset.id || undefined,
+    name: el.querySelector('.pl-name').value,
+    action: el.querySelector('.pl-action').value,
+    match: el.querySelector('.pl-match').value,
+    conditions: [...el.querySelectorAll('.pl-cond')].map((c) => {
+      const field = c.querySelector('.pl-field').value;
+      const raw = c.querySelector('.pl-value').value;
+      return {
+        field,
+        op: c.querySelector('.pl-op').value,
+        value: field === 'store' ? [raw] : field === 'ship_state' ? raw.split(',').map((v) => v.trim()) : raw,
+      };
+    }),
+  }));
+  writePlRules(rules);
+}
+
+function defaultPlCondition(field = 'order_tag') {
+  return { field, op: PL_OPS[field][0][0], value: field === 'store' && plStores.length ? [String(plStores[0].id)] : '' };
+}
+
+const plList = document.getElementById('pl-rules-list');
+plList.addEventListener('input', syncPlRulesFromDom);
+plList.addEventListener('change', (e) => {
+  if (e.target.classList.contains('pl-field')) {
+    // A new field brings its own operators and value widget.
+    const cond = e.target.closest('.pl-cond');
+    const rules = readPlRules();
+    rules[cond.closest('.pl-rule').dataset.idx].conditions[cond.dataset.cidx] = defaultPlCondition(e.target.value);
+    writePlRules(rules);
+    renderPlRules();
+    return;
+  }
+  syncPlRulesFromDom();
+});
+plList.addEventListener('click', (e) => {
+  const ruleEl = e.target.closest('.pl-rule');
+  if (!ruleEl || !e.target.closest('button')) return;
+  const rules = readPlRules();
+  const rule = rules[ruleEl.dataset.idx];
+  if (e.target.closest('.pl-remove')) rules.splice(ruleEl.dataset.idx, 1);
+  else if (e.target.closest('.pl-cond-add')) rule.conditions.push(defaultPlCondition());
+  else if (e.target.closest('.pl-cond-remove')) rule.conditions.splice(e.target.closest('.pl-cond').dataset.cidx, 1);
+  else return;
+  writePlRules(rules);
+  renderPlRules();
+});
+document.getElementById('add-pl-rule').addEventListener('click', () => {
+  writePlRules([...readPlRules(), { name: '', action: 'hide', match: 'all', conditions: [defaultPlCondition()] }]);
+  renderPlRules();
+  const names = document.querySelectorAll('#pl-rules-list .pl-name');
+  if (names.length) names[names.length - 1].focus();
 });
 
 /* Service-name suggestions for the rule editor: every courier service the
@@ -727,6 +873,7 @@ async function loadSettings() {
   });
   syncOriginToggles();
   syncDeleteButtons();
+  renderPlRules();
 }
 
 document.getElementById('save-settings').addEventListener('click', async () => {
@@ -1019,6 +1166,28 @@ function providerNamesToLabels(names) {
   return names.map((n) => (allProviders.find((p) => p.name === n) || { label: n }).label);
 }
 
+/* Sections an admin grants per user; admins always have every one. */
+const SECTIONS = [['picklists', 'Pick lists']];
+
+function sectionsCell(u) {
+  if (u.role === 'admin') return 'All';
+  const names = SECTIONS.filter(([k]) => (u.allowed_sections || []).includes(k)).map(([, l]) => l);
+  return names.length ? names.map((l) => `<span class="chip static">${esc(l)}</span>`).join(' ') : '<span class="text-secondary">—</span>';
+}
+
+function sectionChecklistHtml(checked) {
+  return `<div class="field mb-16" id="m-user-sections"><label>Sections</label>
+    <div class="svc-checklist">${SECTIONS.map(([k, l]) => `
+      <label class="svc-item"><input type="checkbox" class="m-user-section" value="${k}" ${(checked || []).includes(k) ? 'checked' : ''}> ${l}</label>`).join('')}
+    </div>
+    <span class="hint">Extra pages this user may open. Admins always see every section.</span>
+  </div>`;
+}
+
+function checkedSections() {
+  return [...document.querySelectorAll('.m-user-section:checked')].map((el) => el.value);
+}
+
 function integrationsCell(u) {
   if (u.role === 'admin' || !u.allowed_providers || !u.allowed_providers.length) return 'All accounts';
   return providerNamesToLabels(u.allowed_providers)
@@ -1062,9 +1231,11 @@ async function loadUsers() {
     <td><strong>${esc(u.username)}</strong></td>
     <td>${esc(u.role)}</td>
     <td>${integrationsCell(u)}</td>
+    <td>${sectionsCell(u)}</td>
     <td>${u.is_active ? '<span class="chip static ok">active</span>' : '<span class="chip static">inactive</span>'}</td>
     <td>
       ${u.role !== 'admin' ? `<button class="btn btn-text btn-small" onclick="editUserProviders(${u.id}, '${esc(u.username)}')">Integrations</button>` : ''}
+      ${u.role !== 'admin' ? `<button class="btn btn-text btn-small" onclick="editUserSections(${u.id}, '${esc(u.username)}')">Sections</button>` : ''}
       <button class="btn btn-text btn-small" onclick="resetPassword(${u.id}, '${esc(u.username)}')">Reset password</button>
       ${u.is_active
         ? `<button class="btn btn-danger btn-small" onclick="deactivateUser(${u.id}, '${esc(u.username)}')">Deactivate</button>`
@@ -1102,12 +1273,33 @@ window.editUserProviders = async (id, username) => {
   });
 };
 
+window.editUserSections = (id, username) => {
+  const u = (window.usersById || {})[id] || {};
+  openModal(`
+    <h3>Sections — ${esc(username)}</h3>
+    ${sectionChecklistHtml(u.allowed_sections || [])}
+    <div class="actions">
+      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="m-user-sections-save">Save</button>
+    </div>`);
+  document.getElementById('m-user-sections-save').addEventListener('click', async () => {
+    try {
+      await api(`/api/users/${id}/sections`, { method: 'PUT', body: { allowed_sections: checkedSections() } });
+      closeModal();
+      snackbar('Sections updated', 'success');
+      loadUsers();
+    } catch (err) {
+      snackbar(err.message, 'error');
+    }
+  });
+};
+
 /* ---------- Audit log ---------- */
 const AUDIT_PAGE = 100;
 const AUDIT_GROUP_LABELS = {
   profit: 'Profit check', order_gate: 'Order gate', label: 'Labels', shipment: 'Shipments', manifest: 'Manifests',
   settings: 'Settings', user: 'Users', auth: 'Sign-ins', backoffice: 'BackOffice', shopify: 'Shopify',
-  provider_instance: 'Providers',
+  provider_instance: 'Providers', picklist: 'Pick lists',
 };
 let auditOffset = 0;
 
@@ -1177,6 +1369,7 @@ document.getElementById('add-user').addEventListener('click', async () => {
     <div class="field mb-16"><label>Password</label><input type="password" id="m-user-pass" autocomplete="new-password"></div>
     <div class="field mb-16"><label>Role</label><select id="m-user-role"><option value="user">User</option><option value="admin">Admin</option></select></div>
     ${providerChecklistHtml([])}
+    ${sectionChecklistHtml([])}
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="m-user-save">Create</button>
@@ -1185,6 +1378,7 @@ document.getElementById('add-user').addEventListener('click', async () => {
   const roleSel = document.getElementById('m-user-role');
   roleSel.addEventListener('change', () => {
     document.getElementById('m-user-providers').style.display = roleSel.value === 'admin' ? 'none' : '';
+    document.getElementById('m-user-sections').style.display = roleSel.value === 'admin' ? 'none' : '';
   });
   document.getElementById('m-user-save').addEventListener('click', async () => {
     try {
@@ -1195,6 +1389,7 @@ document.getElementById('add-user').addEventListener('click', async () => {
           password: document.getElementById('m-user-pass').value,
           role: document.getElementById('m-user-role').value,
           allowed_providers: checkedProviders(),
+          allowed_sections: checkedSections(),
         },
       });
       closeModal();

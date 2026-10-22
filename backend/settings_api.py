@@ -6,10 +6,11 @@ from werkzeug.security import generate_password_hash
 
 import config
 import db
+import picklist_rules
 import profit
 import providers
 import tag_rules
-from auth import admin_required, login_required
+from auth import admin_required, login_required, sanitize_sections
 from providers.base import ProviderError
 from util import api_error, audit, central_time
 
@@ -46,6 +47,11 @@ BASE_SETTING_KEYS = [
     "shipper_db",
     "shipper_user",
     "shipper_password",
+    "picklist_backoffice_db_id",
+    "picklist_quote_status",
+    "picklist_title_prefix",
+    "picklist_number_tag",
+    picklist_rules.RULES_KEY,
 ]
 
 BASE_SECRET_KEYS = {"shipper_password", profit.SETTING_PASSWORD}
@@ -139,13 +145,25 @@ def _profit_settings_error(data):
     return None
 
 
+def _picklist_settings_error(data):
+    status = str(data.get("picklist_quote_status") or "").strip()
+    if status and not status.isdigit():
+        return "Pick list quotation status must be a whole number"
+    tag = str(data.get("picklist_number_tag") or "").strip()
+    if tag and not (tag.isdigit() and len(tag) <= 4):
+        return "Pick list number tag must be 1–4 digits"
+    if len(str(data.get("picklist_title_prefix") or "").strip()) > 20:
+        return "Pick list title prefix must be 20 characters or fewer"
+    return None
+
+
 @bp.put("/settings")
 @admin_required
 def put_settings():
     data = request.get_json(silent=True) or {}
     keys = set(_setting_keys())
     secret_keys = _secret_keys()
-    error = _profit_settings_error(data)
+    error = _profit_settings_error(data) or _picklist_settings_error(data)
     if error:
         return api_error(error)
     for key, value in data.items():
@@ -155,6 +173,8 @@ def put_settings():
             continue
         if key == tag_rules.RULES_KEY:
             value = json.dumps(tag_rules.parse_rules(value)) if (value or "").strip() else ""
+        if key == picklist_rules.RULES_KEY:
+            value = json.dumps(picklist_rules.parse_rules(value)) if (value or "").strip() else ""
         if key == profit.SETTING_PASSWORD and (value or "").strip():
             # Only ever compared, never replayed — so it is stored hashed.
             value = generate_password_hash(value.strip())
@@ -628,7 +648,8 @@ def test_store(store_id):
 @admin_required
 def list_users():
     rows = db.query(
-        "SELECT id, username, role, is_active, allowed_providers, created_at FROM users ORDER BY id"
+        "SELECT id, username, role, is_active, allowed_providers, allowed_sections, created_at"
+        " FROM users ORDER BY id"
     )
     return jsonify([{**r, "created_at": r["created_at"].isoformat()} for r in rows])
 
@@ -646,12 +667,16 @@ def create_user():
     if existing:
         return api_error("Username already exists")
     allowed = providers.sanitize_allowed(data.get("allowed_providers")) if role == "user" else None
+    sections = sanitize_sections(data.get("allowed_sections")) if role == "user" else []
     row = db.execute(
-        "INSERT INTO users (username, password_hash, role, allowed_providers) VALUES (%s, %s, %s, %s) RETURNING id",
-        (username, generate_password_hash(password), role, json.dumps(allowed) if allowed else None),
+        """INSERT INTO users (username, password_hash, role, allowed_providers, allowed_sections)
+           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+        (username, generate_password_hash(password), role, json.dumps(allowed) if allowed else None,
+         json.dumps(sections) if sections else None),
         returning=True,
     )
-    audit("user.create", {"username": username, "role": role, "allowed_providers": allowed})
+    audit("user.create", {"username": username, "role": role, "allowed_providers": allowed,
+                          "allowed_sections": sections})
     return jsonify({"id": row["id"]})
 
 
@@ -695,6 +720,26 @@ def set_user_providers(user_id):
     )
     audit("user.providers", {"id": user_id, "allowed_providers": allowed})
     return jsonify({"ok": True, "allowed_providers": allowed})
+
+
+@bp.put("/users/<int:user_id>/sections")
+@admin_required
+def set_user_sections(user_id):
+    """Which extra sections (e.g. Pick lists) a user may open. Admins always
+    have every section; an empty selection removes them all."""
+    row = db.query("SELECT id, role FROM users WHERE id = %s", (user_id,), one=True)
+    if not row:
+        return api_error("User not found", 404)
+    if row["role"] == "admin":
+        return api_error("Admins always have access to every section")
+    data = request.get_json(silent=True) or {}
+    sections = sanitize_sections(data.get("allowed_sections"))
+    db.execute(
+        "UPDATE users SET allowed_sections = %s WHERE id = %s",
+        (json.dumps(sections) if sections else None, user_id),
+    )
+    audit("user.sections", {"id": user_id, "allowed_sections": sections})
+    return jsonify({"ok": True, "allowed_sections": sections})
 
 
 @bp.put("/users/<int:user_id>/password")

@@ -31,6 +31,41 @@ def admin_required(f):
     return wrapper
 
 
+# Sections an admin grants per user (users.allowed_sections); admins have all.
+SECTIONS = {"picklists": "Pick lists"}
+
+
+def sanitize_sections(values):
+    """Known section keys only, in SECTIONS order."""
+    wanted = {str(v) for v in values or []}
+    return [key for key in SECTIONS if key in wanted]
+
+
+def user_sections(user_id, role):
+    """Read fresh on every call, so revoking access takes effect at once."""
+    if role == "admin":
+        return list(SECTIONS)
+    row = db.query(
+        "SELECT allowed_sections FROM users WHERE id = %s AND is_active", (user_id,), one=True
+    )
+    return sanitize_sections((row or {}).get("allowed_sections"))
+
+
+def section_required(section):
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            if "user_id" not in session:
+                return api_error("Not authenticated", 401)
+            if section not in user_sections(session["user_id"], session.get("role")):
+                return api_error(f"You don't have access to {SECTIONS[section]}", 403)
+            return f(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 @bp.post("/login")
 def login():
     data = request.get_json(silent=True) or {}
@@ -61,4 +96,5 @@ def me():
         "id": session["user_id"],
         "username": session["username"],
         "role": session["role"],
+        "sections": user_sections(session["user_id"], session["role"]),
     })

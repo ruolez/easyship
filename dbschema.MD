@@ -13,7 +13,31 @@ CREATE TABLE [Items_BinLocations] (
   [txt1] varchar(255) null
 )
 
-	dbo].[Quotations_tbl](
+
+CREATE TABLE [dbo].[Employees_tbl](
+	[EmployeeID] [int] IDENTITY(1,1) NOT NULL,
+	[EmployeeNo] [nvarchar](10) NULL,
+	[FirstName] [nvarchar](20) NULL,
+	[MiddleName] [nvarchar](20) NULL,
+	[LastName] [nvarchar](20) NULL,
+	[SSN] [nvarchar](20) NULL,
+	[TitleID] [int] NULL,
+	[Address1] [nvarchar](32) NULL,
+	[Address2] [nvarchar](32) NULL,
+	[City] [nvarchar](20) NULL,
+	[State] [nvarchar](3) NULL,
+	[ZipCode] [nvarchar](5) NULL,
+	[HomePhone] [nvarchar](13) NULL,
+	[Othr_Phone] [nvarchar](13) NULL,
+	[Birthdate] [smalldatetime] NULL,
+	[DateHired] [smalldatetime] NULL,
+	[EmrgcyContactName] [nvarchar](50) NULL,
+	[EmrgcyContactPhone] [nvarchar](13) NULL,
+	[CommissionRate] [real] NULL,
+	[Notes] [ntext] NULL,
+)
+
+CREATE TABLE [dbo].[Quotations_tbl](
 	[QuotationID] [int] IDENTITY(1,1) NOT NULL,
 	[QuotationNumber] [nvarchar](20) NULL,
 	[QuotationDate] [smalldatetime] NULL,

@@ -355,6 +355,164 @@ def get_order_gate(store_id, order_gid):
     return order_gate.from_shopify_order(order)
 
 
+# ---------- Pick lists ----------
+# Only what eligibility, the rules and grouping by barcode need; orders come
+# 10 at a time so the 50 line items each stay under the query cost limit.
+PICKLIST_LINE_FRAGMENT = """
+fragment PicklistLine on LineItem {
+  title
+  sku
+  quantity
+  unfulfilledQuantity
+  requiresShipping
+  variant { barcode }
+}
+"""
+
+PICKLIST_ORDER_FRAGMENT = """
+fragment PicklistOrder on Order {
+  id
+  name
+  createdAt
+  cancelledAt
+  displayFinancialStatus
+  displayFulfillmentStatus
+  tags
+  totalPriceSet { shopMoney { amount } }
+  customer { displayName tags }
+  shippingAddress { name city provinceCode countryCodeV2 }
+  fulfillmentOrders(first: 5) { nodes { status } }
+  risk { recommendation assessments { riskLevel } }
+  lineItems(first: 50) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ...PicklistLine }
+  }
+}
+""" + PICKLIST_LINE_FRAGMENT
+
+PICKLIST_ORDERS_QUERY = """
+query picklistOrders($query: String!, $after: String) {
+  orders(first: 10, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ...PicklistOrder }
+  }
+}
+""" + PICKLIST_ORDER_FRAGMENT
+
+PICKLIST_ORDERS_BY_ID_QUERY = """
+query picklistOrdersById($ids: [ID!]!) {
+  nodes(ids: $ids) { ...PicklistOrder }
+}
+""" + PICKLIST_ORDER_FRAGMENT
+
+PICKLIST_ORDER_LINES_QUERY = """
+query picklistOrderLines($id: ID!, $after: String) {
+  order(id: $id) {
+    lineItems(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...PicklistLine }
+    }
+  }
+}
+""" + PICKLIST_LINE_FRAGMENT
+
+# Shopify's search narrows the list; picklists.ineligible_reason has the final say.
+PICKLIST_SEARCH = ("status:open fulfillment_status:unfulfilled "
+                   "(financial_status:paid OR financial_status:partially_refunded)")
+PICKLIST_MAX_PAGES = 100
+PICKLIST_IDS_CHUNK = 10
+
+
+def _complete_line_items(store_id, node):
+    """Fetch the rest of an order's line items when the first page was not all."""
+    page = node.get("lineItems") or {}
+    nodes = list(page.get("nodes") or [])
+    info = page.get("pageInfo") or {}
+    while info.get("hasNextPage"):
+        data = _graphql(store_id, PICKLIST_ORDER_LINES_QUERY, {"id": node["id"], "after": info["endCursor"]})
+        more = ((data.get("order") or {}).get("lineItems")) or {}
+        nodes.extend(more.get("nodes") or [])
+        info = more.get("pageInfo") or {}
+    node["lineItems"] = {"nodes": nodes}
+    return node
+
+
+def list_picklist_orders(store_id):
+    """Every open, unfulfilled, paid order of the store, as raw nodes with all
+    their line items."""
+    orders, after = [], None
+    for _ in range(PICKLIST_MAX_PAGES):
+        data = _graphql(store_id, PICKLIST_ORDERS_QUERY, {"query": PICKLIST_SEARCH, "after": after})
+        page = data["orders"]
+        orders.extend(_complete_line_items(store_id, n) for n in page["nodes"])
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        after = page["pageInfo"]["endCursor"]
+    return orders
+
+
+def get_picklist_orders(store_id, order_gids):
+    """The given orders read live (for the pick list's final check); ids that
+    no longer resolve to an order are simply missing from the result."""
+    orders = []
+    for i in range(0, len(order_gids), PICKLIST_IDS_CHUNK):
+        data = _graphql(store_id, PICKLIST_ORDERS_BY_ID_QUERY, {"ids": order_gids[i:i + PICKLIST_IDS_CHUNK]})
+        orders.extend(_complete_line_items(store_id, n) for n in data.get("nodes") or [] if n)
+    return orders
+
+
+ORDER_FRAUD_QUERY = """
+query orderFraud($id: ID!) {
+  order(id: $id) {
+    id
+    name
+    createdAt
+    email
+    phone
+    tags
+    displayFinancialStatus
+    displayFulfillmentStatus
+    totalPriceSet { shopMoney { amount currencyCode } }
+    subtotalLineItemsQuantity
+    shippingLine { title }
+    customer {
+      displayName
+      numberOfOrders
+      createdAt
+      tags
+      amountSpent { amount currencyCode }
+    }
+    billingAddress { firstName lastName address1 address2 city provinceCode countryCodeV2 zip phone }
+    shippingAddress { firstName lastName address1 address2 city provinceCode countryCodeV2 zip phone }
+    transactions(first: 20) {
+      kind
+      status
+      gateway
+      paymentDetails { ... on CardPaymentDetails { name company } }
+    }
+    clientIp
+    risk {
+      recommendation
+      assessments {
+        riskLevel
+        facts { description sentiment }
+        provider { title }
+      }
+    }
+  }
+}
+"""
+
+
+def get_order_fraud(store_id, order_gid):
+    """The raw order node behind the Pick lists fraud window."""
+    data = _graphql(store_id, ORDER_FRAUD_QUERY, {"id": order_gid})
+    order = data.get("order")
+    if not order:
+        raise ShopifyError("Order not found")
+    return order
+
+
 # Shopify builds tracking links only for carrier names spelled exactly as on
 # its supported-companies list, and other apps on the store (Tracktor) rewrite
 # the tracking info — dropping every number but one — when they see anything

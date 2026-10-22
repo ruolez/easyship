@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pymssql
 
 import db
@@ -296,5 +298,223 @@ def write_tracking(db_id, invoice_id, tracking_number, shipping_cost, extra_numb
                     (new_notes[:255], invoice_id),
                 )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------- Pick lists ----------
+# A pick list is written as a quotation; column mapping follows the
+# picklist-quotation converter (Quotations_tbl / QuotationsDetails_tbl).
+
+QUOTATION_VALID_DAYS = 365
+UPC_CHUNK = 500  # SQL Server allows ~2100 parameters per statement
+
+
+def _trunc(value, length):
+    if value is None:
+        return None
+    text = str(value)
+    return text[:length]
+
+
+def list_sales_reps(db_id):
+    conn = _connect(db_id)
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            cur.execute(
+                """SELECT EmployeeID, FirstName, LastName FROM Employees_tbl
+                   WHERE LTRIM(RTRIM(ISNULL(FirstName, ''))) <> ''
+                      OR LTRIM(RTRIM(ISNULL(LastName, ''))) <> ''
+                   ORDER BY FirstName, LastName"""
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {"id": r["EmployeeID"],
+         "name": " ".join(p.strip() for p in (r["FirstName"], r["LastName"]) if p and p.strip())}
+        for r in rows
+    ]
+
+
+def search_customers(db_id, q=""):
+    q = (q or "").strip()
+    sql = """SELECT TOP 50 CustomerID, BusinessName, AccountNo, ShipCity, ShipState
+             FROM Customers_tbl WHERE (Discontinued IS NULL OR Discontinued = 0)"""
+    params = ()
+    if q:
+        like = f"%{q}%"
+        sql += " AND (BusinessName LIKE %s OR AccountNo LIKE %s OR CAST(CustomerID AS nvarchar(12)) = %s)"
+        params = (like, like, q)
+    sql += " ORDER BY BusinessName"
+    conn = _connect(db_id)
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {"id": r["CustomerID"], "name": (r["BusinessName"] or "").strip(), "account_no": r["AccountNo"],
+         "city": r["ShipCity"], "state": r["ShipState"]}
+        for r in rows
+    ]
+
+
+def find_items_by_upc(db_id, upcs):
+    """barcode → Items_tbl row (+ UnitDesc) for every barcode BackOffice knows.
+    When several products share a barcode, an active one wins, then the oldest."""
+    upcs = sorted({u for u in upcs if u})
+    found = {}
+    if not upcs:
+        return found
+    conn = _connect(db_id)
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            for i in range(0, len(upcs), UPC_CHUNK):
+                chunk = upcs[i:i + UPC_CHUNK]
+                cur.execute(
+                    f"""SELECT i.*, u.UnitDesc FROM Items_tbl i
+                        LEFT JOIN Units_tbl u ON i.UnitID = u.UnitID
+                        WHERE i.ProductUPC IN ({",".join(["%s"] * len(chunk))})
+                        ORDER BY ISNULL(i.Discontinued, 0), i.ProductID""",
+                    tuple(chunk),
+                )
+                for row in cur.fetchall():
+                    found.setdefault((row["ProductUPC"] or "").strip(), row)
+    finally:
+        conn.close()
+    return found
+
+
+def quotation_detail_row(quotation_id, item, qty, exp_date):
+    """The QuotationsDetails_tbl values for one pick-list line, in
+    QUOTATION_DETAIL_COLUMNS order."""
+    unit_price = float(item.get("UnitPrice") or 0)
+    unit_cost = float(item.get("UnitCost") or 0)
+    extended_price = round(qty * unit_price, 2)
+    return (
+        quotation_id, item.get("CateID"), item.get("SubCateID"), _trunc(item.get("UnitDesc"), 50), 1,
+        item.get("ProductID"), _trunc(item.get("ProductSKU"), 20), _trunc(item.get("ProductUPC"), 20),
+        _trunc(item.get("ProductDescription"), 50), _trunc(item.get("ItemSize"), 10),
+        exp_date, 0, "",
+        unit_price, unit_price, 0, unit_cost,
+        0, 0, qty, _trunc(item.get("ItemWeight"), 10),
+        extended_price, 0, round(qty * unit_cost, 2),
+        0, 0, extended_price,
+        0, "",
+        0, 0, 0, 0,
+    )
+
+
+QUOTATION_DETAIL_COLUMNS = (
+    "QuotationID, CateID, SubCateID, UnitDesc, UnitQty, "
+    "ProductID, ProductSKU, ProductUPC, ProductDescription, ItemSize, "
+    "ExpDate, ReasonID, LineMessage, "
+    "UnitPrice, OriginalPrice, RememberPrice, UnitCost, "
+    "Discount, ds_Percent, Qty, ItemWeight, "
+    "ExtendedPrice, ExtendedDisc, ExtendedCost, "
+    "PromotionID, PromotionLine, ActExtendedPrice, "
+    "SPPromoted, SPPromotionDescription, "
+    "Taxable, ItemTaxID, Catch, Flag"
+)
+
+
+def create_quotation(db_id, *, now, number_prefix, customer_id, sales_rep_id, status, title, notes, memo, lines):
+    """Write the pick list as one quotation — header, a line per barcode and
+    the total — in a single transaction; the number is taken under a lock so
+    two pick lists never share one. `lines` are (Items_tbl row, qty) pairs.
+    Returns (QuotationID, QuotationNumber, the customer's BusinessName)."""
+    conn = _connect(db_id)
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            cur.execute(
+                """SELECT BusinessName, AccountNo, ShipTo, ShipAddress1, ShipAddress2, ShipContact,
+                          ShipCity, ShipState, ShipZipCode, ShipPhone_Number
+                   FROM Customers_tbl WHERE CustomerID = %s""",
+                (customer_id,),
+            )
+            customer = cur.fetchone()
+            if not customer:
+                raise BackofficeError(f"BackOffice customer {customer_id} not found")
+            start = len(number_prefix) + 1
+            cur.execute(
+                """SELECT ISNULL(MAX(CASE WHEN LEN(QuotationNumber) > %s
+                                           AND SUBSTRING(QuotationNumber, %s, 20) NOT LIKE %s
+                                      THEN CAST(SUBSTRING(QuotationNumber, %s, 20) AS BIGINT) END), 0) + 1
+                          AS next_counter
+                   FROM Quotations_tbl WITH (UPDLOCK, HOLDLOCK)
+                   WHERE QuotationNumber LIKE %s""",
+                (len(number_prefix), start, "%[^0-9]%", start, number_prefix + "%"),
+            )
+            number = f"{number_prefix}{cur.fetchone()['next_counter']}"
+            expires = now + timedelta(days=QUOTATION_VALID_DAYS)
+            cur.execute(
+                """INSERT INTO Quotations_tbl
+                   (QuotationNumber, QuotationDate, QuotationTitle, CustomerID, Status,
+                    PoNumber, AutoOrderNo, ExpirationDate,
+                    BusinessName, AccountNo, Shipto, ShipAddress1, ShipAddress2,
+                    ShipContact, ShipCity, ShipState, ShipZipCode, ShipPhoneNo,
+                    ShipperID, SalesRepID, TermID,
+                    Header, Footer, Notes, Memo, flaged)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                   SELECT CAST(SCOPE_IDENTITY() AS INT) AS QuotationID""",
+                (
+                    _trunc(number, 20), now, _trunc(title, 50), customer_id, status,
+                    "", None, expires,
+                    _trunc(customer["BusinessName"] or "", 50), _trunc(customer["AccountNo"] or "", 13),
+                    _trunc(customer["ShipTo"] or "", 50), _trunc(customer["ShipAddress1"] or "", 50),
+                    _trunc(customer["ShipAddress2"] or "", 50), _trunc(customer["ShipContact"] or "", 50),
+                    _trunc(customer["ShipCity"] or "", 20), _trunc(customer["ShipState"] or "", 3),
+                    _trunc(customer["ShipZipCode"] or "", 10), _trunc(customer["ShipPhone_Number"] or "", 13),
+                    0, sales_rep_id, 1,
+                    "", "", _trunc(notes, 255), memo, 0,
+                ),
+            )
+            quotation_id = cur.fetchone()["QuotationID"]
+            placeholders = ", ".join(["%s"] * 33)
+            for item, qty in lines:
+                cur.execute(
+                    f"INSERT INTO QuotationsDetails_tbl ({QUOTATION_DETAIL_COLUMNS}) VALUES ({placeholders})",
+                    quotation_detail_row(quotation_id, item, qty, expires),
+                )
+            cur.execute(
+                """UPDATE Quotations_tbl SET QuotationTotal =
+                       (SELECT ISNULL(SUM(ExtendedPrice), 0) FROM QuotationsDetails_tbl WHERE QuotationID = %s)
+                   WHERE QuotationID = %s""",
+                (quotation_id, quotation_id),
+            )
+        conn.commit()
+        return quotation_id, number, (customer["BusinessName"] or "").strip()
+    except Exception as e:
+        conn.rollback()
+        if isinstance(e, BackofficeError):
+            raise
+        raise BackofficeError(f"Could not create the quotation: {e}")
+    finally:
+        conn.close()
+
+
+def delete_quotation(db_id, quotation_id, quotation_number):
+    """Remove a pick list's quotation and its lines. Only the row whose id
+    AND number both match is touched; False when it is already gone."""
+    conn = _connect(db_id)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT QuotationID FROM Quotations_tbl WHERE QuotationID = %s AND QuotationNumber = %s",
+                (quotation_id, quotation_number),
+            )
+            if not cur.fetchone():
+                conn.commit()
+                return False
+            cur.execute("DELETE FROM QuotationsDetails_tbl WHERE QuotationID = %s", (quotation_id,))
+            cur.execute("DELETE FROM Quotations_tbl WHERE QuotationID = %s", (quotation_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        raise BackofficeError(f"Could not delete quotation {quotation_number}: {e}")
     finally:
         conn.close()
