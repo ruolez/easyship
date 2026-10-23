@@ -36,6 +36,10 @@
       <div class="pl-errors" id="pl-errors"></div>
 
       <div class="card">
+        <div class="pl-views" role="tablist">
+          <button class="pl-view active" data-view="pick" role="tab">To pick <span class="pl-count" id="pl-count-pick">0</span></button>
+          <button class="pl-view" data-view="excluded" role="tab">Excluded <span class="pl-count" id="pl-count-excluded">0</span></button>
+        </div>
         <div class="table-wrap">
           <table class="pl-table">
             <thead>
@@ -57,17 +61,12 @@
           </table>
         </div>
         <div class="empty" id="pl-empty" style="display:none"></div>
-        <details class="pl-excluded" id="pl-excluded" style="display:none">
-          <summary><span id="pl-excluded-summary"></span>
-            <button class="btn btn-text btn-small" id="pl-restore-all">Restore all</button></summary>
-          <div id="pl-excluded-list"></div>
-        </details>
       </div>
 
       <div class="pl-footer">
         <div class="pl-bulk" id="pl-bulk" style="display:none">
           <strong id="pl-bulk-count"></strong>
-          <button class="btn btn-danger btn-small" id="pl-bulk-exclude">Exclude selected</button>
+          <button class="btn btn-danger btn-small" id="pl-bulk-action">Exclude selected</button>
           <button class="btn btn-text btn-small" id="pl-bulk-clear">Clear selection</button>
           <span class="hint">Shift+click selects a range</span>
         </div>

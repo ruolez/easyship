@@ -1535,11 +1535,20 @@ select:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--primary); cursor: pointer;
 }
 .link-btn:hover { text-decoration: underline; }
-.pl-excluded { margin-top: 12px; border-top: 1px solid var(--outline); padding-top: 10px; font-size: 13px; }
-.pl-excluded summary { cursor: pointer; color: var(--text-secondary); font-weight: 550; }
-.pl-excluded summary .btn { margin-left: 8px; }
-.pl-excluded-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; flex-wrap: wrap; }
-.pl-excluded-row .btn { margin-left: auto; }
+.pl-views { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 12px; border-radius: 8px; background: var(--surface-sunken); border: 1px solid var(--outline); }
+.pl-view {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border: none; border-radius: 6px;
+  background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--text-secondary); cursor: pointer;
+}
+.pl-view:hover { color: var(--on-surface); }
+.pl-view.active { background: var(--surface); color: var(--on-surface); box-shadow: var(--shadow-1); }
+.pl-count {
+  min-width: 22px; padding: 0 7px; border-radius: 999px; font-size: 11.5px; line-height: 19px; text-align: center;
+  background: var(--outline); color: var(--text-secondary); font-variant-numeric: tabular-nums;
+}
+.pl-view.active .pl-count { background: var(--primary-light); color: var(--primary); }
+.pl-view[data-view="excluded"].active .pl-count { background: var(--error-light); color: var(--error); }
+.pl-restore { color: var(--primary); }
 .pl-footer {
   position: sticky; bottom: 0; z-index: 5;
   display: flex; align-items: center; justify-content: flex-end; gap: 16px; flex-wrap: wrap;
@@ -1562,7 +1571,8 @@ select:disabled { opacity: 0.55; cursor: not-allowed; }
 .pl-bulk { display: flex; align-items: center; gap: 10px; margin-right: auto; flex-wrap: wrap; }
 .pl-table tbody tr.selected .pl-state { background: var(--surface); }
 /* Keep notices clear of the sticky pick-list footer and its Generate button. */
-body:has(.pl-footer) #snackbar { bottom: 92px; }
+body.pl-page #snackbar { transform: translateY(100vh); }
+body.pl-page #snackbar.show { transform: translateY(0); }
 .pl-store {
   display: inline-block; padding: 1px 8px; border-radius: 5px;
   background: var(--surface-sunken); border: 1px solid var(--outline); font-size: 12px; color: var(--on-surface);

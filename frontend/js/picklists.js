@@ -12,8 +12,22 @@ let activeRules = new Set();
 const excluded = new Set();
 const checked = new Set();
 let lastChecked = null; // anchor for Shift+click ranges
+// The table shows either the orders going on the pick list or the ones
+// excluded from it; both views work the same way.
+let view = 'pick';
 
 initNav('picklists');
+document.body.classList.add('pl-page');
+
+/* Notices sit just above the pick-list footer wherever it is on screen, so
+   they never cover Generate. */
+const baseSnackbar = snackbar;
+snackbar = (message, type) => {
+  baseSnackbar(message, type);
+  const footer = document.querySelector('.pl-footer').getBoundingClientRect();
+  const onScreen = footer.height && footer.top > 0 && footer.top < innerHeight;
+  document.getElementById('snackbar').style.bottom = `${onScreen ? innerHeight - footer.top + 12 : 22}px`;
+};
 
 /* Per-computer memory; private windows can refuse storage. */
 function remember(key, value) {
@@ -52,6 +66,7 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   const modalOpen = document.getElementById('modal-backdrop').classList.contains('show');
+  if (e.target.closest('input, select, textarea')) return;
   if (e.key === 'Escape' && !modalOpen && checked.size) clearChecked();
   if (e.key === 'Escape') closeModal();
   if (!modalOrderKey) return;
@@ -153,7 +168,7 @@ function renderRules() {
   el.innerHTML = '<span class="pl-chip-label">Rules</span>' + rules.map((r) => `
     <button class="chip ${activeRules.has(r.id) ? 'active' : ''}" data-rule="${esc(r.id)}"
       title="${r.action === 'keep' ? 'Show only matching orders' : 'Hide matching orders'}">
-      ${r.action === 'keep' ? 'Only' : 'Hide'}: ${esc(r.name)}</button>`).join('');
+      ${esc(r.name)}</button>`).join('');
   el.querySelectorAll('.chip').forEach((chip) => {
     chip.addEventListener('click', () => {
       const id = chip.dataset.rule;
@@ -241,6 +256,25 @@ function includedOrders() {
   return visibleOrders().filter((o) => !excluded.has(orderKey(o)));
 }
 
+/* The rows of the current view, in list order. */
+function listedOrders() {
+  return visibleOrders().filter((o) => excluded.has(orderKey(o)) === (view === 'excluded'));
+}
+
+/* Exclude in the To pick view, restore in the Excluded view. */
+function moveOrders(keys) {
+  keys.forEach((k) => (view === 'pick' ? excluded.add(k) : excluded.delete(k)));
+}
+
+function setView(next) {
+  view = next;
+  checked.clear();
+  lastChecked = null;
+  document.querySelectorAll('.pl-view').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  render();
+}
+document.querySelectorAll('.pl-view').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+
 function tagsHtml(tags) {
   return tags.length ? `<div class="order-tags">${tags.map((t) => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : '';
 }
@@ -256,10 +290,17 @@ function render(emptyMessage) {
   const tbody = document.getElementById('pl-orders');
   const empty = document.getElementById('pl-empty');
   const visible = visibleOrders();
-  const shown = visible.filter((o) => !excluded.has(orderKey(o)));
+  const shown = listedOrders();
+  const excludedCount = visible.filter((o) => excluded.has(orderKey(o))).length;
+  document.getElementById('pl-count-pick').textContent = visible.length - excludedCount;
+  document.getElementById('pl-count-excluded').textContent = excludedCount;
+  const action = view === 'pick'
+    ? '<button class="btn btn-text btn-small pl-exclude" data-move="KEY" title="Leave this order off the pick list">Exclude</button>'
+    : '<button class="btn btn-text btn-small pl-restore" data-move="KEY" title="Put this order back on the pick list">Restore</button>';
   if (!shown.length) {
     tbody.innerHTML = '';
-    empty.textContent = emptyMessage || (orders.length ? 'No orders match the filters.' : 'No eligible orders.');
+    empty.textContent = emptyMessage
+      || (view === 'excluded' ? 'No excluded orders.' : orders.length ? 'No orders match the filters.' : 'No eligible orders.');
     empty.style.display = '';
   } else {
     empty.style.display = 'none';
@@ -274,14 +315,13 @@ function render(emptyMessage) {
       <td class="pl-shipping" title="${esc(o.shipping_method)}">${o.shipping_method ? esc(o.shipping_method) : '<span class="text-secondary">—</span>'}</td>
       <td class="num pl-total">${money(o.total)}</td>
       <td class="wrap pl-tags">${tagsHtml(o.tags)}</td>
-      <td class="pl-actions"><button class="btn btn-text btn-small pl-exclude" data-exclude="${esc(orderKey(o))}" title="Leave this order off the pick list">Exclude</button></td>
+      <td class="pl-actions">${action.replace('KEY', esc(orderKey(o)))}</td>
     </tr>`).join('');
   }
   // Only rows on screen can stay selected: filtering or excluding drops the rest.
   const onScreen = new Set(shown.map(orderKey));
   [...checked].forEach((k) => { if (!onScreen.has(k)) checked.delete(k); });
   renderSortHeads();
-  renderExcluded(visible);
   renderSummary();
   renderSelection(shown.length);
 }
@@ -293,6 +333,8 @@ function renderSelection(rowCount) {
   all.disabled = !rowCount;
   document.getElementById('pl-bulk').style.display = checked.size ? '' : 'none';
   document.getElementById('pl-bulk-count').textContent = `${checked.size} selected`;
+  document.getElementById('pl-bulk-action').textContent = view === 'pick' ? 'Exclude selected' : 'Restore selected';
+  document.getElementById('pl-bulk-action').className = `btn btn-small ${view === 'pick' ? 'btn-danger' : 'btn-outlined'}`;
 }
 
 /* Shift extends from the last row clicked to this one, in list order. */
@@ -313,18 +355,6 @@ function clearChecked() {
   render();
 }
 
-function renderExcluded(visible) {
-  const box = document.getElementById('pl-excluded');
-  const out = visible.filter((o) => excluded.has(orderKey(o)));
-  box.style.display = out.length ? '' : 'none';
-  document.getElementById('pl-excluded-summary').textContent = `Excluded by you (${out.length})`;
-  document.getElementById('pl-excluded-list').innerHTML = out.map((o) => `
-    <div class="pl-excluded-row">
-      <strong>${esc(o.name)}</strong> <span class="text-secondary">${esc(storeName(o.store_id))} · ${esc(o.customer)} · ${o.units} units</span>
-      <button class="btn btn-text btn-small" data-restore="${esc(orderKey(o))}">Restore</button>
-    </div>`).join('');
-}
-
 function renderSummary() {
   const inc = includedOrders();
   const units = inc.reduce((n, o) => n + o.units, 0);
@@ -336,9 +366,9 @@ function renderSummary() {
 }
 
 document.getElementById('pl-orders').addEventListener('click', (e) => {
-  const ex = e.target.closest('[data-exclude]');
-  if (ex) {
-    excluded.add(ex.dataset.exclude);
+  const move = e.target.closest('[data-move]');
+  if (move) {
+    moveOrders([move.dataset.move]);
     render();
     return;
   }
@@ -364,24 +394,14 @@ document.getElementById('pl-check-all').addEventListener('change', (e) => {
   lastChecked = null;
   render();
 });
-document.getElementById('pl-bulk-exclude').addEventListener('click', () => {
+document.getElementById('pl-bulk-action').addEventListener('click', () => {
   const n = checked.size;
-  checked.forEach((k) => excluded.add(k));
+  const plural = `${n} order${n === 1 ? '' : 's'}`;
+  moveOrders([...checked]);
   clearChecked();
-  snackbar(`${n} order${n === 1 ? '' : 's'} excluded — restore them from the Excluded list`);
+  snackbar(view === 'pick' ? `${plural} excluded — see the Excluded tab` : `${plural} back on the pick list`);
 });
 document.getElementById('pl-bulk-clear').addEventListener('click', clearChecked);
-document.getElementById('pl-restore-all').addEventListener('click', (e) => {
-  e.preventDefault(); // inside <summary>: don't fold the list
-  visibleOrders().forEach((o) => excluded.delete(orderKey(o)));
-  render();
-});
-document.getElementById('pl-excluded-list').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-restore]');
-  if (!btn) return;
-  excluded.delete(btn.dataset.restore);
-  render();
-});
 ['qf-tag', 'qf-ctag', 'qf-state', 'qf-search'].forEach((id) =>
   document.getElementById(id).addEventListener('input', () => render()));
 document.getElementById('qf-clear').addEventListener('click', () => {
@@ -422,7 +442,6 @@ const ICONS = {
   close: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
 };
 
-const listedOrders = () => visibleOrders().filter((o) => !excluded.has(orderKey(o)));
 const titleCase = (v) => (v ? v.charAt(0) + v.slice(1).toLowerCase().replace(/_/g, ' ') : '');
 
 function shortDate(iso) {
@@ -538,11 +557,13 @@ async function showOrder(key) {
       <button class="btn btn-outlined btn-small" id="om-next" ${idx === list.length - 1 ? 'disabled' : ''}>Next ${ICONS.next}</button>
       <span class="om-keys hint">← → to move</span>
       <span class="om-spacer"></span>
-      <button class="btn btn-danger" id="om-exclude">Exclude from pick list</button>
+      ${view === 'pick'
+        ? '<button class="btn btn-danger" id="om-move">Exclude from pick list</button>'
+        : '<button class="btn btn-outlined" id="om-move">Restore to pick list</button>'}
     </div>`, 'order');
   document.getElementById('om-prev').addEventListener('click', () => stepOrder(-1));
   document.getElementById('om-next').addEventListener('click', () => stepOrder(1));
-  document.getElementById('om-exclude').addEventListener('click', () => excludeAndAdvance(key));
+  document.getElementById('om-move').addEventListener('click', () => moveAndAdvance(key));
   const current = fetchOrderDetail(o);
   if (list[idx + 1]) fetchOrderDetail(list[idx + 1]).catch(() => {}); // ready before Next / Exclude
 
@@ -571,14 +592,15 @@ function stepOrder(delta) {
   if (target) showOrder(orderKey(target));
 }
 
-function excludeAndAdvance(key) {
+/* Exclude (or, in the Excluded view, restore) and go straight to the next order. */
+function moveAndAdvance(key) {
   const before = listedOrders();
   const idx = before.findIndex((o) => orderKey(o) === key);
   const name = before[idx] ? before[idx].name : '';
-  excluded.add(key);
+  moveOrders([key]);
   render();
   const after = listedOrders();
-  snackbar(`${name} excluded`);
+  snackbar(view === 'pick' ? `${name} excluded` : `${name} back on the pick list`);
   if (!after.length) {
     closeModal();
     return;
