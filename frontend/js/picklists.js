@@ -137,7 +137,7 @@ async function loadOrders() {
     return;
   }
   document.getElementById('pl-empty').style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="11"><span class="spinner"></span> Loading eligible orders…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="12"><span class="spinner"></span> Loading eligible orders…</td></tr>';
   let res;
   try {
     res = await api(`/api/picklists/orders?store_ids=${[...selectedStores].join(',')}`);
@@ -356,8 +356,9 @@ function render(emptyMessage) {
     empty.style.display = '';
   } else {
     empty.style.display = 'none';
-    tbody.innerHTML = shown.map((o) => `<tr class="${checked.has(orderKey(o)) ? 'selected' : ''}">
+    tbody.innerHTML = shown.map((o, i) => `<tr class="${checked.has(orderKey(o)) ? 'selected' : ''}">
       <td class="pl-check"><input type="checkbox" data-check="${esc(orderKey(o))}" ${checked.has(orderKey(o)) ? 'checked' : ''} aria-label="Select ${esc(o.name)}"></td>
+      <td class="pl-num">${i + 1}</td>
       <td><button class="link-btn" data-fraud="${esc(orderKey(o))}" title="Open order details">${esc(o.name)}</button></td>
       <td><span class="pl-store">${esc(storeName(o.store_id))}</span></td>
       <td class="pl-date">${esc(shortDate(o.created_at))}</td>
