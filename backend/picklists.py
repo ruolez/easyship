@@ -70,6 +70,29 @@ def from_shopify_order(node, store_id):
     }
 
 
+def order_products(node):
+    """The order's products for the order window: everything still on the
+    order (removed items are left out), with what is left to ship."""
+    products = []
+    for li in (node.get("lineItems") or {}).get("nodes") or []:
+        qty = li.get("currentQuantity") or 0
+        if qty <= 0:
+            continue
+        variant = li.get("variantTitle") or ""
+        products.append({
+            "title": li.get("title") or "",
+            "variant": "" if variant == "Default Title" else variant,
+            "sku": li.get("sku") or "",
+            "barcode": ((li.get("variant") or {}).get("barcode") or "").strip(),
+            "qty": qty,
+            "to_ship": li.get("unfulfilledQuantity") or 0,
+            "ships": li.get("requiresShipping") is not False,
+            "price": ((li.get("originalUnitPriceSet") or {}).get("shopMoney") or {}).get("amount"),
+            "image": (li.get("image") or {}).get("url"),
+        })
+    return products
+
+
 def ineligible_reason(order, reserved_keys):
     """Why an order cannot go on a new pick list, or None when it can."""
     if (order["store_id"], order["id"]) in reserved_keys:

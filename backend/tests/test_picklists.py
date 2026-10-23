@@ -58,6 +58,25 @@ class FromShopifyOrderTest(unittest.TestCase):
         })
 
 
+class OrderProductsTest(unittest.TestCase):
+    def test_removed_items_are_left_out_and_default_variant_is_blank(self):
+        node = {"lineItems": {"nodes": [
+            {"title": "Glow Serum", "variantTitle": "30 ml", "sku": "GS-30", "currentQuantity": 2,
+             "unfulfilledQuantity": 2, "requiresShipping": True,
+             "originalUnitPriceSet": {"shopMoney": {"amount": "19.50"}},
+             "image": {"url": "https://cdn.shopify.com/g.jpg"}, "variant": {"barcode": " 0812 "}},
+            {"title": "Gift card", "variantTitle": "Default Title", "currentQuantity": 1, "unfulfilledQuantity": 1,
+             "requiresShipping": False, "variant": None, "image": None},
+            {"title": "Removed", "currentQuantity": 0, "unfulfilledQuantity": 0},
+        ]}}
+        self.assertEqual(picklists.order_products(node), [
+            {"title": "Glow Serum", "variant": "30 ml", "sku": "GS-30", "barcode": "0812", "qty": 2, "to_ship": 2,
+             "ships": True, "price": "19.50", "image": "https://cdn.shopify.com/g.jpg"},
+            {"title": "Gift card", "variant": "", "sku": "", "barcode": "", "qty": 1, "to_ship": 1,
+             "ships": False, "price": None, "image": None},
+        ])
+
+
 class IneligibleReasonTest(unittest.TestCase):
     def test_reasons(self):
         cases = [

@@ -152,6 +152,7 @@ def order_fraud():
             "amount_spent": spent.get("amount"),
             "tags": customer.get("tags") or [],
         } if customer else None,
+        "products": picklists.order_products(node),
         "shipping_address": _address(node.get("shippingAddress")),
         "billing_address": _address(node.get("billingAddress")),
         "risk": risk,

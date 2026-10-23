@@ -494,6 +494,19 @@ query orderFraud($id: ID!) {
     }
     billingAddress { firstName lastName address1 address2 city provinceCode countryCodeV2 zip phone }
     shippingAddress { firstName lastName address1 address2 city provinceCode countryCodeV2 zip phone }
+    lineItems(first: 50) {
+      nodes {
+        title
+        variantTitle
+        sku
+        currentQuantity
+        unfulfilledQuantity
+        requiresShipping
+        originalUnitPriceSet { shopMoney { amount } }
+        image { url(transform: { maxWidth: 96, maxHeight: 96 }) altText }
+        variant { barcode }
+      }
+    }
     transactions(first: 20) {
       kind
       status

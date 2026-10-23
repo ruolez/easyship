@@ -66,12 +66,17 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   const modalOpen = document.getElementById('modal-backdrop').classList.contains('show');
-  if (e.target.closest('input, select, textarea')) return;
+  if (e.target instanceof Element && e.target.closest('input, select, textarea')) return; // typing, not a shortcut
   if (e.key === 'Escape' && !modalOpen && checked.size) clearChecked();
   if (e.key === 'Escape') closeModal();
   if (!modalOrderKey) return;
   if (e.key === 'ArrowLeft') stepOrder(-1);
   if (e.key === 'ArrowRight') stepOrder(1);
+  // E = the window's Exclude (or, in the Excluded view, Restore) button; a held key fires once.
+  if ((e.key === 'e' || e.key === 'E') && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    moveAndAdvance(modalOrderKey);
+  }
 });
 
 /* ---------- Stores ---------- */
@@ -440,6 +445,7 @@ const ICONS = {
   prev: svg('<path d="m15 18-6-6 6-6"/>'),
   next: svg('<path d="m9 18 6-6-6-6"/>'),
   close: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+  box: svg('<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'),
 };
 
 const titleCase = (v) => (v ? v.charAt(0) + v.slice(1).toLowerCase().replace(/_/g, ' ') : '');
@@ -467,7 +473,7 @@ function sameAddress(a, b) {
 
 function addressLines(a) {
   return [a.name, a.address1, a.address2, [[a.city, a.state].filter(Boolean).join(', '), a.zip].filter(Boolean).join(' '),
-    a.country, a.phone].filter(Boolean).map((l) => `<div>${esc(l)}</div>`).join('');
+    a.country === 'US' ? '' : a.country, a.phone].filter(Boolean).map((l) => `<div>${esc(l)}</div>`).join('');
 }
 
 function omCard(label, body) {
@@ -527,9 +533,36 @@ function orderBody(d) {
       ? `<div class="om-strong">${esc(d.billing_address.name || '')}</div><div class="text-secondary">Same as ship to</div>`
       : addressLines(d.billing_address);
   return `
-    <div class="om-stats">${stats.map(([l, v]) => `<div class="om-stat"><div class="om-label">${l}</div><div class="om-value">${v}</div></div>`).join('')}</div>
-    <div class="om-cards">${omCard('Customer', customer)}${omCard('Ship to', ship)}${omCard('Bill to', bill)}</div>
-    ${riskPanel(d.risk)}`;
+    <div class="om-main">
+      <div class="om-stats">${stats.map(([l, v]) => `<div class="om-stat"><div class="om-label">${l}</div><div class="om-value">${v}</div></div>`).join('')}</div>
+      <div class="om-cards">${omCard('Customer', customer)}${omCard('Ship to', ship)}${omCard('Bill to', bill)}</div>
+      ${riskPanel(d.risk)}
+    </div>
+    ${productsPanel(d.products || [])}`;
+}
+
+/* The order's products beside the details; a long list scrolls on its own
+   so the window keeps its height. */
+function productsPanel(products) {
+  const units = products.reduce((n, p) => n + p.qty, 0);
+  const rows = products.map((p) => `
+    <li class="om-product">
+      ${p.image ? `<img class="om-thumb" src="${esc(p.image)}" alt="" loading="lazy">` : `<span class="om-thumb om-thumb-empty">${ICONS.box}</span>`}
+      <div class="om-product-info">
+        <div class="om-product-title" title="${esc(p.title)}">${esc(p.title)}</div>
+        ${p.variant ? `<div class="hint">${esc(p.variant)}</div>` : ''}
+        <div class="om-product-codes">${[p.sku && `SKU ${esc(p.sku)}`, p.barcode ? esc(p.barcode) : p.ships && '<span class="om-nobarcode">No barcode</span>']
+          .filter(Boolean).join(' · ')}</div>
+        ${!p.ships ? '<div class="hint">No shipping needed</div>' : p.to_ship < p.qty ? `<div class="hint">${p.to_ship} left to ship</div>` : ''}
+      </div>
+      <div class="om-product-qty"><strong>×${p.qty}</strong><span class="hint">${money(p.price)}</span></div>
+    </li>`).join('');
+  return `<aside class="om-products">
+    <div class="om-products-inner">
+      <div class="om-products-head"><span class="om-label">Products</span><span class="hint">${products.length} item${products.length === 1 ? '' : 's'} · ${units} unit${units === 1 ? '' : 's'}</span></div>
+      ${products.length ? `<ul class="om-product-list">${rows}</ul>` : '<div class="om-products-empty text-secondary">No products</div>'}
+    </div>
+  </aside>`;
 }
 
 async function showOrder(key) {
@@ -555,11 +588,15 @@ async function showOrder(key) {
       <button class="btn btn-outlined btn-small" id="om-prev" ${idx === 0 ? 'disabled' : ''}>${ICONS.prev} Previous</button>
       <span class="om-pos">${idx + 1} of ${list.length}</span>
       <button class="btn btn-outlined btn-small" id="om-next" ${idx === list.length - 1 ? 'disabled' : ''}>Next ${ICONS.next}</button>
-      <span class="om-keys hint">← → to move</span>
+      <span class="om-keys" aria-label="Keyboard shortcuts">
+        <span><kbd>←</kbd><kbd>→</kbd> Previous / Next</span>
+        <span><kbd>E</kbd> ${view === 'pick' ? 'Exclude' : 'Restore'}</span>
+        <span><kbd>Esc</kbd> Close</span>
+      </span>
       <span class="om-spacer"></span>
       ${view === 'pick'
-        ? '<button class="btn btn-danger" id="om-move">Exclude from pick list</button>'
-        : '<button class="btn btn-outlined" id="om-move">Restore to pick list</button>'}
+        ? '<button class="btn btn-danger" id="om-move" title="Shortcut: E">Exclude from pick list <kbd>E</kbd></button>'
+        : '<button class="btn btn-outlined" id="om-move" title="Shortcut: E">Restore to pick list <kbd>E</kbd></button>'}
     </div>`, 'order');
   document.getElementById('om-prev').addEventListener('click', () => stepOrder(-1));
   document.getElementById('om-next').addEventListener('click', () => stepOrder(1));
