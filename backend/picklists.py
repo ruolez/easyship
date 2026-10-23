@@ -62,6 +62,7 @@ def from_shopify_order(node, store_id):
         "ship_state": addr.get("provinceCode") or "",
         "ship_country": addr.get("countryCodeV2") or "",
         "total": ((node.get("totalPriceSet") or {}).get("shopMoney") or {}).get("amount"),
+        "shipping_method": (node.get("shippingLine") or {}).get("title") or "",
         "risk_level": order_risk.risk_level(risk),
         "risk_recommendation": risk.get("recommendation"),
         "lines": lines,

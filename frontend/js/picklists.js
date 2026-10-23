@@ -102,7 +102,7 @@ async function loadOrders() {
     return;
   }
   document.getElementById('pl-empty').style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="8"><span class="spinner"></span> Loading eligible orders…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="10"><span class="spinner"></span> Loading eligible orders…</td></tr>';
   let res;
   try {
     res = await api(`/api/picklists/orders?store_ids=${[...selectedStores].join(',')}`);
@@ -195,6 +195,8 @@ const SORT_VALUE = {
   customer: (o) => o.customer,
   address: (o) => o.ship_address1,
   state: (o) => o.ship_state,
+  shipping: (o) => o.shipping_method,
+  total: (o) => (o.total == null || o.total === '' ? null : Number(o.total)),
   tags: (o) => o.tags.join(', '),
 };
 let sort = recall(SORT_KEY, { key: 'created_at', dir: 1 });
@@ -204,7 +206,7 @@ const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
 function compareOrders(a, b) {
   const va = SORT_VALUE[sort.key](a);
   const vb = SORT_VALUE[sort.key](b);
-  const diff = typeof va === 'number' ? va - vb : collator.compare(va || '', vb || '');
+  const diff = typeof va === 'number' && typeof vb === 'number' ? va - vb : collator.compare(String(va ?? ''), String(vb ?? ''));
   // Blank values sink to the bottom either way; ties fall back to the order number.
   if (!va && va !== 0 && (vb || vb === 0)) return 1;
   if (!vb && vb !== 0 && (va || va === 0)) return -1;
@@ -264,6 +266,8 @@ function render(emptyMessage) {
       <td class="pl-customer"><div class="ellip-line" title="${esc(o.customer)}">${esc(o.customer)}</div>${tagsHtml(o.customer_tags)}</td>
       <td class="pl-address">${shipAddressHtml(o)}</td>
       <td>${o.ship_state ? `<span class="pl-state">${esc(o.ship_state)}</span>` : ''}</td>
+      <td class="pl-shipping" title="${esc(o.shipping_method)}">${o.shipping_method ? esc(o.shipping_method) : '<span class="text-secondary">—</span>'}</td>
+      <td class="num pl-total">${money(o.total)}</td>
       <td class="wrap pl-tags">${tagsHtml(o.tags)}</td>
       <td class="pl-actions"><button class="btn btn-text btn-small pl-exclude" data-exclude="${esc(orderKey(o))}" title="Leave this order off the pick list">Exclude</button></td>
     </tr>`).join('');

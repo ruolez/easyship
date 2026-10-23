@@ -1566,6 +1566,8 @@ select:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .pl-address { max-width: 280px; }
 .pl-address .ellip-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-shipping { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.pl-total { font-weight: 600; }
 .pl-tags { min-width: 140px; }
 .pl-tags .order-tags, .pl-customer .order-tags { margin-top: 0; }
 .pl-customer .order-tags { margin-top: 3px; }

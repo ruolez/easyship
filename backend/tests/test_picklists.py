@@ -31,7 +31,7 @@ def node(lines=(line(),), financial="PAID", fulfillment="UNFULFILLED", fo_status
         "tags": ["wholesale"], "customer": {"displayName": "Ann Smith", "tags": ["vip"]},
         "shippingAddress": {"name": "Ann Smith", "address1": "12 Elm St", "address2": "Apt 4", "city": "Austin",
                             "provinceCode": "TX", "zip": "78701", "countryCodeV2": "US"},
-        "totalPriceSet": {"shopMoney": {"amount": "42.00"}},
+        "totalPriceSet": {"shopMoney": {"amount": "42.00"}}, "shippingLine": {"title": "UPS Ground"},
         "risk": {"recommendation": "ACCEPT", "assessments": [{"riskLevel": "LOW"}]},
         "lineItems": {"nodes": list(lines)},
     }
@@ -51,7 +51,7 @@ class FromShopifyOrderTest(unittest.TestCase):
             "fulfillment_status": "UNFULFILLED", "financial_status": "PAID", "fully_paid": True, "on_hold": False,
             "tags": ["wholesale"], "customer": "Ann Smith", "customer_tags": ["vip"],
             "ship_address1": "12 Elm St", "ship_address2": "Apt 4", "ship_city": "Austin", "ship_zip": "78701",
-            "ship_state": "TX", "ship_country": "US", "total": "42.00",
+            "ship_state": "TX", "ship_country": "US", "total": "42.00", "shipping_method": "UPS Ground",
             "risk_level": "LOW", "risk_recommendation": "ACCEPT",
             "lines": [{"title": "Widget", "sku": "SKU-Widget", "barcode": "0001", "qty": 2}],
             "units": 2,

@@ -380,6 +380,7 @@ fragment PicklistOrder on Order {
   displayFulfillmentStatus
   tags
   totalPriceSet { shopMoney { amount } }
+  shippingLine { title }
   customer { displayName tags }
   shippingAddress { name address1 address2 city provinceCode zip countryCodeV2 }
   fulfillmentOrders(first: 5) { nodes { status } }
