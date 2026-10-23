@@ -493,6 +493,9 @@ const ICONS = {
   prev: svg('<path d="m15 18-6-6 6-6"/>'),
   next: svg('<path d="m9 18 6-6-6-6"/>'),
   close: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+  search: svg('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>'),
+  check: svg('<path d="M20 6 9 17l-5-5"/>'),
+  copy: svg('<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
   box: svg('<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'),
 };
 
@@ -696,11 +699,59 @@ function moveAndAdvance(key) {
 /* ---------- Generate ---------- */
 document.getElementById('pl-generate').addEventListener('click', openGenerate);
 
+const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
+const attr = (v) => esc(v).replace(/"/g, '&quot;');
+const genShown = () => document.getElementById('modal-backdrop').classList.contains('show') && !!document.getElementById('gen-body');
+
+function customerMeta(c) {
+  const where = [c.city, c.state].filter(Boolean).join(', ');
+  return [c.account_no ? `Account ${esc(c.account_no)}` : '', esc(where)].filter(Boolean).join(' · ') || `Customer #${c.id}`;
+}
+
+function genFrame(body, foot) {
+  return `
+    <div class="om-head">
+      <div>
+        <div class="om-title">New pick list</div>
+        <div class="om-meta">Check the products, choose who the BackOffice quotation is for, then create it.</div>
+      </div>
+      <button class="om-close" onclick="closeModal()" aria-label="Close">${ICONS.close}</button>
+    </div>
+    <div class="gen-body" id="gen-body">${body}</div>
+    <div class="om-foot">${foot}</div>`;
+}
+
+const GEN_CANCEL = '<span class="om-spacer"></span><button class="btn btn-text" onclick="closeModal()">Cancel</button>';
+
+function leftOutHtml(left, open) {
+  if (!left.length) return '';
+  return `<details class="gen-leftout" ${open || left.length <= 3 ? 'open' : ''}>
+    <summary>${ICONS.warn}<span>${plural(left.length, 'order')} left out automatically</span>
+      <span class="hint">They won't be on this pick list</span>${ICONS.next}</summary>
+    <ul>${left.map((e) => `<li><strong>${esc(e.name)}</strong>${e.store_id ? `<span class="pl-store">${esc(storeName(e.store_id))}</span>` : ''}
+      <span>${e.reasons.map(esc).join('; ')}</span></li>`).join('')}</ul>
+  </details>`;
+}
+
+function linesTable(lines) {
+  const rows = lines.map((g, i) => `<tr data-i="${i}">
+    <td class="num gen-idx">${i + 1}</td>
+    <td class="gen-product"><div class="gen-product-name" title="${attr(g.title && g.title !== g.description ? `Shopify: ${g.title}` : g.description)}">${esc(g.description)}</div>
+      ${g.sku ? `<div class="hint">SKU ${esc(g.sku)}</div>` : ''}</td>
+    <td class="gen-code">${esc(g.barcode)}</td>
+    <td class="num" title="${attr(g.orders.join(', '))}">${g.orders.length}</td>
+    <td class="num"><span class="gen-qty">${g.qty.toLocaleString()}</span></td></tr>`).join('');
+  return `<div class="gen-lines"><table>
+    <thead><tr><th class="num">#</th><th>Product</th><th class="gen-code">Barcode</th><th class="num" title="Orders that need it">Orders</th><th class="num">Qty</th></tr></thead>
+    <tbody id="gen-lines">${rows}</tbody></table>
+    <div class="gen-msg" id="gen-lines-none" hidden>No products match the filter.</div></div>`;
+}
+
 async function openGenerate() {
   const picked = includedOrders();
   if (!picked.length) return;
   const body = { orders: picked.map((o) => ({ store_id: o.store_id, order_id: o.id })) };
-  openModal('<h3>New pick list</h3><p><span class="spinner"></span> Checking orders and BackOffice products…</p>', 'wide');
+  openModal(genFrame(`<div class="om-loading"><span class="spinner"></span> Checking ${plural(picked.length, 'order')} with Shopify and BackOffice…</div>`, GEN_CANCEL), 'gen');
   let preview;
   let reps;
   try {
@@ -709,98 +760,255 @@ async function openGenerate() {
       api('/api/picklists/sales-reps'),
     ]);
   } catch (err) {
-    openModal(`<h3>New pick list</h3><p class="error-note">${esc(err.message)}</p>
-      <div class="actions"><button class="btn btn-text" onclick="closeModal()">Close</button></div>`, 'wide');
+    if (!genShown()) return;
+    document.getElementById('gen-body').innerHTML = `<div class="om-loading gen-failed">
+      <div class="error-note">${esc(err.message)}</div><button class="btn btn-outlined btn-small" id="gen-retry">Try again</button></div>`;
+    document.getElementById('gen-retry').addEventListener('click', openGenerate);
     return;
   }
+  if (!genShown()) return; // closed while checking
   const t = preview.totals;
+  const left = preview.excluded;
+  if (!t.orders) {
+    openModal(genFrame(`<div class="gen-empty">${ICONS.warn}<div><strong>None of these orders can go on a pick list</strong>
+      <div class="hint">Fix the reasons below, then try again.</div></div></div>${leftOutHtml(left, true)}`, GEN_CANCEL), 'gen');
+    return;
+  }
+
   const lastCustomer = recall(CUSTOMER_KEY, null);
   const lastRep = recall(REP_KEY, null);
-  openModal(`
-    <h3>New pick list</h3>
-    ${preview.excluded.length ? `<div class="rule-banner warn pl-stack mb-16">
-      <strong>${preview.excluded.length} order${preview.excluded.length === 1 ? '' : 's'} left out automatically</strong>
-      <ul class="pl-left-out">${preview.excluded.map((e) => `<li><strong>${esc(e.name)}</strong>${e.store_id ? ` <span class="text-secondary">${esc(storeName(e.store_id))}</span>` : ''} — ${e.reasons.map(esc).join('; ')}</li>`).join('')}</ul>
-    </div>` : ''}
-    ${t.orders ? `
-    <div class="hint mb-16">${t.orders} order${t.orders === 1 ? '' : 's'} · ${t.units} units · ${t.lines} product${t.lines === 1 ? '' : 's'}</div>
-    <div class="pl-preview-lines">
-      <table>
-        <thead><tr><th>Barcode</th><th>Product</th><th>SKU</th><th class="num">Qty</th></tr></thead>
-        <tbody>${preview.lines.map((g) => `<tr>
-          <td>${esc(g.barcode)}</td><td class="ellip" style="max-width:320px" title="${esc(g.orders.join(', '))}">${esc(g.description)}</td>
-          <td>${esc(g.sku)}</td><td class="num"><strong>${g.qty}</strong></td></tr>`).join('')}</tbody>
-      </table>
+  const stats = [['Orders', t.orders], ['Units', t.units], ['Products', t.lines], ['Left out', left.length]];
+  const repPick = reps.length === 1 ? reps[0].id : lastRep;
+  openModal(genFrame(`
+    <div class="om-stats">${stats.map(([label, n], i) => `<div class="om-stat"><div class="om-label">${label}</div>
+      <div class="om-value ${i === 3 && n ? 'gen-warn' : ''}">${n.toLocaleString()}</div></div>`).join('')}</div>
+    ${leftOutHtml(left, false)}
+    <div class="gen-grid">
+      <section class="gen-panel">
+        <div class="gen-panel-head">
+          <span class="om-label">Products to pick</span>
+          <span class="hint" id="gen-lines-count">${plural(t.lines, 'product')}</span>
+          ${t.lines > 8 ? `<label class="gen-search gen-filter">${ICONS.search}<input id="gen-lines-filter" placeholder="Filter products" autocomplete="off" aria-label="Filter products"></label>` : ''}
+        </div>
+        ${linesTable(preview.lines)}
+      </section>
+      <section class="gen-panel gen-side">
+        <div class="gen-panel-head"><span class="om-label">BackOffice quotation</span></div>
+        <div class="gen-side-body">
+          <div class="gen-step">
+            <div class="gen-step-label"><span class="gen-step-num" id="gen-step-cust">1</span>Customer</div>
+            <div id="gen-cust"></div>
+          </div>
+          <div class="gen-step">
+            <label class="gen-step-label" for="gen-rep"><span class="gen-step-num" id="gen-step-rep">2</span>Sales rep</label>
+            <div class="field"><select id="gen-rep"><option value="">Choose a sales rep…</option>${reps.map((r) =>
+              `<option value="${r.id}" ${repPick === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
+          </div>
+          <div class="gen-note">${ICONS.info}<span>Creates one quotation with ${plural(t.lines, 'line')}. Cancelling the pick list deletes it again.</span></div>
+        </div>
+      </section>
     </div>
-    <div class="row mt-16">
-      <div class="field">
-        <label>BackOffice customer</label>
-        <input id="m-cust-search" placeholder="Search business name or account #" autocomplete="off">
-        <select id="m-cust" size="5"></select>
-      </div>
-      <div class="field fixed" style="min-width:220px">
-        <label>Sales rep</label>
-        <select id="m-rep"><option value="">— Choose —</option>${reps.map((r) =>
-          `<option value="${r.id}" ${lastRep === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>
-      </div>
-    </div>` : '<p>Nothing left to put on a pick list.</p>'}
-    <div class="actions">
-      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
-      ${t.orders ? '<button class="btn btn-primary" id="m-create" disabled>Create pick list</button>' : ''}
-    </div>`, 'wide');
-  if (!t.orders) return;
+    <div id="gen-error"></div>`,
+  `<span class="gen-status" id="gen-status"></span><span class="om-spacer"></span>
+    <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="gen-create" disabled>Create pick list</button>`), 'gen');
 
-  const custSel = document.getElementById('m-cust');
-  const repSel = document.getElementById('m-rep');
-  const createBtn = document.getElementById('m-create');
-  const sync = () => { createBtn.disabled = !custSel.value || !repSel.value; };
-  let custSeq = 0;
-  const searchCustomers = async (q) => {
-    const seq = ++custSeq;
-    let list = [];
-    try { list = await api(`/api/picklists/customers?q=${encodeURIComponent(q)}`); } catch (err) { snackbar(err.message, 'error'); }
-    if (seq !== custSeq) return;
-    if (lastCustomer && !q && !list.some((c) => c.id === lastCustomer.id)) list.unshift(lastCustomer);
-    const keep = custSel.value;
-    custSel.innerHTML = list.map((c) => `<option value="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}${c.account_no ? ` · ${esc(c.account_no)}` : ''}${c.state ? ` · ${esc([c.city, c.state].filter(Boolean).join(', '))}` : ''}</option>`).join('');
-    const want = keep || (lastCustomer ? String(lastCustomer.id) : '');
-    if ([...custSel.options].some((op) => op.value === want)) custSel.value = want;
+  const filter = document.getElementById('gen-lines-filter');
+  if (filter) {
+    const haystack = preview.lines.map((g) => [g.description, g.title, g.sku, g.barcode].join(' ').toLowerCase());
+    filter.addEventListener('input', () => {
+      const q = filter.value.trim().toLowerCase();
+      let shown = 0;
+      document.querySelectorAll('#gen-lines tr').forEach((tr) => {
+        const hit = !q || haystack[tr.dataset.i].includes(q);
+        tr.hidden = !hit;
+        if (hit) shown += 1;
+      });
+      document.getElementById('gen-lines-count').textContent = q ? `${shown} of ${plural(t.lines, 'product')}` : plural(t.lines, 'product');
+      document.getElementById('gen-lines-none').hidden = shown > 0;
+    });
+  }
+
+  const repSel = document.getElementById('gen-rep');
+  const createBtn = document.getElementById('gen-create');
+  const custBox = document.getElementById('gen-cust');
+  let customer = lastCustomer;
+  let picking = !customer;
+  let busy = false;
+
+  const markStep = (id, done, n) => {
+    const el = document.getElementById(id);
+    el.classList.toggle('done', done);
+    el.innerHTML = done ? ICONS.check : n;
+  };
+  const sync = () => {
+    const custOk = !!customer && !picking;
+    const repOk = !!repSel.value;
+    createBtn.disabled = busy || !custOk || !repOk;
+    markStep('gen-step-cust', custOk, 1);
+    markStep('gen-step-rep', repOk, 2);
+    const status = document.getElementById('gen-status');
+    status.classList.toggle('ready', custOk && repOk);
+    status.innerHTML = !custOk ? 'Choose a customer to continue'
+      : !repOk ? 'Choose a sales rep to continue'
+        : `${ICONS.ok}<span>${plural(t.orders, 'order')} · ${plural(t.units, 'unit')} for <strong>${esc(customer.name)}</strong></span>`;
+  };
+
+  const showChosen = () => {
+    picking = false;
+    custBox.innerHTML = `<div class="gen-chosen">
+      <div class="gen-chosen-info"><div class="om-strong">${esc(customer.name)}</div>
+        <div class="hint">${customerMeta(customer)}${lastCustomer && customer.id === lastCustomer.id ? ' · last used' : ''}</div></div>
+      <button class="btn btn-outlined btn-small" id="gen-cust-change">Change</button></div>`;
+    document.getElementById('gen-cust-change').addEventListener('click', showPicker);
     sync();
   };
+
+  let results = [];
+  let active = -1;
+  let custSeq = 0;
   let timer;
-  document.getElementById('m-cust-search').addEventListener('input', (e) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => searchCustomers(e.target.value.trim()), 300);
-  });
-  custSel.addEventListener('change', sync);
+  const choose = (c) => {
+    customer = c;
+    showChosen();
+    if (!repSel.value) repSel.focus();
+  };
+  const renderResults = () => {
+    const list = document.getElementById('gen-cust-list');
+    if (!list) return;
+    list.innerHTML = results.length
+      ? results.map((c, i) => `<button type="button" class="gen-cust-opt ${i === active ? 'active' : ''}" data-i="${i}" role="option" aria-selected="${i === active}">
+          <span class="om-strong">${esc(c.name)}</span><span class="hint">${customerMeta(c)}</span></button>`).join('')
+      : '<div class="gen-msg">No customers match.</div>';
+    const on = list.querySelector('.active');
+    if (on) on.scrollIntoView({ block: 'nearest' });
+  };
+  const searchCustomers = async (q) => {
+    const seq = ++custSeq;
+    let list;
+    try {
+      list = await api(`/api/picklists/customers?q=${encodeURIComponent(q)}`);
+    } catch (err) {
+      if (seq !== custSeq) return;
+      const box = document.getElementById('gen-cust-list');
+      if (box) box.innerHTML = `<div class="gen-msg error">${esc(err.message)}</div>`;
+      return;
+    }
+    if (seq !== custSeq) return;
+    if (lastCustomer && !q && !list.some((c) => c.id === lastCustomer.id)) list.unshift(lastCustomer);
+    results = list;
+    const current = customer ? results.findIndex((c) => c.id === customer.id) : -1;
+    active = q ? 0 : current;
+    renderResults();
+  };
+  function showPicker() {
+    picking = true;
+    custBox.innerHTML = `<label class="gen-search">${ICONS.search}<input id="gen-cust-q" placeholder="Search business name or account #" autocomplete="off" aria-label="Search customers"></label>
+      <div class="gen-cust-list" id="gen-cust-list" role="listbox"><div class="gen-msg"><span class="spinner"></span> Loading customers…</div></div>
+      ${customer ? `<button type="button" class="link-btn gen-keep" id="gen-cust-keep">Keep ${esc(customer.name)}</button>` : ''}`;
+    const input = document.getElementById('gen-cust-q');
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => searchCustomers(input.value.trim()), 250);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!results.length) return;
+        active = Math.max(0, Math.min(results.length - 1, active + (e.key === 'ArrowDown' ? 1 : -1)));
+        renderResults();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const c = results[active] || (results.length === 1 ? results[0] : null);
+        if (c) choose(c);
+      } else if (e.key === 'Escape') {
+        if (customer) showChosen();
+        else closeModal();
+      }
+    });
+    document.getElementById('gen-cust-list').addEventListener('click', (e) => {
+      const opt = e.target.closest('.gen-cust-opt');
+      if (opt) choose(results[Number(opt.dataset.i)]);
+    });
+    const keep = document.getElementById('gen-cust-keep');
+    if (keep) keep.addEventListener('click', showChosen);
+    input.focus();
+    sync();
+    searchCustomers('');
+  }
+
   repSel.addEventListener('change', sync);
-  searchCustomers('');
+  if (picking) showPicker();
+  else showChosen();
 
   createBtn.addEventListener('click', async () => {
-    const opt = custSel.selectedOptions[0];
-    const customer = { id: Number(custSel.value), name: opt ? opt.dataset.name : '' };
-    createBtn.disabled = true;
+    const repId = Number(repSel.value);
+    const repName = repSel.selectedOptions[0].textContent;
+    const errBox = document.getElementById('gen-error');
+    errBox.innerHTML = '';
+    busy = true;
+    sync();
     createBtn.innerHTML = '<span class="spinner"></span> Creating…';
     try {
       const res = await api('/api/picklists', {
         method: 'POST',
-        body: { ...body, customer_id: customer.id, customer_name: customer.name, sales_rep_id: Number(repSel.value) },
+        body: { ...body, customer_id: customer.id, customer_name: customer.name, sales_rep_id: repId },
       });
       remember(CUSTOMER_KEY, customer);
-      remember(REP_KEY, Number(repSel.value));
-      openModal(`
-        <h3>Pick list #${res.id} created</h3>
-        <p>BackOffice quotation <strong>${esc(res.quotation_number)}</strong> — ${res.totals.orders} orders, ${res.totals.units} units, ${res.totals.lines} products.</p>
-        ${res.excluded.length ? `<p class="hint mt-16">Left out: ${res.excluded.map((e) => esc(e.name)).join(', ')}</p>` : ''}
-        <div class="actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>`);
+      remember(REP_KEY, repId);
       loadOrders();
+      showCreated(res, customer.name, repName);
     } catch (err) {
-      const names = err.data && err.data.orders ? ` (${err.data.orders.join(', ')})` : '';
-      snackbar(err.message + names, 'error');
-      createBtn.disabled = false;
+      busy = false;
       createBtn.textContent = 'Create pick list';
+      sync();
+      const names = err.data && err.data.orders ? ` (${err.data.orders.join(', ')})` : '';
+      errBox.innerHTML = `<div class="error-note">${esc(err.message + names)}</div>`;
+      errBox.scrollIntoView({ block: 'nearest' });
       if (err.status === 409) loadOrders();
     }
+  });
+}
+
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  const ok = document.execCommand('copy');
+  area.remove();
+  return ok ? Promise.resolve() : Promise.reject(new Error('Copy failed'));
+}
+
+function showCreated(res, customerName, repName) {
+  const t = res.totals;
+  openModal(`
+    <div class="gen-done">
+      <div class="gen-done-icon">${ICONS.check}</div>
+      <div class="gen-done-title">Pick list #${res.id} created</div>
+      <div class="text-secondary">${esc(customerName)} · ${esc(repName)}</div>
+      <div class="gen-done-number">
+        <div class="om-label">BackOffice quotation</div>
+        <div class="gen-done-row"><span class="gen-qnum">${esc(res.quotation_number)}</span>
+          <button class="btn btn-outlined btn-small" id="gen-copy">${ICONS.copy} Copy</button></div>
+      </div>
+      <div class="gen-done-stats">${plural(t.orders, 'order')} · ${plural(t.units, 'unit')} · ${plural(t.lines, 'product')}</div>
+      ${res.excluded.length ? `<div class="hint">Left out: ${res.excluded.map((e) => esc(e.name)).join(', ')}</div>` : ''}
+    </div>
+    <div class="om-foot"><span class="om-spacer"></span>
+      <button class="btn btn-outlined" id="gen-view">View pick list</button>
+      <button class="btn btn-primary" id="gen-done" onclick="closeModal()">Done</button>
+    </div>`, 'gen gen-small');
+  document.getElementById('gen-done').focus();
+  document.getElementById('gen-view').addEventListener('click', () => viewPicklist(res.id));
+  const copy = document.getElementById('gen-copy');
+  copy.addEventListener('click', () => {
+    copyText(res.quotation_number)
+      .then(() => { copy.innerHTML = `${ICONS.check} Copied`; })
+      .catch(() => snackbar('Could not copy — select the number instead', 'error'));
   });
 }
 
