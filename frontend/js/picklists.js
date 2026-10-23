@@ -8,7 +8,9 @@ let stores = [];
 let selectedStores = new Set();
 let orders = [];
 let rules = [];
-let activeRules = new Set();
+// Rule id → how its chip is switched on: 'add' (orders matching any Add rule
+// are shown), 'narrow' (orders must also match it) or 'hide'.
+let ruleModes = new Map();
 const excluded = new Set();
 const checked = new Set();
 let lastChecked = null; // anchor for Shift+click ranges
@@ -152,8 +154,7 @@ async function loadOrders() {
   rules = res.rules;
   const known = new Set(orders.map(orderKey));
   [...excluded].forEach((k) => { if (!known.has(k)) excluded.delete(k); });
-  const savedRules = recall(RULES_KEY, []);
-  activeRules = new Set(savedRules.filter((id) => rules.some((r) => r.id === id)));
+  ruleModes = restoreRuleModes(recall(RULES_KEY, {}));
   showLoadErrors(res.errors);
   renderRules();
   render();
@@ -176,19 +177,54 @@ function showLoadErrors(errors) {
   }
 }
 
+/* "Show only" rules cycle off → Add → Narrow → off; "hide" rules toggle. */
+const RULE_MODE = {
+  add: { icon: '<path d="M12 5v14"/><path d="M5 12h14"/>', tip: 'Adding: orders matching this rule are shown (along with any other Add rule). Click to narrow instead.' },
+  narrow: { icon: '<path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>', tip: 'Narrowing: only orders that also match this rule stay. Click to switch off.' },
+  hide: { icon: '<path d="M5 12h14"/>', tip: 'Hiding: orders matching this rule are taken out. Click to switch off.' },
+};
+
+function nextRuleMode(rule, mode) {
+  if (rule.action === 'hide') return mode ? null : 'hide';
+  if (!mode) return 'add';
+  return mode === 'add' ? 'narrow' : null;
+}
+
+/* Saved per computer as {id: mode}; an older save (a plain list of ids) means
+   every listed rule was on in its only mode. */
+function restoreRuleModes(saved) {
+  const modes = new Map();
+  const entries = Array.isArray(saved) ? saved.map((id) => [id, null]) : Object.entries(saved || {});
+  entries.forEach(([id, mode]) => {
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return;
+    const fallback = rule.action === 'hide' ? 'hide' : 'add';
+    modes.set(id, rule.action === 'hide' ? 'hide' : mode === 'narrow' ? 'narrow' : fallback);
+  });
+  return modes;
+}
+
 function renderRules() {
   const el = document.getElementById('pl-rules');
   el.style.display = rules.length ? '' : 'none';
-  el.innerHTML = '<span class="pl-chip-label">Rules</span>' + rules.map((r) => `
-    <button class="chip ${activeRules.has(r.id) ? 'active' : ''}" data-rule="${esc(r.id)}"
-      title="${r.action === 'keep' ? 'Show only matching orders' : 'Hide matching orders'}">
-      ${esc(r.name)}</button>`).join('');
-  el.querySelectorAll('.chip').forEach((chip) => {
+  const offTip = (r) => (r.action === 'hide' ? 'Click to hide orders matching this rule'
+    : 'Click to add orders matching this rule; click again to narrow to them');
+  el.innerHTML = '<span class="pl-chip-label">Rules</span>' + rules.map((r) => {
+    const mode = ruleModes.get(r.id);
+    return `<button class="chip pl-rule-chip ${mode ? `mode-${mode}` : ''}" data-rule="${esc(r.id)}"
+      title="${esc(mode ? RULE_MODE[mode].tip : offTip(r))}" aria-pressed="${mode ? 'true' : 'false'}">
+      ${mode ? `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[mode].icon}</svg>` : ''}${esc(r.name)}</button>`;
+  }).join('') + `<span class="pl-rule-legend">
+      ${['add', 'narrow', 'hide'].filter((m) => m !== 'hide' || rules.some((r) => r.action === 'hide')).map((m) =>
+        `<span class="mode-${m}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[m].icon}</svg>${{ add: 'Add', narrow: 'Narrow', hide: 'Hide' }[m]}</span>`).join('')}
+      <span class="hint">click a rule again to change</span></span>`;
+  el.querySelectorAll('.pl-rule-chip').forEach((chip) => {
     chip.addEventListener('click', () => {
-      const id = chip.dataset.rule;
-      if (activeRules.has(id)) activeRules.delete(id);
-      else activeRules.add(id);
-      remember(RULES_KEY, [...activeRules]);
+      const rule = rules.find((r) => r.id === chip.dataset.rule);
+      const next = nextRuleMode(rule, ruleModes.get(rule.id));
+      if (next) ruleModes.set(rule.id, next);
+      else ruleModes.delete(rule.id);
+      remember(RULES_KEY, Object.fromEntries(ruleModes));
       renderRules();
       render();
     });
@@ -208,10 +244,12 @@ function quickFilters() {
 /* Hide rules drop what they match; when any keep rule is on, an order must
    match at least one of them. Quick filters narrow further. */
 function passesFilters(o, qf) {
-  const on = rules.filter((r) => activeRules.has(r.id));
-  if (on.some((r) => r.action === 'hide' && o.rule_ids.includes(r.id))) return false;
-  const keeps = on.filter((r) => r.action === 'keep');
-  if (keeps.length && !keeps.some((r) => o.rule_ids.includes(r.id))) return false;
+  const inMode = (mode) => [...ruleModes].filter(([, m]) => m === mode).map(([id]) => id);
+  const matches = (id) => o.rule_ids.includes(id);
+  if (inMode('hide').some(matches)) return false;
+  const adds = inMode('add');
+  if (adds.length && !adds.some(matches)) return false;
+  if (!inMode('narrow').every(matches)) return false;
   const has = (tags, needle) => tags.some((t) => t.toLowerCase().includes(needle));
   if (qf.tag && !has(o.tags, qf.tag)) return false;
   if (qf.ctag && !has(o.customer_tags, qf.ctag)) return false;

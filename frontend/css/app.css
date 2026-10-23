@@ -1524,6 +1524,18 @@ select:disabled { opacity: 0.55; cursor: not-allowed; }
 .mb-8 { margin-bottom: 8px; }
 .pl-chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .pl-all-stores { margin-left: 4px; }
+/* Rule chips: blue adds, purple narrows, red hides. */
+.pl-rule-chip .ico { width: 12px; height: 12px; stroke-width: 2.5; }
+.pl-rule-chip.mode-add { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+.pl-rule-chip.mode-narrow { background: #f5f3ff; border-color: #7c3aed; color: #6d28d9; }
+.pl-rule-chip.mode-hide { background: var(--error-light); border-color: var(--error); color: var(--error); }
+.pl-rule-legend { display: inline-flex; align-items: center; gap: 12px; margin-left: 10px; font-size: 12px; color: var(--text-secondary); }
+.pl-rule-legend > span { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.pl-rule-legend .ico { width: 12px; height: 12px; stroke-width: 2.5; }
+.pl-rule-legend .mode-add { color: var(--primary); }
+.pl-rule-legend .mode-narrow { color: #6d28d9; }
+.pl-rule-legend .mode-hide { color: var(--error); }
+.pl-rule-legend .hint { font-weight: 400; }
 .pl-chip-label {
   font-size: 11px; font-weight: 650; color: var(--text-secondary);
   text-transform: uppercase; letter-spacing: 0.6px; margin-right: 4px;
