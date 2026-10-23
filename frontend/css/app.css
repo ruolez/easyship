@@ -1523,6 +1523,7 @@ select:disabled { opacity: 0.55; cursor: not-allowed; }
    ============================================================ */
 .mb-8 { margin-bottom: 8px; }
 .pl-chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pl-all-stores { margin-left: 4px; }
 .pl-chip-label {
   font-size: 11px; font-weight: 650; color: var(--text-secondary);
   text-transform: uppercase; letter-spacing: 0.6px; margin-right: 4px;

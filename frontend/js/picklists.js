@@ -99,18 +99,27 @@ async function loadStores() {
 
 function renderStores() {
   const el = document.getElementById('pl-stores');
+  const allOn = stores.every((s) => selectedStores.has(s.id));
   el.innerHTML = '<span class="pl-chip-label">Stores</span>' + stores.map((s) =>
-    `<button class="chip ${selectedStores.has(s.id) ? 'active' : ''}" data-store="${s.id}">${esc(s.name)}</button>`).join('');
+    `<button class="chip ${selectedStores.has(s.id) ? 'active' : ''}" data-store="${s.id}">${esc(s.name)}</button>`).join('')
+    + (stores.length > 1 ? `<button class="btn btn-text btn-small pl-all-stores" id="pl-all-stores">${allOn ? 'Clear all' : 'Select all'}</button>` : '');
+  const apply = (next) => {
+    selectedStores = next;
+    remember(STORES_KEY, [...selectedStores]);
+    renderStores();
+    loadOrders();
+  };
   el.querySelectorAll('.chip').forEach((chip) => {
     chip.addEventListener('click', () => {
       const id = Number(chip.dataset.store);
-      if (selectedStores.has(id)) selectedStores.delete(id);
-      else selectedStores.add(id);
-      remember(STORES_KEY, [...selectedStores]);
-      renderStores();
-      loadOrders();
+      const next = new Set(selectedStores);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      apply(next);
     });
   });
+  const all = document.getElementById('pl-all-stores');
+  if (all) all.addEventListener('click', () => apply(new Set(allOn ? [] : stores.map((s) => s.id))));
 }
 
 /* ---------- Orders ---------- */
