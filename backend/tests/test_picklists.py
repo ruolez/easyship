@@ -31,6 +31,8 @@ def node(lines=(line(),), financial="PAID", fulfillment="UNFULFILLED", fo_status
         "tags": ["wholesale"], "customer": {"displayName": "Ann Smith", "tags": ["vip"]},
         "shippingAddress": {"name": "Ann Smith", "address1": "12 Elm St", "address2": "Apt 4", "city": "Austin",
                             "provinceCode": "TX", "zip": "78701", "countryCodeV2": "US"},
+        "billingAddress": {"address1": "12 elm st.", "address2": "Apt 4", "city": "AUSTIN",
+                           "provinceCode": "TX", "zip": "78701-1234", "countryCodeV2": "US"},
         "totalPriceSet": {"shopMoney": {"amount": "42.00"}}, "shippingLine": {"title": "UPS Ground"},
         "risk": {"recommendation": "ACCEPT", "assessments": [{"riskLevel": "LOW"}]},
         "lineItems": {"nodes": list(lines)},
@@ -51,7 +53,8 @@ class FromShopifyOrderTest(unittest.TestCase):
             "fulfillment_status": "UNFULFILLED", "financial_status": "PAID", "fully_paid": True, "on_hold": False,
             "tags": ["wholesale"], "customer": "Ann Smith", "customer_tags": ["vip"],
             "ship_address1": "12 Elm St", "ship_address2": "Apt 4", "ship_city": "Austin", "ship_zip": "78701",
-            "ship_state": "TX", "ship_country": "US", "total": "42.00", "shipping_method": "UPS Ground",
+            "ship_state": "TX", "ship_country": "US", "billing_matches_shipping": True,
+            "total": "42.00", "shipping_method": "UPS Ground",
             "risk_level": "LOW", "risk_recommendation": "ACCEPT",
             "lines": [{"title": "Widget", "sku": "SKU-Widget", "barcode": "0001", "qty": 2}],
             "units": 2,
@@ -75,6 +78,22 @@ class OrderProductsTest(unittest.TestCase):
             {"title": "Gift card", "variant": "", "sku": "", "barcode": "", "qty": 1, "to_ship": 1,
              "ships": False, "price": None, "image": None},
         ])
+
+
+class AddressesMatchTest(unittest.TestCase):
+    SHIP = {"address1": "252 Wilson Mill Rd", "address2": "", "city": "Oxford", "provinceCode": "PA",
+            "zip": "19363", "countryCodeV2": "US"}
+
+    def test_cases(self):
+        cases = [
+            ({**self.SHIP, "address1": "252  wilson mill rd.", "zip": "19363-4410", "address2": None}, True),
+            ({**self.SHIP, "address1": "9 Oak Ave"}, False),
+            ({**self.SHIP, "address2": "Apt 2"}, False),
+            ({**self.SHIP, "zip": "19364"}, False),
+            (None, None),
+        ]
+        self.assertEqual([picklists.addresses_match(billing, self.SHIP) for billing, _ in cases],
+                         [expected for _, expected in cases])
 
 
 class IneligibleReasonTest(unittest.TestCase):

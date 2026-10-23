@@ -1755,3 +1755,5 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .pl-risk-card { font-weight: 600; margin-top: 8px; }
 .pl-rule { padding: 14px 16px; margin-bottom: 12px; border: 1px solid var(--outline); border-radius: 8px; background: var(--surface-sunken); }
 .pl-cond { margin-bottom: 8px; align-items: center; }
+.pl-flag { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 13px; cursor: pointer; }
+.pl-flag input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); }

@@ -234,7 +234,9 @@ function renderPlRules() {
           </select></div>
         <div class="fixed"><button class="btn btn-danger btn-small pl-remove">Remove</button></div>
       </div>
-      ${(r.conditions || []).map(plConditionHtml).join('')}
+      ${(r.conditions || []).map((c, j) => (c.field === 'address_match' ? '' : plConditionHtml(c, j))).join('')}
+      <label class="pl-flag"><input type="checkbox" class="pl-addr" ${(r.conditions || []).some((c) => c.field === 'address_match') ? 'checked' : ''}>
+        Billing address matches the ship-to address</label>
       <button class="btn btn-text btn-small pl-cond-add">+ Add condition</button>
     </div>`).join('');
 }
@@ -253,7 +255,7 @@ function syncPlRulesFromDom() {
         op: c.querySelector('.pl-op').value,
         value: field === 'store' ? [raw] : field === 'ship_state' ? raw.split(',').map((v) => v.trim()) : raw,
       };
-    }),
+    }).concat(el.querySelector('.pl-addr').checked ? [{ field: 'address_match', op: 'match', value: 'yes' }] : []),
   }));
   writePlRules(rules);
 }

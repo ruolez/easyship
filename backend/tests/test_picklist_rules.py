@@ -13,9 +13,9 @@ TEXAS = {"id": "tx", "name": "Texas only", "action": "keep", "match": "all",
          "conditions": [{"field": "ship_state", "op": "in", "value": ["TX"]}]}
 
 
-def order(tags=(), customer_tags=(), state="TX", store_id=1, shipping="UPS Ground"):
+def order(tags=(), customer_tags=(), state="TX", store_id=1, shipping="UPS Ground", same_address=True):
     return {"store_id": store_id, "tags": list(tags), "customer_tags": list(customer_tags),
-            "ship_state": state, "shipping_method": shipping}
+            "ship_state": state, "shipping_method": shipping, "billing_matches_shipping": same_address}
 
 
 def rule(*conditions, match="all", action="hide", rid="r1"):
@@ -97,6 +97,13 @@ class RuleMatchesTest(unittest.TestCase):
         self.assertEqual(
             [picklist_rules.rule_matches(r, o) for r in (contains, not_contains) for o in (economy, express, none)],
             [True, False, False, False, True, True])
+
+    def test_address_match_flag(self):
+        parsed = picklist_rules.parse_rules([rule(("address_match", "match", None), ("address_match", "differ", "x"))])
+        r = parsed[0]
+        self.assertEqual(
+            (r["conditions"], [picklist_rules.rule_matches(r, order(same_address=v)) for v in (True, False, None)]),
+            ([{"field": "address_match", "op": "match", "value": "yes"}], [True, False, False]))
 
     def test_all_versus_any(self):
         conds = (("order_tag", "has", "a"), ("order_tag", "has", "b"))

@@ -2,8 +2,9 @@
 
 A rule either hides the orders it matches or keeps only them; the page
 toggles rules on and off. Conditions look at order tags, customer tags, the
-ship-to state, the store and the shipping method. Pure functions over plain
-data, like `tag_rules`; `load_rules` is the only DB touchpoint.
+ship-to state, the store, the shipping method and whether the billing address
+matches the ship-to address. Pure functions over plain data, like
+`tag_rules`; `load_rules` is the only DB touchpoint.
 """
 import json
 import re
@@ -17,10 +18,13 @@ MATCHES = ("all", "any")
 # field -> the operators it accepts; tag and text fields hold one value, list fields many.
 TAG_FIELDS = {"order_tag": "tags", "customer_tag": "customer_tags"}
 TEXT_FIELDS = {"shipping_method": "shipping_method"}
+# Yes/no facts about the order: the condition holds when the fact is true.
+FLAG_FIELDS = {"address_match": "billing_matches_shipping"}
 LIST_FIELDS = ("ship_state", "store")
 OPS = {"order_tag": ("has", "not_has"), "customer_tag": ("has", "not_has"),
        "ship_state": ("in", "not_in"), "store": ("in", "not_in"),
-       "shipping_method": ("contains", "not_contains")}
+       "shipping_method": ("contains", "not_contains"),
+       "address_match": ("match",)}
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
@@ -39,7 +43,9 @@ def _parse_condition(item):
     op = str(item.get("op") or "")
     if op not in OPS.get(field, ()):
         return None
-    if field in TAG_FIELDS or field in TEXT_FIELDS:
+    if field in FLAG_FIELDS:
+        value = "yes"
+    elif field in TAG_FIELDS or field in TEXT_FIELDS:
         value = str(item.get("value") or "").strip()
     else:
         value = _list_value(item.get("value"), field)
@@ -91,6 +97,8 @@ def _condition_matches(cond, order):
         tags = {str(t).strip().lower() for t in order.get(TAG_FIELDS[field]) or []}
         hit = value.lower() in tags
         return hit if op == "has" else not hit
+    if field in FLAG_FIELDS:
+        return order.get(FLAG_FIELDS[field]) is True
     if field in TEXT_FIELDS:
         hit = value.lower() in str(order.get(TEXT_FIELDS[field]) or "").lower()
         return hit if op == "contains" else not hit

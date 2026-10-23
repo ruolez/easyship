@@ -383,6 +383,7 @@ fragment PicklistOrder on Order {
   shippingLine { title }
   customer { displayName tags }
   shippingAddress { name address1 address2 city provinceCode zip countryCodeV2 }
+  billingAddress { address1 address2 city provinceCode zip countryCodeV2 }
   fulfillmentOrders(first: 5) { nodes { status } }
   risk { recommendation assessments { riskLevel } }
   lineItems(first: 50) {

@@ -5,6 +5,8 @@ An order is eligible while it is fully paid, not on hold, completely
 unfulfilled and not on another live pick list. The pure functions shape and
 judge orders; the DB helpers reserve orders so no order lands on two lists.
 """
+import re
+
 import psycopg2
 import psycopg2.extras
 
@@ -13,6 +15,7 @@ import order_gate
 import order_risk
 
 STATUSES = ("creating", "active", "cancelled")
+_ADDRESS_NOISE = re.compile(r"[.,#']")
 
 
 class ReservationConflict(Exception):
@@ -21,6 +24,21 @@ class ReservationConflict(Exception):
     def __init__(self, order_names):
         super().__init__("Already on another pick list: " + ", ".join(order_names))
         self.order_names = order_names
+
+
+def _address_key(addr):
+    def norm(value):
+        return " ".join(_ADDRESS_NOISE.sub(" ", str(value or "")).lower().split())
+    return (norm(addr.get("address1")), norm(addr.get("address2")), norm(addr.get("city")),
+            norm(addr.get("provinceCode")), norm(addr.get("zip"))[:5], norm(addr.get("countryCodeV2")))
+
+
+def addresses_match(billing, shipping):
+    """Billing and ship-to are the same place — case, punctuation, spacing and
+    ZIP+4 aside. None when either address is missing."""
+    if not billing or not shipping:
+        return None
+    return _address_key(billing) == _address_key(shipping)
 
 
 def from_shopify_order(node, store_id):
@@ -61,6 +79,7 @@ def from_shopify_order(node, store_id):
         "ship_zip": addr.get("zip") or "",
         "ship_state": addr.get("provinceCode") or "",
         "ship_country": addr.get("countryCodeV2") or "",
+        "billing_matches_shipping": addresses_match(node.get("billingAddress"), node.get("shippingAddress")),
         "total": ((node.get("totalPriceSet") or {}).get("shopMoney") or {}).get("amount"),
         "shipping_method": (node.get("shippingLine") or {}).get("title") or "",
         "risk_level": order_risk.risk_level(risk),
