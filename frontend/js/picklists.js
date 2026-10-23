@@ -215,8 +215,8 @@ function renderRules() {
       title="${esc(mode ? RULE_MODE[mode].tip : offTip(r))}" aria-pressed="${mode ? 'true' : 'false'}">
       ${mode ? `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[mode].icon}</svg>` : ''}${esc(r.name)}</button>`;
   }).join('') + `<span class="pl-rule-legend">
-      ${['add', 'narrow', 'hide'].filter((m) => m !== 'hide' || rules.some((r) => r.action === 'hide')).map((m) =>
-        `<span class="mode-${m}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[m].icon}</svg>${{ add: 'Add', narrow: 'Narrow', hide: 'Hide' }[m]}</span>`).join('')}
+      ${['add', 'narrow'].map((m) =>
+        `<span class="mode-${m}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[m].icon}</svg>${{ add: 'Add', narrow: 'Narrow' }[m]}</span>`).join('')}
       <span class="hint">click a rule again to change</span></span>`;
   el.querySelectorAll('.pl-rule-chip').forEach((chip) => {
     chip.addEventListener('click', () => {
