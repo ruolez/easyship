@@ -1529,6 +1529,7 @@ select:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .pl-errors { display: flex; flex-direction: column; gap: 6px; }
 .pl-errors:not(:empty) { margin-bottom: 16px; }
+.pl-errors .rule-banner { justify-content: space-between; flex-wrap: nowrap; gap: 12px; }
 .link-btn {
   border: none; background: none; padding: 0; font: inherit; font-weight: 650;
   color: var(--primary); cursor: pointer;

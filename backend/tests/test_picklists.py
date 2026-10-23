@@ -7,7 +7,11 @@ sys.modules.setdefault("db", types.SimpleNamespace(
     get_setting=lambda *a, **k: None, set_setting=lambda *a, **k: None,
     query=lambda *a, **k: None, execute=lambda *a, **k: None))
 
+sys.modules.setdefault("config", types.SimpleNamespace(
+    SHOPIFY_API_VERSION="2026-01", EASYSHIP_BASE_URLS={}, LABELS_DIR="/tmp", MANIFESTS_DIR="/tmp"))
+
 import picklists  # noqa: E402
+import shopify_client  # noqa: E402
 
 GID = "gid://shopify/Order/1"
 STORE = 3
@@ -99,6 +103,14 @@ class GroupLinesTest(unittest.TestCase):
             {"barcode": "222", "qty": 2, "title": "Zebra", "orders": ["#1"],
              "product_id": None, "sku": "", "description": "Zebra"},
         ])
+
+
+class PicklistSearchTest(unittest.TestCase):
+    def test_search_starts_at_the_cutoff_day(self):
+        self.assertEqual(
+            shopify_client.picklist_search(datetime(2026, 9, 22, 18, 30)),
+            "created_at:>=2026-09-22 status:open fulfillment_status:unfulfilled "
+            "(financial_status:paid OR financial_status:partially_refunded)")
 
 
 class NumberPrefixTest(unittest.TestCase):

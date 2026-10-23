@@ -104,20 +104,38 @@ async function loadOrders() {
   } catch (err) {
     if (seq !== loadSeq) return;
     orders = [];
-    render(err.message);
+    showLoadErrors([{ error: err.message }]);
+    render('Orders could not be loaded.');
     return;
   }
   if (seq !== loadSeq) return; // a newer store selection is loading
+  document.getElementById('pl-window').textContent = `· orders from the last ${res.days} days`;
   orders = res.orders;
   rules = res.rules;
   const known = new Set(orders.map(orderKey));
   [...excluded].forEach((k) => { if (!known.has(k)) excluded.delete(k); });
   const savedRules = recall(RULES_KEY, []);
   activeRules = new Set(savedRules.filter((id) => rules.some((r) => r.id === id)));
-  document.getElementById('pl-errors').innerHTML = res.errors.map((e) =>
-    `<div class="rule-banner err">${esc(storeName(e.store_id))}: ${esc(e.error)}</div>`).join('');
+  showLoadErrors(res.errors);
   renderRules();
   render();
+}
+
+/* A store Shopify could not answer for (after its retries) is called out by
+   name; the orders of the other stores stay usable. */
+function showLoadErrors(errors) {
+  const el = document.getElementById('pl-errors');
+  el.innerHTML = errors.map((e) => `
+    <div class="rule-banner err">
+      <span><strong>${e.store_id ? `Couldn’t load orders from ${esc(e.store_name || storeName(e.store_id))}` : 'Couldn’t load orders'}</strong>
+        — ${esc(e.error)}${e.store_id && orders.length ? ' Orders from the other stores are shown.' : ''}</span>
+      <button class="btn btn-outlined btn-small pl-retry">Retry</button>
+    </div>`).join('');
+  el.querySelectorAll('.pl-retry').forEach((b) => b.addEventListener('click', loadOrders));
+  if (errors.length) {
+    const names = errors.map((e) => (e.store_id ? e.store_name || storeName(e.store_id) : null)).filter(Boolean);
+    snackbar(names.length ? `Couldn’t load orders from ${names.join(', ')}` : 'Couldn’t load orders', 'error');
+  }
 }
 
 function renderRules() {

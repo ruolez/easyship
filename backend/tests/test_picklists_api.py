@@ -1,4 +1,5 @@
 import sys
+import threading
 import types
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -86,7 +87,7 @@ class PicklistsApiTest(unittest.TestCase):
         if "allowed_sections" in sql:
             return {"allowed_sections": self.sections}
         if "FROM shopify_stores" in sql:
-            return [{"id": STORE, "name": "Main"}]
+            return [{"id": STORE, "name": "Main"}, {"id": 2, "name": "Wholesale"}]
         return [] if not one else None
 
     def fake_list(self, store_id):
@@ -146,10 +147,42 @@ class PicklistsApiTest(unittest.TestCase):
             del SETTINGS["picklist_rules"]
         self.assertEqual(
             ([(o["name"], o["rule_ids"]) for o in res["orders"]], res["errors"], res["rules"]),
-            ([("#1", ["tx"])], [{"store_id": 2, "error": "Shopify down"}],
+            ([("#1", ["tx"])], [{"store_id": 2, "store_name": "Wholesale", "error": "Shopify down"}],
              [{"id": "tx", "name": "Texas", "action": "keep"}]))
 
+    def test_stores_load_at_the_same_time(self):
+        both_running = threading.Barrier(2, timeout=2)
+
+        def slow_list(store_id):
+            both_running.wait()  # breaks (and errors) unless the other store runs concurrently
+            return [node(f"g{store_id}0", f"#{store_id}0")]
+
+        picklists_api.list_picklist_orders = slow_list
+        self.shopify[3] = []
+        res = self.client.get("/api/picklists/orders?store_ids=1,3").get_json()
+        self.assertEqual((sorted(o["name"] for o in res["orders"]), res["errors"]), (["#10", "#30"], []))
+
+    def test_unexpected_store_failure_is_reported_not_a_server_error(self):
+        def broken(store_id):
+            if store_id == 2:
+                raise KeyError("orders")
+            return self.shopify[store_id]
+
+        picklists_api.list_picklist_orders = broken
+        res = self.client.get("/api/picklists/orders?store_ids=1,2")
+        self.assertEqual((res.status_code, [e["error"] for e in res.get_json()["errors"]]),
+                         (200, ["Unexpected error: 'orders'"]))
+
     # ----- preview -----
+
+    def test_preview_stops_and_names_the_store_shopify_could_not_answer_for(self):
+        def fetch(store_id, gids):
+            raise ShopifyError("Shopify unavailable after 3 attempts")
+
+        picklists_api.get_picklist_orders = fetch
+        res = self.client.post("/api/picklists/preview", json={"orders": [{"store_id": 2, "order_id": "w1"}]})
+        self.assertEqual((res.status_code, res.get_json()["error"]),
+                         (502, "Wholesale: Shopify unavailable after 3 attempts"))
 
     def test_preview_groups_lines_and_explains_every_left_out_order(self):
         self.shopify[STORE].append(node("g4", "#4", qty=2))

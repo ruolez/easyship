@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -416,9 +417,8 @@ query picklistOrderLines($id: ID!, $after: String) {
 }
 """ + PICKLIST_LINE_FRAGMENT
 
-# Shopify's search narrows the list; picklists.ineligible_reason has the final say.
-PICKLIST_SEARCH = ("status:open fulfillment_status:unfulfilled "
-                   "(financial_status:paid OR financial_status:partially_refunded)")
+# Only recent orders are candidates; older unfulfilled ones are left to the Orders page.
+PICKLIST_DAYS = 30
 PICKLIST_MAX_PAGES = 100
 PICKLIST_IDS_CHUNK = 10
 
@@ -437,12 +437,21 @@ def _complete_line_items(store_id, node):
     return node
 
 
+def picklist_search(since):
+    """Shopify's search narrows the list; picklists.ineligible_reason has the
+    final say."""
+    return (f"created_at:>={since:%Y-%m-%d} status:open fulfillment_status:unfulfilled "
+            "(financial_status:paid OR financial_status:partially_refunded)")
+
+
 def list_picklist_orders(store_id):
-    """Every open, unfulfilled, paid order of the store, as raw nodes with all
-    their line items."""
+    """The store's open, unfulfilled, paid orders of the last PICKLIST_DAYS
+    days, as raw nodes with all their line items. Every page goes through
+    _graphql's retries."""
+    search = picklist_search(datetime.now(timezone.utc) - timedelta(days=PICKLIST_DAYS))
     orders, after = [], None
     for _ in range(PICKLIST_MAX_PAGES):
-        data = _graphql(store_id, PICKLIST_ORDERS_QUERY, {"query": PICKLIST_SEARCH, "after": after})
+        data = _graphql(store_id, PICKLIST_ORDERS_QUERY, {"query": search, "after": after})
         page = data["orders"]
         orders.extend(_complete_line_items(store_id, n) for n in page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:

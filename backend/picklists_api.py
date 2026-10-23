@@ -1,6 +1,8 @@
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, current_app, jsonify, request, session
 
 import backoffice
 import db
@@ -8,7 +10,8 @@ import order_risk
 import picklist_rules
 import picklists
 from auth import section_required
-from shopify_client import ShopifyError, get_order_fraud, get_picklist_orders, list_picklist_orders
+from shopify_client import (PICKLIST_DAYS, ShopifyError, get_order_fraud, get_picklist_orders,
+                            list_picklist_orders)
 from util import CENTRAL, api_error, audit, central_time
 
 bp = Blueprint("picklists", __name__, url_prefix="/api/picklists")
@@ -16,6 +19,9 @@ bp = Blueprint("picklists", __name__, url_prefix="/api/picklists")
 SECTION = "picklists"
 # A pick list still `creating` this long after it started never finished.
 STALE_CREATING = timedelta(minutes=5)
+STORE_WORKERS = 8
+
+log = logging.getLogger(__name__)
 
 
 def _config():
@@ -40,6 +46,29 @@ def _store_names(store_ids):
     return {r["id"]: r["name"] for r in rows or []}
 
 
+def _per_store(store_ids, fetch):
+    """fetch(store_id) for every store at once → [(store_id, result, error)].
+    Each store runs in its own app context (its own DB connection); Shopify
+    retries happen inside fetch, so an error here is what is left after them.
+    One store failing never stops the others."""
+    app = current_app._get_current_object()
+
+    def run(store_id):
+        with app.app_context():
+            try:
+                return store_id, fetch(store_id), None
+            except ShopifyError as e:
+                return store_id, None, str(e)
+            except Exception as e:  # noqa: BLE001 — reported to the user, never a 500 for every store
+                log.exception("Pick list fetch failed for store %s", store_id)
+                return store_id, None, f"Unexpected error: {e}"
+
+    if not store_ids:
+        return []
+    with ThreadPoolExecutor(max_workers=min(STORE_WORKERS, len(store_ids))) as pool:
+        return list(pool.map(run, store_ids))
+
+
 @bp.get("/orders")
 @section_required(SECTION)
 def eligible_orders():
@@ -52,12 +81,11 @@ def eligible_orders():
         return api_error("store_ids must be a comma-separated list of ids")
     rules = picklist_rules.load_rules()
     reserved = picklists.active_order_keys(store_ids) if store_ids else set()
+    names = _store_names(store_ids) if store_ids else {}
     orders, errors = [], []
-    for store_id in store_ids:
-        try:
-            nodes = list_picklist_orders(store_id)
-        except ShopifyError as e:
-            errors.append({"store_id": store_id, "error": str(e)})
+    for store_id, nodes, error in _per_store(store_ids, list_picklist_orders):
+        if error:
+            errors.append({"store_id": store_id, "store_name": names.get(store_id), "error": error})
             continue
         for node in nodes:
             order = picklists.from_shopify_order(node, store_id)
@@ -69,6 +97,7 @@ def eligible_orders():
     return jsonify({
         "orders": orders,
         "errors": errors,
+        "days": PICKLIST_DAYS,
         "rules": [{"id": r["id"], "name": r["name"], "action": r["action"]} for r in rules],
     })
 
@@ -169,14 +198,22 @@ def _selection(data):
 def _build(selection, db_id):
     """Re-read the chosen orders live and work out the pick list: the orders
     that go on it, those left out (with why), the lines grouped by barcode
-    and the BackOffice items behind them. Raises ShopifyError / BackofficeError."""
+    and the BackOffice items behind them. Raises ShopifyError / BackofficeError
+    — a store Shopify cannot answer for stops the build, since its orders
+    would otherwise vanish from the pick list unnoticed."""
     by_store = {}
     for store_id, gid in selection:
         by_store.setdefault(store_id, []).append(gid)
     reserved = picklists.active_order_keys(by_store)
+    fetched = _per_store(list(by_store), lambda store_id: get_picklist_orders(store_id, by_store[store_id]))
+    failed = [(store_id, error) for store_id, _, error in fetched if error]
+    if failed:
+        names = _store_names([s for s, _ in failed])
+        raise ShopifyError("; ".join(f"{names.get(s, f'Store {s}')}: {e}" for s, e in failed))
     eligible, excluded = [], []
-    for store_id, gids in by_store.items():
-        found = {n["id"]: n for n in get_picklist_orders(store_id, gids)}
+    for store_id, nodes, _ in fetched:
+        gids = by_store[store_id]
+        found = {n["id"]: n for n in nodes}
         for gid in gids:
             if gid not in found:
                 excluded.append({"store_id": store_id, "id": gid, "name": gid.rsplit("/", 1)[-1],
