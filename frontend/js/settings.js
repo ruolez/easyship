@@ -155,12 +155,14 @@ document.getElementById('add-tag-rule').addEventListener('click', () => {
    they ride along with Save / Discard. The server assigns each rule its id. */
 const PL_FIELDS = {
   order_tag: 'Order tag', customer_tag: 'Customer tag', ship_state: 'Ship-to state', store: 'Store',
+  shipping_method: 'Shipping method',
 };
 const PL_OPS = {
   order_tag: [['has', 'has'], ['not_has', 'doesn’t have']],
   customer_tag: [['has', 'has'], ['not_has', 'doesn’t have']],
   ship_state: [['in', 'is one of'], ['not_in', 'is not one of']],
   store: [['in', 'is'], ['not_in', 'is not']],
+  shipping_method: [['contains', 'contains'], ['not_contains', 'doesn’t contain']],
 };
 let plStores = [];
 
@@ -195,7 +197,7 @@ function plValueHtml(c) {
     return `<select class="pl-value">${plStores.map((s) => `<option value="${s.id}" ${String(s.id) === current ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
   }
   const value = Array.isArray(c.value) ? c.value.join(', ') : (c.value || '');
-  const placeholder = c.field === 'ship_state' ? 'TX, CA' : 'tag';
+  const placeholder = { ship_state: 'TX, CA', shipping_method: 'e.g. Economy or Next Day' }[c.field] || 'tag';
   return `<input class="pl-value" value="${esc(value)}" placeholder="${placeholder}">`;
 }
 

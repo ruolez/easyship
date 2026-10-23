@@ -13,9 +13,9 @@ TEXAS = {"id": "tx", "name": "Texas only", "action": "keep", "match": "all",
          "conditions": [{"field": "ship_state", "op": "in", "value": ["TX"]}]}
 
 
-def order(tags=(), customer_tags=(), state="TX", store_id=1):
+def order(tags=(), customer_tags=(), state="TX", store_id=1, shipping="UPS Ground"):
     return {"store_id": store_id, "tags": list(tags), "customer_tags": list(customer_tags),
-            "ship_state": state}
+            "ship_state": state, "shipping_method": shipping}
 
 
 def rule(*conditions, match="all", action="hide", rid="r1"):
@@ -42,6 +42,12 @@ class ParseRulesTest(unittest.TestCase):
                 {"field": "order_tag", "op": "has", "value": "Wholesale"},
                 {"field": "store", "op": "not_in", "value": ["2", "3"]},
             ]}])
+
+    def test_shipping_method_keeps_its_text(self):
+        raw = [rule(("shipping_method", "contains", "  Economy "), ("shipping_method", "has", "x"),
+                    ("shipping_method", "not_contains", ""))]
+        self.assertEqual(picklist_rules.parse_rules(raw)[0]["conditions"],
+                         [{"field": "shipping_method", "op": "contains", "value": "Economy"}])
 
     def test_unknown_fields_ops_and_empty_values_are_dropped(self):
         raw = [rule(("color", "has", "red"), ("order_tag", "in", "x"), ("customer_tag", "has", " "),
@@ -81,6 +87,16 @@ class RuleMatchesTest(unittest.TestCase):
             [picklist_rules.rule_matches(r, order(state=s, store_id=sid))
              for s, sid in (("TX", 2), ("CA", 2), ("TX", 1), ("tx", 2))],
             [True, False, False, True])
+
+    def test_shipping_method_matches_part_of_the_name_without_case(self):
+        contains = rule(("shipping_method", "contains", "economy"))
+        not_contains = rule(("shipping_method", "not_contains", "economy"))
+        economy = order(shipping="Economy Shipping (Estimated 5-8 days)")
+        express = order(shipping="UPS Next Day Air")
+        none = order(shipping="")
+        self.assertEqual(
+            [picklist_rules.rule_matches(r, o) for r in (contains, not_contains) for o in (economy, express, none)],
+            [True, False, False, False, True, True])
 
     def test_all_versus_any(self):
         conds = (("order_tag", "has", "a"), ("order_tag", "has", "b"))

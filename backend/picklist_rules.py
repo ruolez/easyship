@@ -2,8 +2,8 @@
 
 A rule either hides the orders it matches or keeps only them; the page
 toggles rules on and off. Conditions look at order tags, customer tags, the
-ship-to state and the store. Pure functions over plain data, like
-`tag_rules`; `load_rules` is the only DB touchpoint.
+ship-to state, the store and the shipping method. Pure functions over plain
+data, like `tag_rules`; `load_rules` is the only DB touchpoint.
 """
 import json
 import re
@@ -14,11 +14,13 @@ import db
 RULES_KEY = "picklist_rules"
 ACTIONS = ("hide", "keep")
 MATCHES = ("all", "any")
-# field -> the operators it accepts; tag fields hold one tag, list fields many values.
+# field -> the operators it accepts; tag and text fields hold one value, list fields many.
 TAG_FIELDS = {"order_tag": "tags", "customer_tag": "customer_tags"}
+TEXT_FIELDS = {"shipping_method": "shipping_method"}
 LIST_FIELDS = ("ship_state", "store")
 OPS = {"order_tag": ("has", "not_has"), "customer_tag": ("has", "not_has"),
-       "ship_state": ("in", "not_in"), "store": ("in", "not_in")}
+       "ship_state": ("in", "not_in"), "store": ("in", "not_in"),
+       "shipping_method": ("contains", "not_contains")}
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
@@ -37,7 +39,7 @@ def _parse_condition(item):
     op = str(item.get("op") or "")
     if op not in OPS.get(field, ()):
         return None
-    if field in TAG_FIELDS:
+    if field in TAG_FIELDS or field in TEXT_FIELDS:
         value = str(item.get("value") or "").strip()
     else:
         value = _list_value(item.get("value"), field)
@@ -89,6 +91,9 @@ def _condition_matches(cond, order):
         tags = {str(t).strip().lower() for t in order.get(TAG_FIELDS[field]) or []}
         hit = value.lower() in tags
         return hit if op == "has" else not hit
+    if field in TEXT_FIELDS:
+        hit = value.lower() in str(order.get(TEXT_FIELDS[field]) or "").lower()
+        return hit if op == "contains" else not hit
     if field == "ship_state":
         have = str(order.get("ship_state") or "").strip().upper()
     else:
