@@ -1537,6 +1537,7 @@ select:disabled { opacity: 0.55; cursor: not-allowed; }
 .link-btn:hover { text-decoration: underline; }
 .pl-excluded { margin-top: 12px; border-top: 1px solid var(--outline); padding-top: 10px; font-size: 13px; }
 .pl-excluded summary { cursor: pointer; color: var(--text-secondary); font-weight: 550; }
+.pl-excluded summary .btn { margin-left: 8px; }
 .pl-excluded-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; flex-wrap: wrap; }
 .pl-excluded-row .btn { margin-left: auto; }
 .pl-footer {
@@ -1553,6 +1554,15 @@ select:disabled { opacity: 0.55; cursor: not-allowed; }
 .pl-table tbody tr:nth-child(even) { background: var(--row-alt); }
 .pl-table tbody tr:hover { background: var(--primary-light); }
 .pl-table .link-btn { font-size: 13.5px; }
+.pl-table .pl-check { width: 1%; padding-right: 4px; }
+.pl-table td.pl-check { padding-top: 12px; }
+.pl-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); cursor: pointer; vertical-align: middle; }
+.pl-table tbody tr { cursor: pointer; }
+.pl-table tbody tr.selected, .pl-table tbody tr.selected:hover { background: var(--primary-light); box-shadow: inset 3px 0 0 var(--primary); }
+.pl-bulk { display: flex; align-items: center; gap: 10px; margin-right: auto; flex-wrap: wrap; }
+.pl-table tbody tr.selected .pl-state { background: var(--surface); }
+/* Keep notices clear of the sticky pick-list footer and its Generate button. */
+body:has(.pl-footer) #snackbar { bottom: 92px; }
 .pl-store {
   display: inline-block; padding: 1px 8px; border-radius: 5px;
   background: var(--surface-sunken); border: 1px solid var(--outline); font-size: 12px; color: var(--on-surface);

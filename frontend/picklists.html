@@ -40,6 +40,7 @@
           <table class="pl-table">
             <thead>
               <tr id="pl-head">
+                <th class="pl-check"><input type="checkbox" id="pl-check-all" title="Select all listed orders" aria-label="Select all listed orders"></th>
                 <th class="sortable" data-sort="name">Order</th>
                 <th class="sortable" data-sort="store">Store</th>
                 <th class="sortable" data-sort="created_at">Date</th>
@@ -57,13 +58,20 @@
         </div>
         <div class="empty" id="pl-empty" style="display:none"></div>
         <details class="pl-excluded" id="pl-excluded" style="display:none">
-          <summary id="pl-excluded-summary"></summary>
+          <summary><span id="pl-excluded-summary"></span>
+            <button class="btn btn-text btn-small" id="pl-restore-all">Restore all</button></summary>
           <div id="pl-excluded-list"></div>
         </details>
       </div>
 
       <div class="pl-footer">
-        <span id="pl-summary">No orders selected</span>
+        <div class="pl-bulk" id="pl-bulk" style="display:none">
+          <strong id="pl-bulk-count"></strong>
+          <button class="btn btn-danger btn-small" id="pl-bulk-exclude">Exclude selected</button>
+          <button class="btn btn-text btn-small" id="pl-bulk-clear">Clear selection</button>
+          <span class="hint">Shift+click selects a range</span>
+        </div>
+        <span id="pl-summary">Nothing on the pick list</span>
         <button class="btn btn-primary" id="pl-generate" disabled>Generate pick list</button>
       </div>
     </div>

@@ -10,6 +10,8 @@ let orders = [];
 let rules = [];
 let activeRules = new Set();
 const excluded = new Set();
+const checked = new Set();
+let lastChecked = null; // anchor for Shift+click ranges
 
 initNav('picklists');
 
@@ -49,6 +51,8 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
   if (e.target.id === 'modal-backdrop') closeModal();
 });
 document.addEventListener('keydown', (e) => {
+  const modalOpen = document.getElementById('modal-backdrop').classList.contains('show');
+  if (e.key === 'Escape' && !modalOpen && checked.size) clearChecked();
   if (e.key === 'Escape') closeModal();
   if (!modalOrderKey) return;
   if (e.key === 'ArrowLeft') stepOrder(-1);
@@ -102,7 +106,7 @@ async function loadOrders() {
     return;
   }
   document.getElementById('pl-empty').style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="10"><span class="spinner"></span> Loading eligible orders…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="11"><span class="spinner"></span> Loading eligible orders…</td></tr>';
   let res;
   try {
     res = await api(`/api/picklists/orders?store_ids=${[...selectedStores].join(',')}`);
@@ -259,7 +263,8 @@ function render(emptyMessage) {
     empty.style.display = '';
   } else {
     empty.style.display = 'none';
-    tbody.innerHTML = shown.map((o) => `<tr>
+    tbody.innerHTML = shown.map((o) => `<tr class="${checked.has(orderKey(o)) ? 'selected' : ''}">
+      <td class="pl-check"><input type="checkbox" data-check="${esc(orderKey(o))}" ${checked.has(orderKey(o)) ? 'checked' : ''} aria-label="Select ${esc(o.name)}"></td>
       <td><button class="link-btn" data-fraud="${esc(orderKey(o))}" title="Open order details">${esc(o.name)}</button></td>
       <td><span class="pl-store">${esc(storeName(o.store_id))}</span></td>
       <td class="pl-date">${esc(shortDate(o.created_at))}</td>
@@ -272,9 +277,40 @@ function render(emptyMessage) {
       <td class="pl-actions"><button class="btn btn-text btn-small pl-exclude" data-exclude="${esc(orderKey(o))}" title="Leave this order off the pick list">Exclude</button></td>
     </tr>`).join('');
   }
+  // Only rows on screen can stay selected: filtering or excluding drops the rest.
+  const onScreen = new Set(shown.map(orderKey));
+  [...checked].forEach((k) => { if (!onScreen.has(k)) checked.delete(k); });
   renderSortHeads();
   renderExcluded(visible);
   renderSummary();
+  renderSelection(shown.length);
+}
+
+function renderSelection(rowCount) {
+  const all = document.getElementById('pl-check-all');
+  all.checked = rowCount > 0 && checked.size === rowCount;
+  all.indeterminate = checked.size > 0 && checked.size < rowCount;
+  all.disabled = !rowCount;
+  document.getElementById('pl-bulk').style.display = checked.size ? '' : 'none';
+  document.getElementById('pl-bulk-count').textContent = `${checked.size} selected`;
+}
+
+/* Shift extends from the last row clicked to this one, in list order. */
+function toggleChecked(key, on, range) {
+  const keys = listedOrders().map(orderKey);
+  const from = keys.indexOf(lastChecked);
+  const to = keys.indexOf(key);
+  const targets = range && from >= 0 && to >= 0
+    ? keys.slice(Math.min(from, to), Math.max(from, to) + 1) : [key];
+  targets.forEach((k) => (on ? checked.add(k) : checked.delete(k)));
+  lastChecked = key;
+  render();
+}
+
+function clearChecked() {
+  checked.clear();
+  lastChecked = null;
+  render();
 }
 
 function renderExcluded(visible) {
@@ -294,8 +330,8 @@ function renderSummary() {
   const units = inc.reduce((n, o) => n + o.units, 0);
   const products = new Set(inc.flatMap((o) => o.lines.map((l) => l.barcode || `?${l.title}`))).size;
   document.getElementById('pl-summary').textContent = inc.length
-    ? `${inc.length} order${inc.length === 1 ? '' : 's'} · ${units} unit${units === 1 ? '' : 's'} · ${products} product${products === 1 ? '' : 's'}`
-    : 'No orders selected';
+    ? `On the pick list: ${inc.length} order${inc.length === 1 ? '' : 's'} · ${units} unit${units === 1 ? '' : 's'} · ${products} product${products === 1 ? '' : 's'}`
+    : 'Nothing on the pick list';
   document.getElementById('pl-generate').disabled = !inc.length;
 }
 
@@ -307,7 +343,38 @@ document.getElementById('pl-orders').addEventListener('click', (e) => {
     return;
   }
   const fraud = e.target.closest('[data-fraud]');
-  if (fraud) showOrder(fraud.dataset.fraud);
+  if (fraud) {
+    showOrder(fraud.dataset.fraud);
+    return;
+  }
+  // The checkbox, or a click anywhere else on the row, selects it.
+  let box = e.target.closest('[data-check]');
+  if (!box && !e.target.closest('button, a, input')) {
+    box = e.target.closest('tr') && e.target.closest('tr').querySelector('[data-check]');
+    if (box) box.checked = !box.checked;
+  }
+  if (box) toggleChecked(box.dataset.check, box.checked, e.shiftKey);
+});
+// Shift+click selects rows, not text.
+document.getElementById('pl-orders').addEventListener('mousedown', (e) => {
+  if (e.shiftKey) e.preventDefault();
+});
+document.getElementById('pl-check-all').addEventListener('change', (e) => {
+  listedOrders().forEach((o) => (e.target.checked ? checked.add(orderKey(o)) : checked.delete(orderKey(o))));
+  lastChecked = null;
+  render();
+});
+document.getElementById('pl-bulk-exclude').addEventListener('click', () => {
+  const n = checked.size;
+  checked.forEach((k) => excluded.add(k));
+  clearChecked();
+  snackbar(`${n} order${n === 1 ? '' : 's'} excluded — restore them from the Excluded list`);
+});
+document.getElementById('pl-bulk-clear').addEventListener('click', clearChecked);
+document.getElementById('pl-restore-all').addEventListener('click', (e) => {
+  e.preventDefault(); // inside <summary>: don't fold the list
+  visibleOrders().forEach((o) => excluded.delete(orderKey(o)));
+  render();
 });
 document.getElementById('pl-excluded-list').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-restore]');
