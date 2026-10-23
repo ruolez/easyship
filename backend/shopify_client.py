@@ -381,7 +381,7 @@ fragment PicklistOrder on Order {
   tags
   totalPriceSet { shopMoney { amount } }
   customer { displayName tags }
-  shippingAddress { name city provinceCode countryCodeV2 }
+  shippingAddress { name address1 address2 city provinceCode zip countryCodeV2 }
   fulfillmentOrders(first: 5) { nodes { status } }
   risk { recommendation assessments { riskLevel } }
   lineItems(first: 50) {

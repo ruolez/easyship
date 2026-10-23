@@ -1564,6 +1564,8 @@ select:disabled { opacity: 0.55; cursor: not-allowed; }
   display: inline-block; min-width: 30px; padding: 1px 6px; border-radius: 5px; text-align: center;
   background: var(--primary-light); color: var(--primary); font-size: 11.5px; font-weight: 650;
 }
+.pl-address { max-width: 280px; }
+.pl-address .ellip-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-tags { min-width: 140px; }
 .pl-tags .order-tags, .pl-customer .order-tags { margin-top: 0; }
 .pl-customer .order-tags { margin-top: 3px; }

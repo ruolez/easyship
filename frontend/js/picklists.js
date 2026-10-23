@@ -102,7 +102,7 @@ async function loadOrders() {
     return;
   }
   document.getElementById('pl-empty').style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="7"><span class="spinner"></span> Loading eligible orders…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="8"><span class="spinner"></span> Loading eligible orders…</td></tr>';
   let res;
   try {
     res = await api(`/api/picklists/orders?store_ids=${[...selectedStores].join(',')}`);
@@ -193,6 +193,7 @@ const SORT_VALUE = {
   store: (o) => storeName(o.store_id),
   created_at: (o) => o.created_at,
   customer: (o) => o.customer,
+  address: (o) => o.ship_address1,
   state: (o) => o.ship_state,
   tags: (o) => o.tags.join(', '),
 };
@@ -238,6 +239,13 @@ function tagsHtml(tags) {
   return tags.length ? `<div class="order-tags">${tags.map((t) => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : '';
 }
 
+function shipAddressHtml(o) {
+  const street = [o.ship_address1, o.ship_address2].filter(Boolean).join(', ');
+  const place = [o.ship_city, o.ship_zip].filter(Boolean).join(' ');
+  if (!street && !place) return '<span class="text-secondary">—</span>';
+  return `<div class="ellip-line" title="${esc(street)}">${esc(street)}</div><div class="text-secondary">${esc(place)}</div>`;
+}
+
 function render(emptyMessage) {
   const tbody = document.getElementById('pl-orders');
   const empty = document.getElementById('pl-empty');
@@ -254,6 +262,7 @@ function render(emptyMessage) {
       <td><span class="pl-store">${esc(storeName(o.store_id))}</span></td>
       <td class="pl-date">${esc(shortDate(o.created_at))}</td>
       <td class="pl-customer"><div class="ellip-line" title="${esc(o.customer)}">${esc(o.customer)}</div>${tagsHtml(o.customer_tags)}</td>
+      <td class="pl-address">${shipAddressHtml(o)}</td>
       <td>${o.ship_state ? `<span class="pl-state">${esc(o.ship_state)}</span>` : ''}</td>
       <td class="wrap pl-tags">${tagsHtml(o.tags)}</td>
       <td class="pl-actions"><button class="btn btn-text btn-small pl-exclude" data-exclude="${esc(orderKey(o))}" title="Leave this order off the pick list">Exclude</button></td>
