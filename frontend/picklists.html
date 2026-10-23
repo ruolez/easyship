@@ -16,20 +16,29 @@
     </div>
 
     <div id="tab-new">
-      <div class="card">
-        <div class="row mb-16">
-          <div class="fixed pl-chip-row" id="pl-stores"></div>
-          <div class="fixed" style="margin-left:auto">
-            <button class="btn btn-outlined btn-small" id="pl-refresh">Refresh</button>
+      <div class="card pl-filters">
+        <div class="pl-frow">
+          <div class="pl-flabel">Stores</div>
+          <div class="pl-fbody pl-chip-row" id="pl-stores"></div>
+          <div class="pl-fside">
+            <span class="hint" id="pl-updated"></span>
+            <button class="btn btn-outlined btn-small pl-refresh" id="pl-refresh" title="Load the orders again">
+              <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>Refresh</button>
           </div>
         </div>
-        <div class="pl-chip-row mb-16" id="pl-rules" style="display:none"></div>
-        <div class="row">
-          <div class="field"><label>Order tag</label><input id="qf-tag" placeholder="contains…" autocomplete="off"></div>
-          <div class="field"><label>Customer tag</label><input id="qf-ctag" placeholder="contains…" autocomplete="off"></div>
-          <div class="field fixed" style="min-width:130px"><label>Ship-to state</label><input id="qf-state" placeholder="TX, CA" autocomplete="off"></div>
-          <div class="field"><label>Search</label><input id="qf-search" placeholder="Order # or customer" autocomplete="off"></div>
-          <div class="fixed"><button class="btn btn-text btn-small" id="qf-clear">Clear</button></div>
+        <div class="pl-frow" id="pl-rules-row" style="display:none">
+          <div class="pl-flabel">Rules</div>
+          <div class="pl-fbody pl-chip-row" id="pl-rules"></div>
+          <div class="pl-fside pl-rule-legend" id="pl-rule-legend"></div>
+        </div>
+        <div class="pl-frow">
+          <div class="pl-flabel">Filters</div>
+          <div class="pl-fbody pl-qfs">
+            <label class="pl-qf"><span>Order tag</span><input id="qf-tag" placeholder="any" autocomplete="off"></label>
+            <label class="pl-qf"><span>Customer tag</span><input id="qf-ctag" placeholder="any" autocomplete="off"></label>
+            <label class="pl-qf pl-qf-state"><span>Ship-to state</span><input id="qf-state" placeholder="TX, CA" autocomplete="off"></label>
+            <button class="btn btn-text btn-small" id="qf-clear" hidden>Clear filters</button>
+          </div>
         </div>
       </div>
 
@@ -41,6 +50,12 @@
             <button class="pl-view active" data-view="pick" role="tab">To pick <span class="pl-count" id="pl-count-pick">0</span></button>
             <button class="pl-view" data-view="excluded" role="tab">Excluded <span class="pl-count" id="pl-count-excluded">0</span></button>
           </div>
+          <span class="pl-showing" id="pl-showing"></span>
+          <label class="pl-search" title="Shortcut: /">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="qf-search" placeholder="Search order # or customer" autocomplete="off" aria-label="Search orders">
+            <kbd>/</kbd>
+          </label>
         </div>
         <div class="table-wrap pl-table-wrap">
           <table class="pl-table">

@@ -69,6 +69,12 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   const modalOpen = document.getElementById('modal-backdrop').classList.contains('show');
   if (e.target instanceof Element && e.target.closest('input, select, textarea')) return; // typing, not a shortcut
+  if (e.key === '/' && !modalOpen && !e.ctrlKey && !e.metaKey && !e.altKey
+    && document.getElementById('tab-new').style.display !== 'none') {
+    e.preventDefault();
+    document.getElementById('qf-search').focus();
+    return;
+  }
   if (e.key === 'Escape' && !modalOpen && checked.size) clearChecked();
   if (e.key === 'Escape') closeModal();
   if (!modalOrderKey) return;
@@ -99,19 +105,25 @@ async function loadStores() {
   loadOrders();
 }
 
-function renderStores() {
+/* A store pill shows how many eligible orders it brought in, once loaded. */
+function renderStores(counts) {
   const el = document.getElementById('pl-stores');
   const allOn = stores.every((s) => selectedStores.has(s.id));
-  el.innerHTML = '<span class="pl-chip-label">Stores</span>' + stores.map((s) =>
-    `<button class="chip ${selectedStores.has(s.id) ? 'active' : ''}" data-store="${s.id}">${esc(s.name)}</button>`).join('')
-    + (stores.length > 1 ? `<button class="btn btn-text btn-small pl-all-stores" id="pl-all-stores">${allOn ? 'Clear all' : 'Select all'}</button>` : '');
+  const tick = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  el.innerHTML = stores.map((s) => {
+    const on = selectedStores.has(s.id);
+    const n = on && counts ? counts.get(s.id) || 0 : null;
+    return `<button class="pl-store-pill ${on ? 'on' : ''}" data-store="${s.id}" aria-pressed="${on}">
+      <span class="pl-tick">${on ? tick : ''}</span>${esc(s.name)}${n != null ? `<span class="pl-store-n">${n}</span>` : ''}</button>`;
+  }).join('')
+    + (stores.length > 1 ? `<button class="link-btn pl-all-stores" id="pl-all-stores">${allOn ? 'Clear all' : 'Select all'}</button>` : '');
   const apply = (next) => {
     selectedStores = next;
     remember(STORES_KEY, [...selectedStores]);
     renderStores();
     loadOrders();
   };
-  el.querySelectorAll('.chip').forEach((chip) => {
+  el.querySelectorAll('.pl-store-pill').forEach((chip) => {
     chip.addEventListener('click', () => {
       const id = Number(chip.dataset.store);
       const next = new Set(selectedStores);
@@ -131,6 +143,7 @@ async function loadOrders() {
   const seq = ++loadSeq;
   const tbody = document.getElementById('pl-orders');
   document.getElementById('pl-errors').innerHTML = '';
+  const refresh = document.getElementById('pl-refresh');
   if (!selectedStores.size) {
     orders = [];
     render('Pick at least one store.');
@@ -138,19 +151,26 @@ async function loadOrders() {
   }
   document.getElementById('pl-empty').style.display = 'none';
   tbody.innerHTML = '<tr><td colspan="12"><span class="spinner"></span> Loading eligible orders…</td></tr>';
+  refresh.classList.add('loading');
   let res;
   try {
     res = await api(`/api/picklists/orders?store_ids=${[...selectedStores].join(',')}`);
   } catch (err) {
     if (seq !== loadSeq) return;
+    refresh.classList.remove('loading');
     orders = [];
     showLoadErrors([{ error: err.message }]);
     render('Orders could not be loaded.');
     return;
   }
   if (seq !== loadSeq) return; // a newer store selection is loading
+  refresh.classList.remove('loading');
   document.getElementById('pl-window').textContent = `· orders from the last ${res.days} days`;
+  document.getElementById('pl-updated').textContent = `Updated ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
   orders = res.orders;
+  const counts = new Map();
+  orders.forEach((o) => counts.set(o.store_id, (counts.get(o.store_id) || 0) + 1));
+  renderStores(counts);
   rules = res.rules;
   const known = new Set(orders.map(orderKey));
   [...excluded].forEach((k) => { if (!known.has(k)) excluded.delete(k); });
@@ -206,18 +226,19 @@ function restoreRuleModes(saved) {
 
 function renderRules() {
   const el = document.getElementById('pl-rules');
-  el.style.display = rules.length ? '' : 'none';
+  document.getElementById('pl-rules-row').style.display = rules.length ? '' : 'none';
   const offTip = (r) => (r.action === 'hide' ? 'Click to hide orders matching this rule'
     : 'Click to add orders matching this rule; click again to narrow to them');
-  el.innerHTML = '<span class="pl-chip-label">Rules</span>' + rules.map((r) => {
+  el.innerHTML = rules.map((r) => {
     const mode = ruleModes.get(r.id);
     return `<button class="chip pl-rule-chip ${mode ? `mode-${mode}` : ''}" data-rule="${esc(r.id)}"
       title="${esc(mode ? RULE_MODE[mode].tip : offTip(r))}" aria-pressed="${mode ? 'true' : 'false'}">
       ${mode ? `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[mode].icon}</svg>` : ''}${esc(r.name)}</button>`;
-  }).join('') + `<span class="pl-rule-legend">
+  }).join('');
+  document.getElementById('pl-rule-legend').innerHTML = `
       ${['add', 'narrow', 'hide'].filter((m) => m !== 'hide' || rules.some((r) => r.action === 'hide')).map((m) =>
         `<span class="mode-${m}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[m].icon}</svg>${{ add: 'Add', narrow: 'Narrow', hide: 'Hide' }[m]}</span>`).join('')}
-      <span class="hint">click a rule again to change</span></span>`;
+      <span class="hint">click a rule again to change</span>`;
   el.querySelectorAll('.pl-rule-chip').forEach((chip) => {
     chip.addEventListener('click', () => {
       const rule = rules.find((r) => r.id === chip.dataset.rule);
@@ -351,8 +372,12 @@ function render(emptyMessage) {
     : '<button class="btn btn-text btn-small pl-restore" data-move="KEY" title="Put this order back on the pick list">Restore</button>';
   if (!shown.length) {
     tbody.innerHTML = '';
-    empty.textContent = emptyMessage
-      || (view === 'excluded' ? 'No excluded orders.' : orders.length ? 'No orders match the filters.' : 'No eligible orders.');
+    const unmatched = !emptyMessage && orders.length && !visible.length;
+    empty.innerHTML = esc(emptyMessage
+      || (unmatched ? 'No orders match the rules and filters.'
+        : view === 'excluded' ? 'No excluded orders.' : orders.length ? 'Every order is excluded.' : 'No eligible orders.'))
+      + (unmatched ? '<div><button class="btn btn-outlined btn-small pl-empty-reset" id="pl-empty-reset">Show all orders</button></div>' : '');
+    if (unmatched) document.getElementById('pl-empty-reset').addEventListener('click', resetFilters);
     empty.style.display = '';
   } else {
     empty.style.display = 'none';
@@ -377,6 +402,33 @@ function render(emptyMessage) {
   renderSortHeads();
   renderSummary();
   renderSelection(shown.length);
+  renderFilterState(visible.length);
+}
+
+/* Says how many orders the rules and filters are holding back, with one
+   click to show them all again. */
+function renderFilterState(visibleCount) {
+  const qf = quickFilters();
+  QF_IDS.forEach((id) => {
+    const input = document.getElementById(id);
+    input.parentElement.classList.toggle('filled', !!input.value.trim());
+  });
+  document.getElementById('qf-clear').hidden = !(qf.tag || qf.ctag || qf.states.length);
+  const filtered = ruleModes.size || qf.tag || qf.ctag || qf.states.length || qf.search;
+  const el = document.getElementById('pl-showing');
+  el.innerHTML = filtered && orders.length
+    ? `Showing <strong>${visibleCount}</strong> of ${orders.length} orders<button class="link-btn" id="pl-reset">Show all</button>`
+    : '';
+  const reset = document.getElementById('pl-reset');
+  if (reset) reset.addEventListener('click', resetFilters);
+}
+
+function resetFilters() {
+  QF_IDS.forEach((id) => { document.getElementById(id).value = ''; });
+  ruleModes.clear();
+  remember(RULES_KEY, {});
+  renderRules();
+  render();
 }
 
 function renderSelection(rowCount) {
@@ -455,11 +507,17 @@ document.getElementById('pl-bulk-action').addEventListener('click', () => {
   snackbar(view === 'pick' ? `${plural} excluded — see the Excluded tab` : `${plural} back on the pick list`);
 });
 document.getElementById('pl-bulk-clear').addEventListener('click', clearChecked);
-['qf-tag', 'qf-ctag', 'qf-state', 'qf-search'].forEach((id) =>
-  document.getElementById(id).addEventListener('input', () => render()));
+const QF_IDS = ['qf-tag', 'qf-ctag', 'qf-state', 'qf-search'];
+QF_IDS.forEach((id) => document.getElementById(id).addEventListener('input', () => render()));
 document.getElementById('qf-clear').addEventListener('click', () => {
-  ['qf-tag', 'qf-ctag', 'qf-state', 'qf-search'].forEach((id) => { document.getElementById(id).value = ''; });
+  ['qf-tag', 'qf-ctag', 'qf-state'].forEach((id) => { document.getElementById(id).value = ''; });
   render();
+});
+document.getElementById('qf-search').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && e.target.value) {
+    e.target.value = '';
+    render();
+  }
 });
 document.getElementById('pl-refresh').addEventListener('click', loadOrders);
 
