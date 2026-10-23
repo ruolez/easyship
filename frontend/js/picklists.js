@@ -364,7 +364,7 @@ function render(emptyMessage) {
       <td class="pl-customer"><div class="ellip-line" title="${esc(o.customer)}">${esc(o.customer)}</div>${tagsHtml(o.customer_tags)}</td>
       <td class="pl-address">${shipAddressHtml(o)}</td>
       <td>${o.ship_state ? `<span class="pl-state">${esc(o.ship_state)}</span>` : ''}</td>
-      <td class="pl-shipping" title="${esc(o.shipping_method)}">${o.shipping_method ? esc(o.shipping_method) : '<span class="text-secondary">—</span>'}</td>
+      <td class="pl-shipping" title="${esc(o.shipping_method)}">${o.shipping_method ? `<div class="pl-clamp">${esc(o.shipping_method)}</div>` : '<span class="text-secondary">—</span>'}</td>
       <td class="num pl-total">${money(o.total)}</td>
       <td class="wrap pl-tags">${tagsHtml(o.tags)}</td>
       <td class="pl-actions">${action.replace('KEY', esc(orderKey(o)))}</td>
