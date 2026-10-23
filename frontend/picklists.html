@@ -37,11 +37,16 @@
 
       <div class="card">
         <div class="table-wrap">
-          <table>
+          <table class="pl-table">
             <thead>
-              <tr>
-                <th>Order</th><th>Store</th><th>Date</th><th>Customer</th><th>Ship to</th>
-                <th class="num">Units</th><th>Tags</th><th>Risk</th><th></th>
+              <tr id="pl-head">
+                <th class="sortable" data-sort="name">Order</th>
+                <th class="sortable" data-sort="store">Store</th>
+                <th class="sortable" data-sort="created_at">Date</th>
+                <th class="sortable" data-sort="customer">Customer</th>
+                <th class="sortable" data-sort="state">State</th>
+                <th class="sortable" data-sort="tags">Tags</th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="pl-orders"></tbody>

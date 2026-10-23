@@ -2,6 +2,7 @@ const STORES_KEY = 'easyship.picklistStores';
 const RULES_KEY = 'easyship.picklistRules';
 const CUSTOMER_KEY = 'easyship.picklistCustomer';
 const REP_KEY = 'easyship.picklistRep';
+const SORT_KEY = 'easyship.picklistSort';
 
 let stores = [];
 let selectedStores = new Set();
@@ -33,14 +34,15 @@ document.querySelectorAll('.tab').forEach((tab) => {
 });
 
 /* ---------- Modal ---------- */
-function openModal(html, wide = false) {
+function openModal(html, variant = '') {
   const modal = document.getElementById('modal');
   modal.innerHTML = html;
-  modal.classList.toggle('wide', wide);
+  modal.className = `modal ${variant}`.trim();
   document.getElementById('modal-backdrop').classList.add('show');
 }
 function closeModal() {
   document.getElementById('modal-backdrop').classList.remove('show');
+  modalOrderKey = null;
 }
 window.closeModal = closeModal;
 document.getElementById('modal-backdrop').addEventListener('click', (e) => {
@@ -48,6 +50,9 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeModal();
+  if (!modalOrderKey) return;
+  if (e.key === 'ArrowLeft') stepOrder(-1);
+  if (e.key === 'ArrowRight') stepOrder(1);
 });
 
 /* ---------- Stores ---------- */
@@ -97,7 +102,7 @@ async function loadOrders() {
     return;
   }
   document.getElementById('pl-empty').style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="9"><span class="spinner"></span> Loading eligible orders…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7"><span class="spinner"></span> Loading eligible orders…</td></tr>';
   let res;
   try {
     res = await api(`/api/picklists/orders?store_ids=${[...selectedStores].join(',')}`);
@@ -182,20 +187,51 @@ function passesFilters(o, qf) {
   return true;
 }
 
+/* Column sort, remembered per computer; the order window walks the same order. */
+const SORT_VALUE = {
+  name: (o) => o.name,
+  store: (o) => storeName(o.store_id),
+  created_at: (o) => o.created_at,
+  customer: (o) => o.customer,
+  state: (o) => o.ship_state,
+  tags: (o) => o.tags.join(', '),
+};
+let sort = recall(SORT_KEY, { key: 'created_at', dir: 1 });
+if (!SORT_VALUE[sort.key]) sort = { key: 'created_at', dir: 1 };
+const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
+function compareOrders(a, b) {
+  const va = SORT_VALUE[sort.key](a);
+  const vb = SORT_VALUE[sort.key](b);
+  const diff = typeof va === 'number' ? va - vb : collator.compare(va || '', vb || '');
+  // Blank values sink to the bottom either way; ties fall back to the order number.
+  if (!va && va !== 0 && (vb || vb === 0)) return 1;
+  if (!vb && vb !== 0 && (va || va === 0)) return -1;
+  return diff * sort.dir || collator.compare(a.name, b.name);
+}
+
+function renderSortHeads() {
+  document.querySelectorAll('#pl-head th.sortable').forEach((th) => {
+    th.classList.toggle('asc', th.dataset.sort === sort.key && sort.dir === 1);
+    th.classList.toggle('desc', th.dataset.sort === sort.key && sort.dir === -1);
+  });
+}
+
+document.querySelectorAll('#pl-head th.sortable').forEach((th) => {
+  th.addEventListener('click', () => {
+    sort = th.dataset.sort === sort.key ? { key: sort.key, dir: -sort.dir } : { key: th.dataset.sort, dir: 1 };
+    remember(SORT_KEY, sort);
+    render();
+  });
+});
+
 function visibleOrders() {
   const qf = quickFilters();
-  return orders.filter((o) => passesFilters(o, qf));
+  return orders.filter((o) => passesFilters(o, qf)).sort(compareOrders);
 }
 
 function includedOrders() {
   return visibleOrders().filter((o) => !excluded.has(orderKey(o)));
-}
-
-function riskChip(level) {
-  if (!level || level === 'NONE') return '';
-  const tone = { HIGH: 'err', MEDIUM: 'warn', LOW: 'ok' }[level] || '';
-  const label = level === 'PENDING' ? 'Pending' : level.charAt(0) + level.slice(1).toLowerCase();
-  return `<span class="chip static ${tone}">${esc(label)}</span>`;
 }
 
 function tagsHtml(tags) {
@@ -214,17 +250,16 @@ function render(emptyMessage) {
   } else {
     empty.style.display = 'none';
     tbody.innerHTML = shown.map((o) => `<tr>
-      <td><button class="link-btn" data-fraud="${esc(orderKey(o))}">${esc(o.name)}</button></td>
-      <td>${esc(storeName(o.store_id))}</td>
-      <td>${esc(o.created_at)}</td>
-      <td class="ellip" title="${esc(o.customer)}">${esc(o.customer)}${tagsHtml(o.customer_tags)}</td>
-      <td>${esc([o.ship_city, o.ship_state].filter(Boolean).join(', '))}</td>
-      <td class="num">${o.units}</td>
-      <td class="wrap">${tagsHtml(o.tags)}</td>
-      <td>${riskChip(o.risk_level)}</td>
-      <td><button class="btn btn-text btn-small" data-exclude="${esc(orderKey(o))}" title="Leave this order off the pick list">✕ Exclude</button></td>
+      <td><button class="link-btn" data-fraud="${esc(orderKey(o))}" title="Open order details">${esc(o.name)}</button></td>
+      <td><span class="pl-store">${esc(storeName(o.store_id))}</span></td>
+      <td class="pl-date">${esc(shortDate(o.created_at))}</td>
+      <td class="pl-customer"><div class="ellip-line" title="${esc(o.customer)}">${esc(o.customer)}</div>${tagsHtml(o.customer_tags)}</td>
+      <td>${o.ship_state ? `<span class="pl-state">${esc(o.ship_state)}</span>` : ''}</td>
+      <td class="wrap pl-tags">${tagsHtml(o.tags)}</td>
+      <td class="pl-actions"><button class="btn btn-text btn-small pl-exclude" data-exclude="${esc(orderKey(o))}" title="Leave this order off the pick list">Exclude</button></td>
     </tr>`).join('');
   }
+  renderSortHeads();
   renderExcluded(visible);
   renderSummary();
 }
@@ -259,7 +294,7 @@ document.getElementById('pl-orders').addEventListener('click', (e) => {
     return;
   }
   const fraud = e.target.closest('[data-fraud]');
-  if (fraud) showFraud(orders.find((o) => orderKey(o) === fraud.dataset.fraud));
+  if (fraud) showOrder(fraud.dataset.fraud);
 });
 document.getElementById('pl-excluded-list').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-restore]');
@@ -275,94 +310,200 @@ document.getElementById('qf-clear').addEventListener('click', () => {
 });
 document.getElementById('pl-refresh').addEventListener('click', loadOrders);
 
-/* ---------- Fraud window ---------- */
+/* ---------- Order window ----------
+   Walks the orders as listed (filters and exclusions applied): Previous /
+   Next or ← →, and Exclude moves straight on to the next order. Details are
+   cached per order and the next one is fetched ahead. */
+let modalOrderKey = null;
+const orderDetails = new Map();
+
 const RECOMMENDATION_TEXT = {
   ACCEPT: 'You can fulfill this order',
   INVESTIGATE: 'Investigate this order before fulfilling it',
   CANCEL: 'Consider canceling this order',
 };
+const LEVEL_TONE = { HIGH: 'err', MEDIUM: 'warn', LOW: 'ok' };
 const CARDHOLDER_TEXT = {
   MATCH: ['ok', 'Name on card matches the order'],
-  LAST_NAME_ONLY: ['warn', 'Only the last name on the card matches the order'],
+  LAST_NAME_ONLY: ['warn', 'Only the last name on the card matches'],
   MISMATCH: ['err', 'Name on card does not match the billing or shipping name'],
 };
 const SENTIMENT_TONE = { NEGATIVE: 'err', POSITIVE: 'ok' };
+const svg = (paths) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+const ICONS = {
+  err: svg('<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>'),
+  warn: svg('<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>'),
+  ok: svg('<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>'),
+  info: svg('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
+  card: svg('<rect width="20" height="14" x="2" y="5" rx="2"/><path d="M2 10h20"/>'),
+  globe: svg('<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>'),
+  prev: svg('<path d="m15 18-6-6 6-6"/>'),
+  next: svg('<path d="m9 18 6-6-6-6"/>'),
+  close: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+};
 
-function addressHtml(title, a) {
-  if (!a) return `<div class="pl-fraud-col"><h4>${title}</h4><span class="text-secondary">—</span></div>`;
-  return `<div class="pl-fraud-col"><h4>${title}</h4>
-    ${[a.name, a.address1, a.address2, [a.city, a.state, a.zip].filter(Boolean).join(', '), a.country, a.phone]
-      .filter(Boolean).map((l) => `<div>${esc(l)}</div>`).join('')}</div>`;
+const listedOrders = () => visibleOrders().filter((o) => !excluded.has(orderKey(o)));
+const titleCase = (v) => (v ? v.charAt(0) + v.slice(1).toLowerCase().replace(/_/g, ' ') : '');
+
+function shortDate(iso) {
+  if (!iso) return '';
+  const d = new Date(`${iso}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function riskHtml(risk) {
-  if (!risk) return '<p class="text-secondary">Shopify has no risk evaluation for this order.</p>';
-  const level = risk.level && risk.level !== 'PENDING'
-    ? `<div class="pl-risk-level ${({ HIGH: 'err', MEDIUM: 'warn', LOW: 'ok' })[risk.level] || ''}">${esc(risk.level.charAt(0) + risk.level.slice(1).toLowerCase())} risk</div>` : '';
+function fetchOrderDetail(o) {
+  const key = orderKey(o);
+  if (!orderDetails.has(key)) {
+    const pending = api(`/api/picklists/orders/risk?store_id=${o.store_id}&order_id=${encodeURIComponent(o.id)}`);
+    pending.catch(() => orderDetails.delete(key)); // a failed load is tried again next time
+    orderDetails.set(key, pending);
+  }
+  return orderDetails.get(key);
+}
+
+function sameAddress(a, b) {
+  const fields = ['address1', 'address2', 'city', 'state', 'zip', 'country'];
+  return !!a && !!b && fields.every((f) => (a[f] || '').trim().toLowerCase() === (b[f] || '').trim().toLowerCase());
+}
+
+function addressLines(a) {
+  return [a.name, a.address1, a.address2, [[a.city, a.state].filter(Boolean).join(', '), a.zip].filter(Boolean).join(' '),
+    a.country, a.phone].filter(Boolean).map((l) => `<div>${esc(l)}</div>`).join('');
+}
+
+function omCard(label, body) {
+  return `<div class="om-card"><div class="om-label">${label}</div>${body}</div>`;
+}
+
+function riskPanel(risk) {
+  if (!risk) {
+    return `<div class="om-risk"><div class="om-label">Order risk evaluation</div>
+      <div class="text-secondary">Shopify has no risk evaluation for this order.</div></div>`;
+  }
+  const tone = LEVEL_TONE[risk.level] || '';
+  const pill = risk.level && risk.level !== 'PENDING'
+    ? `<span class="om-pill ${tone}">${esc(titleCase(risk.level))} risk</span>`
+    : '<span class="om-pill">Analysis pending</span>';
   const advice = risk.level === 'PENDING' ? 'Risk analysis in progress' : RECOMMENDATION_TEXT[risk.recommendation] || '';
   const many = risk.assessments.length > 1;
   const assessments = risk.assessments.map((a) => `
-    ${many ? `<div class="pl-risk-provider">${esc(a.provider || 'Shopify')}: ${esc(a.level ? `${a.level.toLowerCase()} risk` : 'no risk level')}</div>` : ''}
-    ${a.facts.length ? `<ul class="pl-risk-facts">${a.facts.map((f) =>
-      `<li class="${SENTIMENT_TONE[f.sentiment] || ''}">${esc(f.description)}</li>`).join('')}</ul>` : ''}`).join('');
-  let cardholder = '';
+    ${many ? `<div class="om-provider">${esc(a.provider || 'Shopify')} · ${esc(a.level ? `${titleCase(a.level)} risk` : 'No risk level')}</div>` : ''}
+    ${a.facts.length ? `<ul class="om-facts">${a.facts.map((f) => {
+      const t = SENTIMENT_TONE[f.sentiment] || 'info';
+      return `<li class="${t}">${ICONS[t]}<span>${esc(f.description)}</span></li>`;
+    }).join('')}</ul>` : ''}`).join('');
+  const checks = [];
   if (risk.cardholder) {
-    const [tone, text] = CARDHOLDER_TEXT[risk.cardholder.status];
     const c = risk.cardholder;
-    cardholder = `<div class="pl-risk-card ${tone}">${text}</div>
-      <div class="hint">${c.card_names.length > 1 ? 'Names on cards' : 'Name on card'}: ${esc(c.card_names.join(', '))}
-        · Billing: ${esc(c.billing_name || '—')} · Shipping: ${esc(c.shipping_name || '—')}</div>`;
+    const [t, text] = CARDHOLDER_TEXT[c.status];
+    checks.push(`<div class="om-check ${t}">${ICONS.card}<div><div class="om-check-title">${text}</div>
+      <div class="hint">${c.card_names.length > 1 ? 'Cards' : 'Card'}: ${esc(c.card_names.join(', '))} · Billing: ${esc(c.billing_name || '—')} · Shipping: ${esc(c.shipping_name || '—')}</div></div></div>`);
   }
-  const ip = risk.ip ? `<div class="hint mt-16">IP address: ${esc(risk.ip)}${risk.ip_location
-    ? `<br>Location of IP address used to place the order is ${esc(risk.ip_location)}` : ''}</div>` : '';
-  return `${level}${advice ? `<div class="text-secondary mb-16">${esc(advice)}</div>` : ''}${assessments}${cardholder}${ip}`;
+  if (risk.ip) {
+    checks.push(`<div class="om-check">${ICONS.globe}<div><div class="om-check-title">IP ${esc(risk.ip)}</div>
+      <div class="hint">${risk.ip_location ? `Placed from ${esc(risk.ip_location)}` : 'Location unknown'}</div></div></div>`);
+  }
+  return `<div class="om-risk ${tone}">
+    <div class="om-risk-top"><span class="om-label">Order risk evaluation</span>${pill}${advice ? `<span class="om-advice">${esc(advice)}</span>` : ''}</div>
+    ${assessments}
+    ${checks.length ? `<div class="om-checks">${checks.join('')}</div>` : ''}
+  </div>`;
 }
 
-async function showFraud(o) {
-  if (!o) return;
-  openModal(`<h3>Order ${esc(o.name)}</h3><p><span class="spinner"></span> Loading fraud data…</p>`, true);
-  let d;
-  try {
-    d = await api(`/api/picklists/orders/risk?store_id=${o.store_id}&order_id=${encodeURIComponent(o.id)}`);
-  } catch (err) {
-    openModal(`<h3>Order ${esc(o.name)}</h3><p class="error-note">${esc(err.message)}</p>
-      <div class="actions"><button class="btn btn-text" onclick="closeModal()">Close</button></div>`, true);
+function orderBody(d) {
+  const c = d.customer || {};
+  const stats = [
+    ['Total', money(d.total)],
+    ['Items', d.items ?? '—'],
+    ['Shipping', esc(d.shipping_method || '—')],
+    ['Customer orders', c.orders_count ?? '—'],
+  ];
+  const customer = `<div class="om-strong">${esc(c.name || '—')}</div>
+    ${d.email ? `<div>${esc(d.email)}</div>` : ''}${d.phone ? `<div>${esc(d.phone)}</div>` : ''}
+    <div class="hint">${[c.since ? `Customer since ${esc(shortDate(c.since))}` : '', c.amount_spent != null ? `spent ${money(c.amount_spent)}` : ''].filter(Boolean).join(' · ')}</div>
+    ${tagsHtml(c.tags || [])}`;
+  const ship = d.shipping_address ? addressLines(d.shipping_address) : '<span class="text-secondary">—</span>';
+  const bill = !d.billing_address ? '<span class="text-secondary">—</span>'
+    : sameAddress(d.billing_address, d.shipping_address)
+      ? `<div class="om-strong">${esc(d.billing_address.name || '')}</div><div class="text-secondary">Same as ship to</div>`
+      : addressLines(d.billing_address);
+  return `
+    <div class="om-stats">${stats.map(([l, v]) => `<div class="om-stat"><div class="om-label">${l}</div><div class="om-value">${v}</div></div>`).join('')}</div>
+    <div class="om-cards">${omCard('Customer', customer)}${omCard('Ship to', ship)}${omCard('Bill to', bill)}</div>
+    ${riskPanel(d.risk)}`;
+}
+
+async function showOrder(key) {
+  const list = listedOrders();
+  const idx = list.findIndex((o) => orderKey(o) === key);
+  if (idx < 0) {
+    closeModal();
     return;
   }
-  const c = d.customer || {};
+  const o = list[idx];
+  modalOrderKey = key;
   openModal(`
-    <h3>Order ${esc(d.name)}</h3>
-    <div class="hint mb-16">${esc(storeName(o.store_id))} · ${esc(d.created_at)} · ${esc(d.financial_status || '')} · ${esc(d.fulfillment_status || '')}</div>
-    <div class="pl-fraud-stats">
-      <div><span class="hint">Total</span><strong>${money(d.total)}</strong></div>
-      <div><span class="hint">Items</span><strong>${d.items ?? ''}</strong></div>
-      <div><span class="hint">Shipping</span><strong>${esc(d.shipping_method || '—')}</strong></div>
-    </div>
-    ${tagsHtml(d.tags)}
-    <div class="pl-fraud-cols">
-      <div class="pl-fraud-col"><h4>Customer</h4>
-        <div>${esc(c.name || '—')}</div>
-        ${d.email ? `<div>${esc(d.email)}</div>` : ''}${d.phone ? `<div>${esc(d.phone)}</div>` : ''}
-        ${c.orders_count != null ? `<div class="hint">${c.orders_count} order${c.orders_count === 1 ? '' : 's'}${c.since ? ` · since ${esc(c.since)}` : ''}</div>` : ''}
-        ${c.amount_spent != null ? `<div class="hint">Spent ${money(c.amount_spent)}</div>` : ''}
-        ${tagsHtml(c.tags || [])}
+    <div class="om-head">
+      <div>
+        <div class="om-title">Order ${esc(o.name)}<span id="om-status"></span></div>
+        <div class="om-meta">${esc(storeName(o.store_id))} · ${esc(shortDate(o.created_at))} · ${esc(o.customer)} · ${o.units} unit${o.units === 1 ? '' : 's'}
+          ${o.tags.length ? tagsHtml(o.tags) : ''}</div>
       </div>
-      ${addressHtml('Ship to', d.shipping_address)}
-      ${addressHtml('Bill to', d.billing_address)}
+      <button class="om-close" onclick="closeModal()" aria-label="Close">${ICONS.close}</button>
     </div>
-    <div class="pl-risk">
-      <div class="pl-risk-head">Order risk evaluation</div>
-      ${riskHtml(d.risk)}
-    </div>
-    <div class="actions">
-      <button class="btn btn-danger" id="m-fraud-exclude">Exclude from pick list</button>
-      <button class="btn btn-text" onclick="closeModal()">Close</button>
-    </div>`, true);
-  document.getElementById('m-fraud-exclude').addEventListener('click', () => {
-    excluded.add(orderKey(o));
+    <div class="om-body" id="om-body"><div class="om-loading"><span class="spinner"></span> Loading order details…</div></div>
+    <div class="om-foot">
+      <button class="btn btn-outlined btn-small" id="om-prev" ${idx === 0 ? 'disabled' : ''}>${ICONS.prev} Previous</button>
+      <span class="om-pos">${idx + 1} of ${list.length}</span>
+      <button class="btn btn-outlined btn-small" id="om-next" ${idx === list.length - 1 ? 'disabled' : ''}>Next ${ICONS.next}</button>
+      <span class="om-keys hint">← → to move</span>
+      <span class="om-spacer"></span>
+      <button class="btn btn-danger" id="om-exclude">Exclude from pick list</button>
+    </div>`, 'order');
+  document.getElementById('om-prev').addEventListener('click', () => stepOrder(-1));
+  document.getElementById('om-next').addEventListener('click', () => stepOrder(1));
+  document.getElementById('om-exclude').addEventListener('click', () => excludeAndAdvance(key));
+  const current = fetchOrderDetail(o);
+  if (list[idx + 1]) fetchOrderDetail(list[idx + 1]).catch(() => {}); // ready before Next / Exclude
+
+  let html;
+  try {
+    const d = await current;
+    html = orderBody(d);
+    if (modalOrderKey === key) {
+      document.getElementById('om-status').innerHTML = [d.financial_status, d.fulfillment_status]
+        .filter(Boolean).map((v) => `<span class="om-chip">${esc(titleCase(v))}</span>`).join('');
+    }
+  } catch (err) {
+    html = `<div class="om-loading"><span class="error-note">${esc(err.message)}</span>
+      <button class="btn btn-outlined btn-small" id="om-retry">Retry</button></div>`;
+  }
+  if (modalOrderKey !== key) return; // moved on while this was loading
+  document.getElementById('om-body').innerHTML = html;
+  const retry = document.getElementById('om-retry');
+  if (retry) retry.addEventListener('click', () => showOrder(key));
+}
+
+function stepOrder(delta) {
+  const list = listedOrders();
+  const idx = list.findIndex((o) => orderKey(o) === modalOrderKey);
+  const target = list[idx + delta];
+  if (target) showOrder(orderKey(target));
+}
+
+function excludeAndAdvance(key) {
+  const before = listedOrders();
+  const idx = before.findIndex((o) => orderKey(o) === key);
+  const name = before[idx] ? before[idx].name : '';
+  excluded.add(key);
+  render();
+  const after = listedOrders();
+  snackbar(`${name} excluded`);
+  if (!after.length) {
     closeModal();
-    render();
-  });
+    return;
+  }
+  showOrder(orderKey(after[Math.min(idx, after.length - 1)]));
 }
 
 /* ---------- Generate ---------- */
@@ -372,7 +513,7 @@ async function openGenerate() {
   const picked = includedOrders();
   if (!picked.length) return;
   const body = { orders: picked.map((o) => ({ store_id: o.store_id, order_id: o.id })) };
-  openModal('<h3>New pick list</h3><p><span class="spinner"></span> Checking orders and BackOffice products…</p>', true);
+  openModal('<h3>New pick list</h3><p><span class="spinner"></span> Checking orders and BackOffice products…</p>', 'wide');
   let preview;
   let reps;
   try {
@@ -382,7 +523,7 @@ async function openGenerate() {
     ]);
   } catch (err) {
     openModal(`<h3>New pick list</h3><p class="error-note">${esc(err.message)}</p>
-      <div class="actions"><button class="btn btn-text" onclick="closeModal()">Close</button></div>`, true);
+      <div class="actions"><button class="btn btn-text" onclick="closeModal()">Close</button></div>`, 'wide');
     return;
   }
   const t = preview.totals;
@@ -419,7 +560,7 @@ async function openGenerate() {
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
       ${t.orders ? '<button class="btn btn-primary" id="m-create" disabled>Create pick list</button>' : ''}
-    </div>`, true);
+    </div>`, 'wide');
   if (!t.orders) return;
 
   const custSel = document.getElementById('m-cust');
@@ -520,7 +661,7 @@ document.getElementById('pl-history').addEventListener('click', (e) => {
 });
 
 async function viewPicklist(id) {
-  openModal(`<h3>Pick list #${id}</h3><p><span class="spinner"></span> Loading…</p>`, true);
+  openModal(`<h3>Pick list #${id}</h3><p><span class="spinner"></span> Loading…</p>`, 'wide');
   let p;
   try {
     p = await api(`/api/picklists/${id}`);
@@ -542,7 +683,7 @@ async function viewPicklist(id) {
       <thead><tr><th>Order</th><th>Store</th><th>Customer</th><th>State</th><th class="num">Units</th></tr></thead>
       <tbody>${p.orders.map((o) => `<tr><td>${esc(o.order_name)}</td><td>${esc(o.store_name || '')}</td><td>${esc(o.customer_name || '')}</td><td>${esc(o.ship_state || '')}</td><td class="num">${o.units}</td></tr>`).join('')}</tbody>
     </table></div>
-    <div class="actions"><button class="btn btn-text" onclick="closeModal()">Close</button></div>`, true);
+    <div class="actions"><button class="btn btn-text" onclick="closeModal()">Close</button></div>`, 'wide');
 }
 
 function confirmCancel(id, number) {
