@@ -80,24 +80,31 @@ class PicklistSettingsValidationTest(unittest.TestCase):
 
 class QuotationDetailRowTest(unittest.TestCase):
     def test_values_follow_the_column_list(self):
-        exp = datetime(2027, 10, 22)
+        exp = datetime(2022, 11, 1)
         item = {"CateID": 2, "SubCateID": 5, "UnitDesc": "EACH", "ProductID": 1010, "ProductSKU": "AP-1",
                 "ProductUPC": "111", "ProductDescription": "APPLE " * 20, "ItemSize": "12CT",
-                "UnitPrice": 2.5, "UnitCost": 1.25, "ItemWeight": "1.5"}
-        row = backoffice.quotation_detail_row(555, item, 4, exp)
+                "UnitPrice": 2.5, "UnitCost": 1.25, "ItemWeight": "1.5", "ExpDate": exp, "ItemTaxID": 2}
+        row = backoffice.quotation_detail_row(555, item, 4)
         columns = [c.strip() for c in backoffice.QUOTATION_DETAIL_COLUMNS.split(",")]
         self.assertEqual(dict(zip(columns, row)), {
             "QuotationID": 555, "CateID": 2, "SubCateID": 5, "UnitDesc": "EACH", "UnitQty": 1,
             "ProductID": 1010, "ProductSKU": "AP-1", "ProductUPC": "111",
             "ProductDescription": ("APPLE " * 20)[:50], "ItemSize": "12CT",
-            "ExpDate": exp, "ReasonID": 0, "LineMessage": "",
+            "ExpDate": exp, "ReasonID": None, "LineMessage": "",
             "UnitPrice": 2.5, "OriginalPrice": 2.5, "RememberPrice": 0, "UnitCost": 1.25,
-            "Discount": 0, "ds_Percent": 0, "Qty": 4, "ItemWeight": "1.5",
+            "Discount": 0, "ds_Percent": 0, "Qty": 4, "ItemWeight": None,
             "ExtendedPrice": 10.0, "ExtendedDisc": 0, "ExtendedCost": 5.0,
             "PromotionID": 0, "PromotionLine": 0, "ActExtendedPrice": 10.0,
             "SPPromoted": 0, "SPPromotionDescription": "",
-            "Taxable": 0, "ItemTaxID": 0, "Catch": 0, "Flag": 0,
+            "Taxable": 0, "ItemTaxID": 2, "Catch": 0, "Flag": 0,
         })
+
+    def test_missing_unit_and_size_are_blank_not_null(self):
+        row = backoffice.quotation_detail_row(555, {"ProductID": 1}, 1)
+        columns = [c.strip() for c in backoffice.QUOTATION_DETAIL_COLUMNS.split(",")]
+        values = dict(zip(columns, row))
+        self.assertEqual((values["UnitDesc"], values["ItemSize"], values["ItemTaxID"], values["ExpDate"]),
+                         ("", "", 0, None))
 
 
 if __name__ == "__main__":

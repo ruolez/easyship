@@ -22,7 +22,7 @@ def _config():
     raw_db = (db.get_setting("picklist_backoffice_db_id") or "").strip()
     return {
         "db_id": int(raw_db) if raw_db.isdigit() else None,
-        "status": int(db.get_setting("picklist_quote_status") or 1),
+        "status": int(db.get_setting("picklist_quote_status") or 2),
         "prefix": (db.get_setting("picklist_title_prefix") or "PL").strip(),
         "tag": (db.get_setting("picklist_number_tag") or "19").strip(),
     }

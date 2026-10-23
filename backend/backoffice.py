@@ -306,7 +306,8 @@ def write_tracking(db_id, invoice_id, tracking_number, shipping_cost, extra_numb
 # A pick list is written as a quotation; column mapping follows the
 # picklist-quotation converter (Quotations_tbl / QuotationsDetails_tbl).
 
-QUOTATION_VALID_DAYS = 365
+# Matches the quotations BackOffice itself writes.
+QUOTATION_VALID_DAYS = 10
 UPC_CHUNK = 500  # SQL Server allows ~2100 parameters per statement
 
 
@@ -387,23 +388,24 @@ def find_items_by_upc(db_id, upcs):
     return found
 
 
-def quotation_detail_row(quotation_id, item, qty, exp_date):
+def quotation_detail_row(quotation_id, item, qty):
     """The QuotationsDetails_tbl values for one pick-list line, in
-    QUOTATION_DETAIL_COLUMNS order."""
+    QUOTATION_DETAIL_COLUMNS order — defaults as BackOffice writes them:
+    the item's own ExpDate and tax id, no ReasonID or ItemWeight."""
     unit_price = float(item.get("UnitPrice") or 0)
     unit_cost = float(item.get("UnitCost") or 0)
     extended_price = round(qty * unit_price, 2)
     return (
-        quotation_id, item.get("CateID"), item.get("SubCateID"), _trunc(item.get("UnitDesc"), 50), 1,
+        quotation_id, item.get("CateID"), item.get("SubCateID"), _trunc(item.get("UnitDesc") or "", 50), 1,
         item.get("ProductID"), _trunc(item.get("ProductSKU"), 20), _trunc(item.get("ProductUPC"), 20),
-        _trunc(item.get("ProductDescription"), 50), _trunc(item.get("ItemSize"), 10),
-        exp_date, 0, "",
+        _trunc(item.get("ProductDescription"), 50), _trunc(item.get("ItemSize") or "", 10),
+        item.get("ExpDate"), None, "",
         unit_price, unit_price, 0, unit_cost,
-        0, 0, qty, _trunc(item.get("ItemWeight"), 10),
+        0, 0, qty, None,
         extended_price, 0, round(qty * unit_cost, 2),
         0, 0, extended_price,
         0, "",
-        0, 0, 0, 0,
+        0, item.get("ItemTaxID") or 0, 0, 0,
     )
 
 
@@ -477,7 +479,7 @@ def create_quotation(db_id, *, now, number_prefix, customer_id, sales_rep_id, st
             for item, qty in lines:
                 cur.execute(
                     f"INSERT INTO QuotationsDetails_tbl ({QUOTATION_DETAIL_COLUMNS}) VALUES ({placeholders})",
-                    quotation_detail_row(quotation_id, item, qty, expires),
+                    quotation_detail_row(quotation_id, item, qty),
                 )
             cur.execute(
                 """UPDATE Quotations_tbl SET QuotationTotal =
