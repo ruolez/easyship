@@ -291,14 +291,20 @@
     <!-- ================= Users ================= -->
     <section class="tab-panel" data-panel="users">
       <div class="card" id="card-users">
-        <h2>Users</h2>
+        <div class="us-head">
+          <div>
+            <h2>Users</h2>
+            <div class="hint" id="users-count"></div>
+          </div>
+          <button class="btn btn-primary btn-small" id="add-user">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>Add user</button>
+        </div>
         <div class="table-wrap">
-          <table>
-            <thead><tr><th>Username</th><th>Role</th><th>Integrations</th><th>Sections</th><th>Status</th><th></th></tr></thead>
+          <table class="us-table">
+            <thead><tr><th>User</th><th>Shipping accounts</th><th>Sections</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
             <tbody id="users-body"></tbody>
           </table>
         </div>
-        <button class="btn btn-text mt-16" id="add-user">+ Add user</button>
       </div>
     </section>
 

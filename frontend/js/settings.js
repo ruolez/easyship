@@ -1665,9 +1665,9 @@ function providerNamesToLabels(names) {
 const SECTIONS = [['picklists', 'Pick lists']];
 
 function sectionsCell(u) {
-  if (u.role === 'admin') return 'All';
+  if (u.role === 'admin') return '<span class="us-chip all">All sections</span>';
   const names = SECTIONS.filter(([k]) => (u.allowed_sections || []).includes(k)).map(([, l]) => l);
-  return names.length ? names.map((l) => `<span class="chip static">${esc(l)}</span>`).join(' ') : '<span class="text-secondary">—</span>';
+  return names.length ? names.map((l) => `<span class="us-chip">${esc(l)}</span>`).join('') : '<span class="us-none">None</span>';
 }
 
 function sectionChecklistHtml(checked) {
@@ -1684,9 +1684,8 @@ function checkedSections() {
 }
 
 function integrationsCell(u) {
-  if (u.role === 'admin' || !u.allowed_providers || !u.allowed_providers.length) return 'All accounts';
-  return providerNamesToLabels(u.allowed_providers)
-    .map((l) => `<span class="chip static">${esc(l)}</span>`).join(' ');
+  if (u.role === 'admin' || !u.allowed_providers || !u.allowed_providers.length) return '<span class="us-chip all">All accounts</span>';
+  return providerNamesToLabels(u.allowed_providers).map((l) => `<span class="us-chip">${esc(l)}</span>`).join('');
 }
 
 /* One checkbox per configured ACCOUNT (its own API key), grouped by platform
@@ -1717,77 +1716,79 @@ function checkedProviders() {
   return [...document.querySelectorAll('.m-user-provider:checked')].map((el) => el.value);
 }
 
+const US_COLORS = ['#2563eb', '#d97706', '#16a34a', '#9333ea', '#db2777', '#0891b2', '#65a30d', '#dc2626'];
+const usColor = (name) => US_COLORS[[...name].reduce((n, c) => n + c.charCodeAt(0), 0) % US_COLORS.length];
+const US_ICONS = {
+  access: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>',
+  power: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>',
+  key: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></svg>',
+};
+
 async function loadUsers() {
   const [users] = await Promise.all([api('/api/users'), loadAllProviders()]);
   window.usersById = Object.fromEntries(users.map((u) => [u.id, u]));
   renderInstanceUserBlocks(users);
-  const tbody = document.getElementById('users-body');
-  tbody.innerHTML = users.map((u) => `<tr>
-    <td><strong>${esc(u.username)}</strong></td>
-    <td>${esc(u.role)}</td>
-    <td>${integrationsCell(u)}</td>
-    <td>${sectionsCell(u)}</td>
-    <td>${u.is_active ? '<span class="chip static ok">active</span>' : '<span class="chip static">inactive</span>'}</td>
-    <td>
-      ${u.role !== 'admin' ? `<button class="btn btn-text btn-small" onclick="editUserProviders(${u.id}, '${esc(u.username)}')">Integrations</button>` : ''}
-      ${u.role !== 'admin' ? `<button class="btn btn-text btn-small" onclick="editUserSections(${u.id}, '${esc(u.username)}')">Sections</button>` : ''}
-      <button class="btn btn-text btn-small" onclick="resetPassword(${u.id}, '${esc(u.username)}')">Reset password</button>
+  const active = users.filter((u) => u.is_active).length;
+  document.getElementById('users-count').textContent = `${users.length} user${users.length === 1 ? '' : 's'}`
+    + (active === users.length ? '' : ` · ${active} active`);
+  document.getElementById('users-body').innerHTML = users.map((u) => `<tr class="${u.is_active ? '' : 'us-off'}">
+    <td><div class="us-user">
+      <span class="us-avatar" style="--av:${usColor(u.username)}">${esc(u.username.charAt(0).toUpperCase())}</span>
+      <span class="us-name">${esc(u.username)}</span>${u.role === 'admin' ? '<span class="us-role">Admin</span>' : ''}</div></td>
+    <td><div class="us-chips">${integrationsCell(u)}</div></td>
+    <td><div class="us-chips">${sectionsCell(u)}</div></td>
+    <td><span class="us-status ${u.is_active ? 'on' : ''}">${u.is_active ? 'Active' : 'Inactive'}</span></td>
+    <td class="us-actions">
+      ${u.role !== 'admin' ? `<button class="btn btn-text btn-small" data-user-act="access" data-id="${u.id}" title="Shipping accounts and sections">${US_ICONS.access}Access</button>` : ''}
+      <button class="us-icon" data-user-act="password" data-id="${u.id}" title="Reset password" aria-label="Reset password for ${plAttr(u.username)}">${US_ICONS.key}</button>
       ${u.is_active
-        ? `<button class="btn btn-danger btn-small" onclick="deactivateUser(${u.id}, '${esc(u.username)}')">Deactivate</button>`
-        : `<button class="btn btn-text btn-small" onclick="activateUser(${u.id})">Activate</button>`}
+        ? `<button class="us-icon us-deact" data-user-act="deactivate" data-id="${u.id}" title="Deactivate" aria-label="Deactivate ${plAttr(u.username)}">${US_ICONS.power}</button>`
+        : `<button class="btn btn-text btn-small us-activate" data-user-act="activate" data-id="${u.id}">Activate</button>`}
     </td>
   </tr>`).join('');
 }
 
-window.editUserProviders = async (id, username) => {
+document.getElementById('users-body').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-user-act]');
+  if (!btn) return;
+  const u = window.usersById[btn.dataset.id];
+  if (!u) return;
+  ({ access: editUserAccess, password: resetPassword, deactivate: deactivateUser, activate: activateUser })[btn.dataset.userAct](u);
+});
+
+/* Shipping accounts and sections in one window; each is saved only when it changed. */
+async function editUserAccess(u) {
   await loadAllProviders();
-  const u = (window.usersById || {})[id] || {};
   openModal(`
-    <h3>Integrations — ${esc(username)}</h3>
+    <h3>Access — ${esc(u.username)}</h3>
     ${providerChecklistHtml(u.allowed_providers || [])}
+    ${sectionChecklistHtml(u.allowed_sections || [])}
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="m-user-providers-save">Save</button>
+      <button class="btn btn-primary" id="m-user-access-save">Save</button>
     </div>`);
-  document.getElementById('m-user-providers-save').addEventListener('click', async () => {
+  const before = { providers: checkedProviders().join(','), sections: checkedSections().join(',') };
+  document.getElementById('m-user-access-save').addEventListener('click', async () => {
     if (!checkedProviders().length) {
       snackbar('Keep at least one account — to remove all access, deactivate the user', 'error');
       return;
     }
     try {
-      await api(`/api/users/${id}/providers`, {
-        method: 'PUT',
-        body: { allowed_providers: checkedProviders() },
-      });
+      if (checkedProviders().join(',') !== before.providers) {
+        await api(`/api/users/${u.id}/providers`, { method: 'PUT', body: { allowed_providers: checkedProviders() } });
+      }
+      if (checkedSections().join(',') !== before.sections) {
+        await api(`/api/users/${u.id}/sections`, { method: 'PUT', body: { allowed_sections: checkedSections() } });
+      }
       closeModal();
-      snackbar('Integrations updated', 'success');
+      snackbar('Access updated', 'success');
       loadUsers();
     } catch (err) {
       snackbar(err.message, 'error');
-    }
-  });
-};
-
-window.editUserSections = (id, username) => {
-  const u = (window.usersById || {})[id] || {};
-  openModal(`
-    <h3>Sections — ${esc(username)}</h3>
-    ${sectionChecklistHtml(u.allowed_sections || [])}
-    <div class="actions">
-      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="m-user-sections-save">Save</button>
-    </div>`);
-  document.getElementById('m-user-sections-save').addEventListener('click', async () => {
-    try {
-      await api(`/api/users/${id}/sections`, { method: 'PUT', body: { allowed_sections: checkedSections() } });
-      closeModal();
-      snackbar('Sections updated', 'success');
       loadUsers();
-    } catch (err) {
-      snackbar(err.message, 'error');
     }
   });
-};
+}
 
 /* ---------- Audit log ---------- */
 const AUDIT_PAGE = 100;
@@ -1896,41 +1897,46 @@ document.getElementById('add-user').addEventListener('click', async () => {
   });
 });
 
-window.deactivateUser = (id, username) => {
+function deactivateUser(u) {
   openModal(`
     <h3>Deactivate user</h3>
-    <p>Deactivate "<strong>${username}</strong>"? They will no longer be able to sign in.</p>
+    <p>Deactivate “<strong>${esc(u.username)}</strong>”? They will no longer be able to sign in.</p>
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
       <button class="btn btn-danger" id="m-confirm-deact">Deactivate</button>
     </div>`);
   document.getElementById('m-confirm-deact').addEventListener('click', async () => {
     try {
-      await api(`/api/users/${id}`, { method: 'DELETE' });
+      await api(`/api/users/${u.id}`, { method: 'DELETE' });
       closeModal();
       loadUsers();
     } catch (err) {
       snackbar(err.message, 'error');
     }
   });
-};
+}
 
-window.activateUser = async (id) => {
-  await api(`/api/users/${id}/activate`, { method: 'POST' });
+async function activateUser(u) {
+  try {
+    await api(`/api/users/${u.id}/activate`, { method: 'POST' });
+  } catch (err) {
+    snackbar(err.message, 'error');
+  }
   loadUsers();
-};
+}
 
-window.resetPassword = (id, username) => {
+function resetPassword(u) {
   openModal(`
-    <h3>Reset password for ${username}</h3>
+    <h3>Reset password for ${esc(u.username)}</h3>
     <div class="field mb-16"><label>New password</label><input type="password" id="m-reset-pass" autocomplete="new-password"></div>
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="m-reset-save">Set password</button>
     </div>`);
+  document.getElementById('m-reset-pass').focus();
   document.getElementById('m-reset-save').addEventListener('click', async () => {
     try {
-      await api(`/api/users/${id}/password`, {
+      await api(`/api/users/${u.id}/password`, {
         method: 'PUT',
         body: { password: document.getElementById('m-reset-pass').value },
       });
@@ -1940,7 +1946,7 @@ window.resetPassword = (id, username) => {
       snackbar(err.message, 'error');
     }
   });
-};
+}
 
 document.getElementById('change-my-password').addEventListener('click', async () => {
   const password = document.getElementById('my-new-password').value;
