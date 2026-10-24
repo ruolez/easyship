@@ -16,38 +16,22 @@
     </div>
 
     <div id="tab-new">
-      <div class="card pl-filters">
-        <div class="pl-frow">
-          <div class="pl-flabel">Stores</div>
-          <div class="pl-fbody pl-chip-row" id="pl-stores"></div>
+      <div class="card pl-filters" id="pl-filters">
+        <div class="pl-frow pl-stores-row">
+          <span class="pl-flabel">Stores</span>
+          <div class="pl-chip-row" id="pl-stores"></div>
           <div class="pl-fside">
             <span class="hint" id="pl-updated"></span>
             <button class="btn btn-outlined btn-small pl-refresh" id="pl-refresh" title="Load the orders again">
               <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>Refresh</button>
           </div>
         </div>
-        <div class="pl-frow" id="pl-presets-row" style="display:none">
-          <div class="pl-flabel">Presets</div>
-          <div class="pl-fbody">
-            <div class="pl-chip-row" id="pl-presets"></div>
-            <div class="pl-preset-desc" id="pl-preset-desc" hidden></div>
-          </div>
-          <div class="pl-fside"><span class="hint">One at a time · click again to switch off</span></div>
+        <div class="pl-frow pl-viewtabs-row" id="pl-viewtabs-row" hidden>
+          <div class="pl-viewtabs" id="pl-viewtabs" role="tablist" aria-label="Saved views"></div>
+          <div class="pl-preset-desc" id="pl-preset-desc" hidden></div>
         </div>
-        <div class="pl-frow" id="pl-rules-row" style="display:none">
-          <div class="pl-flabel">Rules</div>
-          <div class="pl-fbody pl-chip-row" id="pl-rules"></div>
-          <div class="pl-fside pl-rule-legend" id="pl-rule-legend"></div>
-        </div>
-        <div class="pl-frow">
-          <div class="pl-flabel">Filters</div>
-          <div class="pl-fbody pl-qfs">
-            <label class="pl-qf"><span>Order tag</span><input id="qf-tag" placeholder="any" autocomplete="off"></label>
-            <label class="pl-qf"><span>Customer tag</span><input id="qf-ctag" placeholder="any" autocomplete="off"></label>
-            <label class="pl-qf pl-qf-state"><span>Ship-to state</span><input id="qf-state" placeholder="TX, CA" autocomplete="off"></label>
-            <button class="btn btn-text btn-small" id="qf-clear" hidden>Clear filters</button>
-          </div>
-        </div>
+        <div class="pl-frow pl-filterbar" id="pl-filterbar" role="toolbar" aria-label="Filters"></div>
+        <div class="pl-pop" id="pl-pop" hidden></div>
       </div>
 
       <div class="pl-errors" id="pl-errors"></div>
@@ -58,10 +42,15 @@
             <button class="pl-view active" data-view="pick" role="tab">To pick <span class="pl-count" id="pl-count-pick">0</span></button>
             <button class="pl-view" data-view="excluded" role="tab">Excluded <span class="pl-count" id="pl-count-excluded">0</span></button>
           </div>
+          <button class="pl-review" id="pl-review" aria-pressed="false" title="Show only orders with something to check: products that would be left out, Shopify risk, or a pick list tag already on them">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+            Needs review <span class="pl-count" id="pl-count-review">0</span></button>
           <span class="pl-showing" id="pl-showing"></span>
-          <label class="pl-search" title="Shortcut: /">
+          <span class="pl-keys" title="J / K move · X select · Enter open · E exclude or restore · ⌘Z undo · / search" aria-label="Keyboard shortcuts: J and K move between orders, X selects, Enter opens, E excludes or restores, Command Z undoes, slash searches">
+            <kbd>J</kbd><kbd>K</kbd><kbd>X</kbd><kbd>E</kbd></span>
+          <label class="pl-search" title="Finds orders without changing what goes on the pick list · Shortcut: /">
             <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-            <input id="qf-search" placeholder="Search order # or customer" autocomplete="off" aria-label="Search orders">
+            <input id="qf-search" placeholder="Find order # or customer" autocomplete="off" aria-label="Find orders">
             <kbd>/</kbd>
           </label>
         </div>
@@ -72,15 +61,15 @@
                 <th class="pl-check"><input type="checkbox" id="pl-check-all" title="Select all listed orders" aria-label="Select all listed orders"></th>
                 <th class="pl-num" title="Row number">#</th>
                 <th class="sortable" data-sort="name">Order</th>
-                <th class="sortable" data-sort="store">Store</th>
-                <th class="sortable" data-sort="created_at">Date</th>
-                <th class="sortable" data-sort="customer">Customer</th>
-                <th class="sortable" data-sort="address">Ship address</th>
-                <th class="sortable" data-sort="state">State</th>
+                <th class="sortable pl-col-store" data-sort="store">Store</th>
+                <th class="sortable" data-sort="created_at">Placed</th>
+                <th class="sortable pl-col-cust" data-sort="customer">Customer</th>
+                <th class="sortable pl-col-ship" data-sort="ship_to">Ship to</th>
                 <th class="sortable" data-sort="shipping">Shipping</th>
+                <th class="sortable num" data-sort="units">Units</th>
                 <th class="sortable num" data-sort="total">Total</th>
-                <th class="sortable" data-sort="tags">Tags</th>
-                <th></th>
+                <th class="sortable pl-col-tags" data-sort="tags">Tags</th>
+                <th><span class="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody id="pl-orders"></tbody>
@@ -96,7 +85,10 @@
           <button class="btn btn-text btn-small" id="pl-bulk-clear">Clear selection</button>
           <span class="hint">Shift+click selects a range</span>
         </div>
-        <span id="pl-summary">Nothing on the pick list</span>
+        <div class="pl-summary">
+          <span id="pl-summary">Nothing on the pick list</span>
+          <span class="hint" id="pl-summary-note"></span>
+        </div>
         <button class="btn btn-primary" id="pl-generate" disabled>Generate pick list</button>
       </div>
     </div>

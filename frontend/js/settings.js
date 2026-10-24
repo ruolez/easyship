@@ -9,7 +9,7 @@ const BASE_SETTING_IDS = [
   'profit_min_amount', 'profit_min_margin_pct', 'profit_bypass_password',
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
   'picklist_backoffice_db_id', 'picklist_quote_status', 'picklist_title_prefix',
-  'picklist_number_tag', 'picklist_rules', 'picklist_presets',
+  'picklist_number_tag', 'picklist_hidden_tags', 'picklist_rules', 'picklist_presets',
 ];
 let SETTING_IDS = [...BASE_SETTING_IDS];
 
@@ -362,7 +362,7 @@ function renderPlRules() {
     renderPlPresets();
     list.innerHTML = `<div class="plr-empty">
       <div class="plr-empty-title">No rules yet</div>
-      <p class="hint">The Pick lists page still has its quick filters. Start from an example or a blank rule:</p>
+      <p class="hint">The Pick lists page still has its filters. Start from an example or a blank rule:</p>
       <div class="plr-templates">${PL_TEMPLATES.map((t, i) => `<button type="button" class="plr-template" data-template="${i}">
         <strong>${esc(t.title)}</strong><span>${esc(t.text)}</span></button>`).join('')}
         <button type="button" class="plr-template blank" data-template="blank"><strong>${PL_ICONS.plus} Blank rule</strong><span>Build it from scratch</span></button></div>
@@ -624,7 +624,7 @@ function plpPresetHtml(p, i, total) {
         <input class="plr-name" value="${plAttr(p.name || '')}" placeholder="Name this preset" maxlength="40" aria-label="Preset name">
         <div class="plr-summary plp-expr">${expr ? `<span>Shows orders that match</span> ${expr}` : '<span class="plr-summary-empty">No rules in it yet</span>'}</div>
       </div>
-      <span class="chip pl-preset-chip on plr-preview" title="How the preset looks on the Pick lists page when it is on">${PLP_ICON}<span class="plr-preview-name">${esc(String(p.name || '').trim() || 'Unnamed')}</span></span>
+      <span class="pl-vtab on plr-preview" title="How the preset's saved-view tab looks on the Pick lists page">${PLP_ICON}<span class="plr-preview-name">${esc(String(p.name || '').trim() || 'Unnamed')}</span></span>
       <div class="plr-tools">
         <button type="button" class="plr-icon pl-up" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${PL_ICONS.up}</button>
         <button type="button" class="plr-icon pl-down" title="Move down" aria-label="Move down" ${i === total - 1 ? 'disabled' : ''}>${PL_ICONS.down}</button>

@@ -226,6 +226,40 @@ class PicklistsApiTest(unittest.TestCase):
         self.assertEqual((res.status_code, [e["error"] for e in res.get_json()["errors"]]),
                          (200, ["Unexpected error: 'orders'"]))
 
+    def test_orders_carry_what_would_leave_them_out_and_the_hidden_tags(self):
+        self.shopify[STORE].append(node("g4", "#4", barcode=""))
+        SETTINGS["picklist_hidden_tags"] = "Shop, Login with Shop"
+        try:
+            res = self.client.get("/api/picklists/orders?store_ids=1").get_json()
+        finally:
+            del SETTINGS["picklist_hidden_tags"]
+        self.assertEqual(
+            ([(o["name"], o["issues"]) for o in res["orders"]], res["hidden_tags"], res["backoffice_error"]),
+            ([("#1", []),
+              ("#2", [{"kind": "unknown_barcode", "text": "Apple — barcode 999 is not in BackOffice"}]),
+              ("#4", [{"kind": "no_barcode", "text": "Apple has no barcode in Shopify"}])],
+             ["Shop", "Login with Shop"], None))
+
+    def test_orders_still_load_when_backoffice_cannot_check_the_barcodes(self):
+        def down(db_id, upcs):
+            raise backoffice.BackofficeError("BackOffice is offline")
+
+        backoffice.find_items_by_upc = down
+        self.shopify[STORE].append(node("g4", "#4", barcode=""))
+        res = self.client.get("/api/picklists/orders?store_ids=1").get_json()
+        self.assertEqual(
+            ([(o["name"], [i["kind"] for i in o["issues"]]) for o in res["orders"]], res["backoffice_error"]),
+            ([("#1", []), ("#2", []), ("#4", ["no_barcode"])], "BackOffice is offline"))
+
+    def test_orders_say_when_no_backoffice_database_is_chosen(self):
+        saved = SETTINGS.pop("picklist_backoffice_db_id")
+        try:
+            res = self.client.get("/api/picklists/orders?store_ids=1").get_json()
+        finally:
+            SETTINGS["picklist_backoffice_db_id"] = saved
+        self.assertEqual((len(res["orders"]), res["backoffice_error"]),
+                         (2, "Choose the BackOffice database for pick lists in Settings → Pick lists"))
+
     # ----- preview -----
 
     def test_preview_stops_and_names_the_store_shopify_could_not_answer_for(self):

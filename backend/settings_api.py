@@ -51,6 +51,7 @@ BASE_SETTING_KEYS = [
     "picklist_quote_status",
     "picklist_title_prefix",
     "picklist_number_tag",
+    "picklist_hidden_tags",
     picklist_rules.RULES_KEY,
     picklist_rules.PRESETS_KEY,
 ]

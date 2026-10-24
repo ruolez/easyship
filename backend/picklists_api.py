@@ -41,11 +41,26 @@ def _config():
     }
 
 
+NO_DB_MESSAGE = "Choose the BackOffice database for pick lists in Settings → Pick lists"
+HIDDEN_TAGS_KEY = "picklist_hidden_tags"
+
+
 def _db_id_or_error():
     db_id = _config()["db_id"]
     if not db_id:
-        return None, api_error("Choose the BackOffice database for pick lists in Settings → Pick lists")
+        return None, api_error(NO_DB_MESSAGE)
     return db_id, None
+
+
+def _known_upcs(orders):
+    """(the orders' barcodes BackOffice knows, or None, why BackOffice could not say)."""
+    db_id = _config()["db_id"]
+    if not db_id:
+        return None, NO_DB_MESSAGE
+    try:
+        return set(backoffice.find_items_by_upc(db_id, {line["barcode"] for o in orders for line in o["lines"]})), None
+    except backoffice.BackofficeError as e:
+        return None, str(e)
 
 
 def _store_names(store_ids):
@@ -80,8 +95,10 @@ def _per_store(store_ids, fetch):
 @section_required(SECTION)
 def eligible_orders():
     """Every eligible order of the chosen stores, each with the saved rules it
-    matches so the page toggles rules without asking again. A store Shopify
-    cannot answer for is reported and the others still load."""
+    matches so the page toggles rules without asking again, and the products
+    that would leave it off a pick list. A store Shopify cannot answer for is
+    reported and the others still load; so do the orders when BackOffice
+    cannot check the barcodes."""
     try:
         store_ids = [int(s) for s in (request.args.get("store_ids") or "").split(",") if s.strip()]
     except ValueError:
@@ -101,9 +118,14 @@ def eligible_orders():
             order["rule_ids"] = picklist_rules.matched_rule_ids(rules, order)
             orders.append(order)
     orders.sort(key=lambda o: (o["created_at"], o["name"]))
+    known, backoffice_error = _known_upcs(orders) if orders else (None, None)
+    for order in orders:
+        order["issues"] = picklists.pick_issues(order, known)
     return jsonify({
         "orders": orders,
         "errors": errors,
+        "backoffice_error": backoffice_error,
+        "hidden_tags": picklists.parse_tag_list(db.get_setting(HIDDEN_TAGS_KEY)),
         "days": PICKLIST_DAYS,
         "rules": [{"id": r["id"], "name": r["name"], "action": r["action"]} for r in rules],
         "presets": picklist_rules.load_presets(rules),

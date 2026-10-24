@@ -4,20 +4,31 @@ const CUSTOMER_KEY = 'easyship.picklistCustomer';
 const REP_KEY = 'easyship.picklistRep';
 const SORT_KEY = 'easyship.picklistSort';
 const PRESET_KEY = 'easyship.picklistPreset';
+const EXCLUDED_KEY = 'easyship.picklistExcluded';
+// From this many days old an order's age is called out in the list.
+const AGE_WARN_DAYS = 3;
 
 let stores = [];
 let selectedStores = new Set();
 let orders = [];
 let rules = [];
-// Rule id → how its chip is switched on: 'add' (orders matching any Add rule
-// are shown), 'narrow' (orders must also match it) or 'hide'.
+// Rule id → how it is switched on: 'add' (Show: orders matching any Show rule
+// stay), 'narrow' (Require: orders must also match it) or 'hide'.
 let ruleModes = new Map();
-// Presets combine rules into one filter; while one is on it decides alone and the rule chips pause.
+// Presets are saved views: while one is on it decides alone and the rules pause.
 let presets = [];
 let activePreset = null;
-const excluded = new Set();
+// Filter key → the chosen values, lower-cased; an order must carry one of them.
+const facets = new Map();
+let hiddenTags = new Set();
+// Search and Needs review only change what the table shows; the view, rules,
+// filters and exclusions decide what goes on the pick list.
+let reviewOnly = false;
+const excluded = new Set(recall(EXCLUDED_KEY, []));
 const checked = new Set();
 let lastChecked = null; // anchor for Shift+click ranges
+let cursorKey = null; // the row J / K / X / E work on
+let lastMove = null; // what Undo puts back
 // The table shows either the orders going on the pick list or the ones
 // excluded from it; both views work the same way.
 let view = 'pick';
@@ -45,6 +56,11 @@ function recall(key, fallback) {
 
 const orderKey = (o) => `${o.store_id}|${o.id}`;
 const storeName = (id) => (stores.find((s) => s.id === id) || {}).name || `Store ${id}`;
+const STORE_COLORS = ['#2563eb', '#d97706', '#16a34a', '#9333ea', '#db2777', '#0891b2', '#65a30d', '#dc2626'];
+const storeColor = (id) => {
+  const i = stores.findIndex((s) => s.id === id);
+  return i < 0 ? 'var(--outline-strong)' : STORE_COLORS[i % STORE_COLORS.length];
+};
 
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
@@ -70,14 +86,47 @@ window.closeModal = closeModal;
 document.getElementById('modal-backdrop').addEventListener('click', (e) => {
   if (e.target.id === 'modal-backdrop') closeModal();
 });
+
+/* ---------- Keyboard ----------
+   In the list: J / K move, X selects, Enter opens, E excludes (or restores),
+   ⌘Z / Ctrl+Z undoes, / finds. In the order window: ← → and E. */
 document.addEventListener('keydown', (e) => {
   const modalOpen = document.getElementById('modal-backdrop').classList.contains('show');
-  if (e.target instanceof Element && e.target.closest('input, select, textarea')) return; // typing, not a shortcut
-  if (e.key === '/' && !modalOpen && !e.ctrlKey && !e.metaKey && !e.altKey
-    && document.getElementById('tab-new').style.display !== 'none') {
-    e.preventDefault();
-    document.getElementById('qf-search').focus();
+  if (e.key === 'Escape' && pop) {
+    closePop();
     return;
+  }
+  if (e.target instanceof Element && e.target.closest('input, select, textarea')) return; // typing, not a shortcut
+  const listing = !modalOpen && document.getElementById('tab-new').style.display !== 'none';
+  const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && lastMove && document.getElementById('tab-new').style.display !== 'none') {
+    e.preventDefault();
+    undoMove();
+    return;
+  }
+  if (listing && plain) {
+    const key = e.key.toLowerCase();
+    if (e.key === '/') {
+      e.preventDefault();
+      document.getElementById('qf-search').focus();
+      return;
+    }
+    if (key === 'j' || key === 'k') {
+      e.preventDefault();
+      moveCursor(key === 'j' ? 1 : -1);
+      return;
+    }
+    // Enter on a focused button or link presses it, not the keyboard row.
+    const pressing = key === 'enter' && e.target instanceof Element && e.target.closest('button, a');
+    if (cursorKey && !pressing && (key === 'x' || key === 'enter' || key === 'o' || (key === 'e' && !e.repeat))) {
+      const row = document.querySelector(`#pl-orders [data-check="${CSS.escape(cursorKey)}"]`);
+      if (!row) return;
+      e.preventDefault();
+      if (key === 'x') toggleChecked(cursorKey, !checked.has(cursorKey), e.shiftKey);
+      else if (key === 'e') moveRows([cursorKey]);
+      else showOrder(cursorKey);
+      return;
+    }
   }
   if (e.key === 'Escape' && !modalOpen && checked.size) clearChecked();
   if (e.key === 'Escape') closeModal();
@@ -85,11 +134,21 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowLeft') stepOrder(-1);
   if (e.key === 'ArrowRight') stepOrder(1);
   // E = the window's Exclude (or, in the Excluded view, Restore) button; a held key fires once.
-  if ((e.key === 'e' || e.key === 'E') && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  if ((e.key === 'e' || e.key === 'E') && !e.repeat && plain) {
     e.preventDefault();
     moveAndAdvance(modalOrderKey);
   }
 });
+
+function moveCursor(delta) {
+  const keys = listedOrders().map(orderKey);
+  if (!keys.length) return;
+  const at = keys.indexOf(cursorKey);
+  cursorKey = keys[at < 0 ? (delta > 0 ? 0 : keys.length - 1) : Math.max(0, Math.min(keys.length - 1, at + delta))];
+  render();
+  const row = document.querySelector('#pl-orders tr.cursor');
+  if (row) row.scrollIntoView({ block: 'nearest' });
+}
 
 /* ---------- Stores ---------- */
 async function loadStores() {
@@ -117,7 +176,7 @@ function renderStores(counts) {
   el.innerHTML = stores.map((s) => {
     const on = selectedStores.has(s.id);
     const n = on && counts ? counts.get(s.id) || 0 : null;
-    return `<button class="pl-store-pill ${on ? 'on' : ''}" data-store="${s.id}" aria-pressed="${on}">
+    return `<button class="pl-store-pill ${on ? 'on' : ''}" data-store="${s.id}" aria-pressed="${on}" style="--dot:${storeColor(s.id)}">
       <span class="pl-tick">${on ? tick : ''}</span>${esc(s.name)}${n != null ? `<span class="pl-store-n">${n}</span>` : ''}</button>`;
   }).join('')
     + (stores.length > 1 ? `<button class="link-btn pl-all-stores" id="pl-all-stores">${allOn ? 'Clear all' : 'Select all'}</button>` : '');
@@ -142,6 +201,7 @@ function renderStores(counts) {
 
 /* ---------- Orders ---------- */
 let loadSeq = 0;
+let backofficeError = null;
 
 async function loadOrders() {
   const seq = ++loadSeq;
@@ -178,15 +238,27 @@ async function loadOrders() {
   renderStores(counts);
   rules = res.rules;
   presets = res.presets || [];
+  hiddenTags = new Set((res.hidden_tags || []).map((t) => t.toLowerCase()));
+  backofficeError = res.backoffice_error || null;
   const savedPreset = recall(PRESET_KEY, null);
   activePreset = presets.some((p) => p.id === savedPreset) ? savedPreset : null;
-  const known = new Set(orders.map(orderKey));
-  [...excluded].forEach((k) => { if (!known.has(k)) excluded.delete(k); });
+  forgetGoneExclusions(res.errors);
   ruleModes = restoreRuleModes(recall(RULES_KEY, {}));
   showLoadErrors(res.errors);
-  renderPresets();
-  renderRules();
   render();
+}
+
+/* Exclusions are kept per computer; one is forgotten once its order has left
+   the list (fulfilled, put on a pick list) — but only for stores that loaded. */
+function forgetGoneExclusions(errors) {
+  if (errors.some((e) => !e.store_id)) return;
+  const failed = new Set(errors.map((e) => e.store_id));
+  const known = new Set(orders.map(orderKey));
+  [...excluded].forEach((k) => {
+    const store = Number(k.split('|')[0]);
+    if (selectedStores.has(store) && !failed.has(store) && !known.has(k)) excluded.delete(k);
+  });
+  remember(EXCLUDED_KEY, [...excluded]);
 }
 
 /* A store Shopify could not answer for (after its retries) is called out by
@@ -198,25 +270,14 @@ function showLoadErrors(errors) {
       <span><strong>${e.store_id ? `Couldn’t load orders from ${esc(e.store_name || storeName(e.store_id))}` : 'Couldn’t load orders'}</strong>
         — ${esc(e.error)}${e.store_id && orders.length ? ' Orders from the other stores are shown.' : ''}</span>
       <button class="btn btn-outlined btn-small pl-retry">Retry</button>
-    </div>`).join('');
+    </div>`).join('')
+    + (backofficeError && orders.length ? `<div class="rule-banner warn"><span><strong>Barcodes weren’t checked against BackOffice</strong>
+      — ${esc(backofficeError)}. Products BackOffice doesn’t know only show up at Generate.</span></div>` : '');
   el.querySelectorAll('.pl-retry').forEach((b) => b.addEventListener('click', loadOrders));
   if (errors.length) {
     const names = errors.map((e) => (e.store_id ? e.store_name || storeName(e.store_id) : null)).filter(Boolean);
     snackbar(names.length ? `Couldn’t load orders from ${names.join(', ')}` : 'Couldn’t load orders', 'error');
   }
-}
-
-/* "Show only" rules cycle off → Add → Narrow → off; "hide" rules toggle. */
-const RULE_MODE = {
-  add: { icon: '<path d="M12 5v14"/><path d="M5 12h14"/>', tip: 'Adding: orders matching this rule are shown (along with any other Add rule). Click to narrow instead.' },
-  narrow: { icon: '<path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>', tip: 'Narrowing: only orders that also match this rule stay. Click to switch off.' },
-  hide: { icon: '<path d="M5 12h14"/>', tip: 'Hiding: orders matching this rule are taken out. Click to switch off.' },
-};
-
-function nextRuleMode(rule, mode) {
-  if (rule.action === 'hide') return mode ? null : 'hide';
-  if (!mode) return 'add';
-  return mode === 'add' ? 'narrow' : null;
 }
 
 /* Saved per computer as {id: mode}; an older save (a plain list of ids) means
@@ -227,13 +288,12 @@ function restoreRuleModes(saved) {
   entries.forEach(([id, mode]) => {
     const rule = rules.find((r) => r.id === id);
     if (!rule) return;
-    const fallback = rule.action === 'hide' ? 'hide' : 'add';
-    modes.set(id, rule.action === 'hide' ? 'hide' : mode === 'narrow' ? 'narrow' : fallback);
+    modes.set(id, rule.action === 'hide' ? 'hide' : mode === 'narrow' ? 'narrow' : 'add');
   });
   return modes;
 }
 
-/* ---------- Presets ---------- */
+/* ---------- Views (presets) ---------- */
 const PRESET_ICON = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>';
 
 /* (rule AND/OR rule …) AND/OR (…); an item can be negated. */
@@ -259,105 +319,320 @@ function presetExpressionHtml(preset) {
 function setPreset(id) {
   activePreset = id;
   remember(PRESET_KEY, id);
-  renderPresets();
-  renderRules();
   render();
 }
 
-function renderPresets() {
-  document.getElementById('pl-presets-row').style.display = presets.length ? '' : 'none';
-  const el = document.getElementById('pl-presets');
-  el.innerHTML = presets.map((p) => {
-    const on = p.id === activePreset;
-    return `<button class="chip pl-preset-chip${on ? ' on' : ''}" data-preset="${esc(p.id)}" aria-pressed="${on}"
-      title="${on ? 'Click to switch this preset off' : 'Show only the orders this preset matches'}">${PRESET_ICON}${esc(p.name)}</button>`;
+/* "All orders" (the rules in use) plus one tab per preset, each with how many
+   orders it would put on the pick list. */
+function renderViewTabs() {
+  const row = document.getElementById('pl-viewtabs-row');
+  row.hidden = !presets.length;
+  if (!presets.length) return;
+  const count = (id) => orders.filter((o) => inScope(o, id) && !excluded.has(orderKey(o))).length;
+  document.getElementById('pl-viewtabs').innerHTML = [{ id: null, name: 'All orders' }, ...presets].map((t) => {
+    const on = t.id === activePreset;
+    return `<button class="pl-vtab${on ? ' on' : ''}" role="tab" aria-selected="${on}" data-preset="${attr(t.id || '')}">
+      ${t.id ? PRESET_ICON : ''}${esc(t.name)}<span class="pl-vtab-n">${count(t.id)}</span></button>`;
   }).join('');
   const preset = presets.find((p) => p.id === activePreset);
   const desc = document.getElementById('pl-preset-desc');
   desc.hidden = !preset;
-  desc.innerHTML = preset ? `<span class="pl-pdesc-lead">Showing orders that match</span> ${presetExpressionHtml(preset)}` : '';
-  el.querySelectorAll('.pl-preset-chip').forEach((chip) => {
-    chip.addEventListener('click', () => setPreset(chip.dataset.preset === activePreset ? null : chip.dataset.preset));
-  });
+  desc.innerHTML = preset ? `<span class="pl-pdesc-lead">Orders that match</span> ${presetExpressionHtml(preset)}` : '';
+}
+document.getElementById('pl-viewtabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('[data-preset]');
+  if (tab) setPreset(tab.dataset.preset || null);
+});
+
+/* ---------- Filters ---------- */
+function shippingLabel(method) {
+  const short = (method || '').replace(/\s*[([].*$/, '').replace(/\s+shipping$/i, '').trim();
+  return short || method || '';
+}
+const FAST_SHIPPING = /expedit|express|priority|overnight|next[\s-]?day|2[\s-]?day|two[\s-]?day|rush/i;
+
+const FACETS = [
+  { key: 'state', label: 'State', values: (o) => (o.ship_state ? [o.ship_state.toUpperCase()] : []) },
+  { key: 'tag', label: 'Order tag', values: (o) => o.tags },
+  { key: 'ctag', label: 'Customer tag', values: (o) => o.customer_tags },
+  { key: 'shipping', label: 'Shipping', values: (o) => (o.shipping_method ? [shippingLabel(o.shipping_method)] : []) },
+];
+const facetDef = (key) => FACETS.find((f) => f.key === key);
+
+function rulesPass(o, presetId) {
+  const preset = presets.find((p) => p.id === presetId);
+  if (preset) return presetMatches(preset, o);
+  const inMode = (mode) => [...ruleModes].filter(([, m]) => m === mode).map(([id]) => id);
+  const matches = (id) => o.rule_ids.includes(id);
+  if (inMode('hide').some(matches)) return false;
+  const shows = inMode('add');
+  if (shows.length && !shows.some(matches)) return false;
+  return inMode('narrow').every(matches);
 }
 
-function renderRules() {
-  const el = document.getElementById('pl-rules');
-  document.getElementById('pl-rules-row').style.display = rules.length ? '' : 'none';
-  const pausedBy = presets.find((p) => p.id === activePreset);
-  document.getElementById('pl-rules-row').classList.toggle('paused', !!pausedBy);
-  const offTip = (r) => (r.action === 'hide' ? 'Click to hide orders matching this rule'
-    : 'Click to add orders matching this rule; click again to narrow to them');
-  el.innerHTML = rules.map((r) => {
-    const mode = ruleModes.get(r.id);
-    return `<button class="chip pl-rule-chip ${mode ? `mode-${mode}` : ''}" data-rule="${esc(r.id)}"
-      title="${esc(mode ? RULE_MODE[mode].tip : offTip(r))}" aria-pressed="${mode ? 'true' : 'false'}">
-      ${mode ? `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[mode].icon}</svg>` : ''}${esc(r.name)}</button>`;
-  }).join('');
-  document.getElementById('pl-rule-legend').innerHTML = `
-      ${['add', 'narrow', 'hide'].filter((m) => m !== 'hide' || rules.some((r) => r.action === 'hide')).map((m) =>
-        `<span class="mode-${m}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[m].icon}</svg>${{ add: 'Add', narrow: 'Narrow', hide: 'Hide' }[m]}</span>`).join('')}
-      <span class="hint">${pausedBy ? `paused while <strong>${esc(pausedBy.name)}</strong> is on` : 'click a rule again to change'}</span>`;
-  el.querySelectorAll('.pl-rule-chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      const rule = rules.find((r) => r.id === chip.dataset.rule);
-      if (activePreset) {
-        setPreset(null);
-        snackbar('Preset switched off — the rule chips work again');
-      }
-      const next = nextRuleMode(rule, ruleModes.get(rule.id));
-      if (next) ruleModes.set(rule.id, next);
-      else ruleModes.delete(rule.id);
-      remember(RULES_KEY, Object.fromEntries(ruleModes));
-      renderRules();
-      render();
-    });
-  });
-}
-
-function quickFilters() {
-  const val = (id) => document.getElementById(id).value.trim().toLowerCase();
-  return {
-    tag: val('qf-tag'),
-    ctag: val('qf-ctag'),
-    states: val('qf-state').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean),
-    search: val('qf-search'),
-  };
-}
-
-/* Hide rules drop what they match; when any keep rule is on, an order must
-   match at least one of them. Quick filters narrow further. */
-function passesFilters(o, qf) {
-  const preset = presets.find((p) => p.id === activePreset);
-  if (preset) {
-    if (!presetMatches(preset, o)) return false;
-  } else {
-    const inMode = (mode) => [...ruleModes].filter(([, m]) => m === mode).map(([id]) => id);
-    const matches = (id) => o.rule_ids.includes(id);
-    if (inMode('hide').some(matches)) return false;
-    const adds = inMode('add');
-    if (adds.length && !adds.some(matches)) return false;
-    if (!inMode('narrow').every(matches)) return false;
+/* Within a filter any chosen value will do; every filter in use must pass. */
+function facetsPass(o, skip) {
+  for (const [key, chosen] of facets) {
+    if (key === skip || !chosen.size) continue;
+    if (!facetDef(key).values(o).some((v) => chosen.has(v.toLowerCase()))) return false;
   }
-  const has = (tags, needle) => tags.some((t) => t.toLowerCase().includes(needle));
-  if (qf.tag && !has(o.tags, qf.tag)) return false;
-  if (qf.ctag && !has(o.customer_tags, qf.ctag)) return false;
-  if (qf.states.length && !qf.states.includes((o.ship_state || '').toUpperCase())) return false;
-  if (qf.search && !`${o.name} ${o.customer}`.toLowerCase().includes(qf.search)) return false;
   return true;
 }
 
+const inScope = (o, presetId = activePreset) => rulesPass(o, presetId) && facetsPass(o);
+const searchText = () => document.getElementById('qf-search').value.trim().toLowerCase();
+const facetsInUse = () => [...facets.values()].some((s) => s.size);
+
+/* A filter's values with how many orders each would leave, given everything
+   else in use; chosen values stay listed even when nothing has them now. */
+function facetValues(def) {
+  const labels = new Map();
+  const counts = new Map();
+  orders.forEach((o) => {
+    const keys = new Set();
+    def.values(o).forEach((v) => {
+      const k = v.toLowerCase();
+      if (!labels.has(k)) labels.set(k, v);
+      keys.add(k);
+    });
+    if (rulesPass(o, activePreset) && facetsPass(o, def.key)) keys.forEach((k) => counts.set(k, (counts.get(k) || 0) + 1));
+  });
+  (facets.get(def.key) || new Set()).forEach((k) => { if (!counts.has(k)) counts.set(k, 0); });
+  return [...counts].map(([key, n]) => ({ key, n, label: labels.get(key) || key }))
+    .sort((a, b) => b.n - a.n || collator.compare(a.label, b.label));
+}
+
+function facetLabel(def, key) {
+  for (const o of orders) {
+    const hit = def.values(o).find((v) => v.toLowerCase() === key);
+    if (hit) return hit;
+  }
+  return key;
+}
+
+const CHEVRON = '<svg class="ico pl-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+const FILTER_ICON = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>';
+const RULE_LABEL = { add: 'Show', narrow: 'Require', hide: 'Hide' };
+const shortList = (labels) => (labels.length > 2 ? `${labels.slice(0, 2).join(', ')} +${labels.length - 2}` : labels.join(', '));
+
+/* One bar: a button per filter, which turns into "State: TX, CA ×" once in use. */
+function renderFilterBar() {
+  const bar = document.getElementById('pl-filterbar');
+  const button = (key, label, value, title, extra = '') => {
+    const open = pop && pop.key === key;
+    if (!value) {
+      return `<button class="pl-fbtn${extra}" data-pop="${key}" aria-haspopup="true" aria-expanded="${open}">${label}${CHEVRON}</button>`;
+    }
+    return `<span class="pl-fbtn on${extra}"><button class="pl-fbtn-main" data-pop="${key}" aria-haspopup="true" aria-expanded="${open}" title="${attr(title)}">
+      ${label}: <strong>${esc(value)}</strong>${CHEVRON}</button><button class="pl-fbtn-x" data-clear="${key}" aria-label="Clear ${attr(label)}" title="Clear">×</button></span>`;
+  };
+  const parts = FACETS.map((def) => {
+    const labels = [...(facets.get(def.key) || [])].map((k) => facetLabel(def, k));
+    return button(def.key, def.label, shortList(labels), `${def.label}: ${labels.join(', ')}`);
+  });
+  if (rules.length) {
+    const on = rules.filter((r) => ruleModes.has(r.id));
+    const names = on.map((r) => (ruleModes.get(r.id) === 'hide' ? `not ${r.name}` : r.name));
+    const title = on.map((r) => `${RULE_LABEL[ruleModes.get(r.id)]}: ${r.name}`).join(' · ');
+    const paused = activePreset && on.length;
+    parts.push(button('rules', 'Rules', paused ? `${on.length} paused` : shortList(names),
+      paused ? `Paused while a saved view is on — ${title}` : title, paused ? ' paused' : ''));
+  }
+  const any = facetsInUse() || ruleModes.size;
+  bar.innerHTML = `<span class="pl-fbar-icon" aria-hidden="true">${FILTER_ICON}</span>${parts.join('')}`
+    + (any ? '<button class="link-btn pl-clear-filters" id="pl-clear-filters">Clear filters</button>' : '');
+}
+
+document.getElementById('pl-filterbar').addEventListener('click', (e) => {
+  const clear = e.target.closest('[data-clear]');
+  if (clear) {
+    if (clear.dataset.clear === 'rules') setRuleModes(new Map());
+    else facets.delete(clear.dataset.clear);
+    if (pop && pop.key === clear.dataset.clear) closePop();
+    render();
+    return;
+  }
+  const opener = e.target.closest('[data-pop]');
+  if (opener) {
+    if (pop && pop.key === opener.dataset.pop) closePop();
+    else openPop(opener.dataset.pop, opener);
+    return;
+  }
+  if (e.target.closest('#pl-clear-filters')) {
+    facets.clear();
+    setRuleModes(new Map());
+    closePop();
+    render();
+  }
+});
+
+function setRuleModes(next) {
+  ruleModes = next;
+  remember(RULES_KEY, Object.fromEntries(ruleModes));
+}
+
+/* ---------- Filter menus ---------- */
+let pop = null; // { key, query }
+
+function openPop(key, anchor) {
+  pop = { key, query: '' };
+  const el = document.getElementById('pl-pop');
+  el.hidden = false;
+  el.innerHTML = key === 'rules' ? rulesPopHtml() : facetPopHtml(facetDef(key));
+  renderPopList();
+  const card = document.getElementById('pl-filters').getBoundingClientRect();
+  const at = anchor.getBoundingClientRect();
+  const left = Math.max(8, Math.min(at.left - card.left, card.width - el.offsetWidth - 8));
+  el.style.left = `${left}px`;
+  el.style.top = `${at.bottom - card.top + 6}px`;
+  renderFilterBar();
+  const search = document.getElementById('pl-pop-q');
+  (search || el.querySelector('button')).focus();
+}
+
+function closePop() {
+  if (!pop) return;
+  pop = null;
+  document.getElementById('pl-pop').hidden = true;
+  renderFilterBar();
+}
+
+document.addEventListener('mousedown', (e) => {
+  if (pop && !e.target.closest('#pl-pop, [data-pop]')) closePop();
+});
+
+function facetPopHtml(def) {
+  const many = facetValues(def).length > 8;
+  return `<div class="pl-pop-head"><strong>${def.label}</strong><button class="link-btn" data-pop-clear hidden>Clear</button></div>
+    ${many ? `<label class="pl-pop-search">${ICONS.search}<input id="pl-pop-q" placeholder="Search ${attr(def.label.toLowerCase())}s" autocomplete="off" aria-label="Search ${attr(def.label)}"></label>` : ''}
+    <div class="pl-pop-list" id="pl-pop-list" role="group" aria-label="${attr(def.label)}"></div>`;
+}
+
+function rulesPopHtml() {
+  return `<div class="pl-pop-head"><strong>Rules</strong><button class="link-btn" data-pop-clear hidden>Clear</button></div>
+    <div class="pl-pop-note" id="pl-pop-note" hidden></div>
+    <div class="pl-pop-list pl-pop-rules" id="pl-pop-list"></div>
+    <div class="pl-pop-foot"><strong>Show</strong> orders matching any Show rule · <strong>Require</strong> a match ·
+      <strong>Hide</strong> takes matches out</div>`;
+}
+
+/* Redraws the open menu's options in place, so its search box keeps focus. */
+function renderPopList() {
+  if (!pop) return;
+  const list = document.getElementById('pl-pop-list');
+  const clear = document.querySelector('#pl-pop [data-pop-clear]');
+  if (pop.key === 'rules') {
+    clear.hidden = !ruleModes.size;
+    const note = document.getElementById('pl-pop-note');
+    const preset = presets.find((p) => p.id === activePreset);
+    note.hidden = !preset;
+    note.innerHTML = preset ? `The <strong>${esc(preset.name)}</strong> view decides on its own; choosing a rule switches to All orders.` : '';
+    list.innerHTML = rules.map((r) => {
+      const current = ruleModes.get(r.id) || '';
+      const modes = r.action === 'hide' ? ['', 'hide'] : ['', 'add', 'narrow'];
+      return `<div class="pl-rule-row"><span class="pl-rule-name" title="${attr(r.name)}">${esc(r.name)}</span>
+        <div class="pl-seg" role="radiogroup" aria-label="${attr(r.name)}">${modes.map((m) => `<button type="button" role="radio"
+          aria-checked="${m === current}" class="${m === current ? 'on' : ''}${m ? ` m-${m}` : ''}" data-rule="${attr(r.id)}" data-mode="${m}">${m ? RULE_LABEL[m] : 'Off'}</button>`).join('')}</div></div>`;
+    }).join('');
+    return;
+  }
+  const def = facetDef(pop.key);
+  const chosen = facets.get(def.key) || new Set();
+  clear.hidden = !chosen.size;
+  const q = pop.query.toLowerCase();
+  const values = facetValues(def).filter((v) => !q || v.label.toLowerCase().includes(q));
+  const tick = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  list.innerHTML = values.length ? values.map((v) => {
+    const on = chosen.has(v.key);
+    return `<button type="button" class="pl-pop-opt${on ? ' on' : ''}${v.n ? '' : ' none'}" role="menuitemcheckbox" aria-checked="${on}" data-value="${attr(v.key)}">
+      <span class="pl-box">${on ? tick : ''}</span><span class="pl-pop-name">${esc(v.label)}</span><span class="pl-pop-n">${v.n}</span></button>`;
+  }).join('') : `<div class="pl-pop-empty">${q ? 'Nothing matches' : 'No values in these orders'}</div>`;
+}
+
+document.getElementById('pl-pop').addEventListener('input', (e) => {
+  if (e.target.id !== 'pl-pop-q') return;
+  pop.query = e.target.value.trim();
+  renderPopList();
+});
+document.getElementById('pl-pop').addEventListener('click', (e) => {
+  if (e.target.closest('[data-pop-clear]')) {
+    if (pop.key === 'rules') setRuleModes(new Map());
+    else facets.delete(pop.key);
+    render();
+    return;
+  }
+  const opt = e.target.closest('[data-value]');
+  if (opt) {
+    const chosen = new Set(facets.get(pop.key) || []);
+    if (chosen.has(opt.dataset.value)) chosen.delete(opt.dataset.value);
+    else chosen.add(opt.dataset.value);
+    facets.set(pop.key, chosen);
+    render();
+    return;
+  }
+  const seg = e.target.closest('[data-rule]');
+  if (seg) {
+    if (activePreset) {
+      activePreset = null;
+      remember(PRESET_KEY, null);
+      snackbar('Switched to All orders — the rules work again');
+    }
+    const next = new Map(ruleModes);
+    if (seg.dataset.mode) next.set(seg.dataset.rule, seg.dataset.mode);
+    else next.delete(seg.dataset.rule);
+    setRuleModes(next);
+    render();
+  }
+});
+
+/* ---------- Flags ----------
+   What to look at before an order goes on a pick list. */
+const PICKLIST_TAG = /^picklist\s+\d+$/i;
+const FLAG_ICONS = {
+  block: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>',
+  risk: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>',
+  tag: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.42l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
+};
+
+function orderFlags(o) {
+  const flags = [];
+  if (o.issues && o.issues.length) {
+    flags.push({ tone: 'err', icon: 'block', label: 'Will be left out at Generate', detail: o.issues.map((i) => i.text).join('; ') });
+  }
+  if (o.risk_level === 'HIGH' || o.risk_level === 'MEDIUM') {
+    flags.push({ tone: o.risk_level === 'HIGH' ? 'err' : 'warn', icon: 'risk', label: `${titleCase(o.risk_level)} risk`,
+      detail: RECOMMENDATION_TEXT[o.risk_recommendation] || 'Shopify flagged this order' });
+  }
+  const tag = o.tags.find((t) => PICKLIST_TAG.test(t.trim()));
+  if (tag) flags.push({ tone: 'warn', icon: 'tag', label: 'Pick list tag', detail: `Tagged “${tag}” — it may already be on a pick list` });
+  return flags;
+}
+
+function flagsHtml(o) {
+  return orderFlags(o).map((f) => {
+    const text = attr(`${f.label}: ${f.detail}`);
+    return `<span class="pl-flag ${f.tone}" role="img" title="${text}" aria-label="${text}">${FLAG_ICONS[f.icon]}</span>`;
+  }).join('');
+}
+
+document.getElementById('pl-review').addEventListener('click', () => {
+  reviewOnly = !reviewOnly;
+  render();
+});
+
+/* ---------- Sorting ---------- */
 /* Column sort, remembered per computer; the order window walks the same order. */
+const visibleTags = (tags) => tags.filter((t) => !hiddenTags.has(t.toLowerCase()));
 const SORT_VALUE = {
   name: (o) => o.name,
   store: (o) => storeName(o.store_id),
   created_at: (o) => o.created_at,
   customer: (o) => o.customer,
-  address: (o) => o.ship_address1,
-  state: (o) => o.ship_state,
-  shipping: (o) => o.shipping_method,
+  ship_to: (o) => [o.ship_state, o.ship_city].filter(Boolean).join(' '),
+  shipping: (o) => shippingLabel(o.shipping_method),
+  units: (o) => o.units,
   total: (o) => (o.total == null || o.total === '' ? null : Number(o.total)),
-  tags: (o) => o.tags.join(', '),
+  tags: (o) => visibleTags(o.tags).join(', '),
 };
 let sort = recall(SORT_KEY, { key: 'created_at', dir: 1 });
 if (!SORT_VALUE[sort.key]) sort = { key: 'created_at', dir: 1 };
@@ -375,8 +650,10 @@ function compareOrders(a, b) {
 
 function renderSortHeads() {
   document.querySelectorAll('#pl-head th.sortable').forEach((th) => {
-    th.classList.toggle('asc', th.dataset.sort === sort.key && sort.dir === 1);
-    th.classList.toggle('desc', th.dataset.sort === sort.key && sort.dir === -1);
+    const on = th.dataset.sort === sort.key;
+    th.classList.toggle('asc', on && sort.dir === 1);
+    th.classList.toggle('desc', on && sort.dir === -1);
+    th.setAttribute('aria-sort', on ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none');
   });
 }
 
@@ -388,118 +665,236 @@ document.querySelectorAll('#pl-head th.sortable').forEach((th) => {
   });
 });
 
-function visibleOrders() {
-  const qf = quickFilters();
-  return orders.filter((o) => passesFilters(o, qf)).sort(compareOrders);
+/* ---------- Lists ---------- */
+/* Orders the view, rules and filters keep, in list order. */
+function scopedOrders() {
+  return orders.filter((o) => inScope(o)).sort(compareOrders);
 }
 
-function includedOrders() {
-  return visibleOrders().filter((o) => !excluded.has(orderKey(o)));
+/* What Generate puts on the pick list: search and Needs review play no part. */
+function pickedOrders() {
+  return scopedOrders().filter((o) => !excluded.has(orderKey(o)));
+}
+
+const inCurrentView = (o) => excluded.has(orderKey(o)) === (view === 'excluded');
+
+function lensPass(o, search) {
+  if (search && !`${o.name} ${o.customer}`.toLowerCase().includes(search)) return false;
+  return !reviewOnly || orderFlags(o).length > 0;
 }
 
 /* The rows of the current view, in list order. */
 function listedOrders() {
-  return visibleOrders().filter((o) => excluded.has(orderKey(o)) === (view === 'excluded'));
+  const search = searchText();
+  return scopedOrders().filter((o) => inCurrentView(o) && lensPass(o, search));
 }
 
-/* Exclude in the To pick view, restore in the Excluded view. */
+/* Exclude in the To pick view, restore in the Excluded view; remembered per
+   computer, and Undo puts the last move back. */
 function moveOrders(keys) {
-  keys.forEach((k) => (view === 'pick' ? excluded.add(k) : excluded.delete(k)));
+  const toExcluded = view === 'pick';
+  const moved = keys.filter((k) => excluded.has(k) !== toExcluded);
+  moved.forEach((k) => (toExcluded ? excluded.add(k) : excluded.delete(k)));
+  remember(EXCLUDED_KEY, [...excluded]);
+  lastMove = { keys: moved, toExcluded };
+  return moved;
+}
+
+function undoMove() {
+  if (!lastMove) return;
+  const { keys, toExcluded } = lastMove;
+  keys.forEach((k) => (toExcluded ? excluded.delete(k) : excluded.add(k)));
+  remember(EXCLUDED_KEY, [...excluded]);
+  lastMove = null;
+  render();
+  snackbar(`${plural(keys.length, 'order')} ${toExcluded ? 'back on the pick list' : 'excluded again'}`);
+}
+
+function moveSnackbar(message) {
+  snackbar(message);
+  const el = document.getElementById('snackbar');
+  el.insertAdjacentHTML('beforeend', '<button type="button" class="snackbar-action">Undo</button>');
+  el.querySelector('.snackbar-action').addEventListener('click', undoMove);
+}
+
+/* Moves rows from the list itself; the keyboard row moves on to the next one. */
+function moveRows(keys) {
+  const before = listedOrders().map(orderKey);
+  const at = before.indexOf(cursorKey);
+  const moved = moveOrders(keys);
+  if (!moved.length) return;
+  const after = listedOrders().map(orderKey);
+  if (cursorKey && !after.includes(cursorKey)) cursorKey = after[Math.min(Math.max(at, 0), after.length - 1)] || null;
+  const name = moved.length === 1 ? (orders.find((o) => orderKey(o) === moved[0]) || {}).name : plural(moved.length, 'order');
+  render();
+  moveSnackbar(view === 'pick' ? `${name} excluded` : `${name} back on the pick list`);
 }
 
 function setView(next) {
   view = next;
   checked.clear();
   lastChecked = null;
+  cursorKey = null;
   document.querySelectorAll('.pl-view').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   render();
 }
 document.querySelectorAll('.pl-view').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
 
+/* ---------- Rows ---------- */
 function tagsHtml(tags) {
   return tags.length ? `<div class="order-tags">${tags.map((t) => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : '';
 }
 
-function shipAddressHtml(o) {
+/* The first few tags on one line and "+N" for the rest; hidden tags are left out. */
+function compactTags(tags, max) {
+  const shown = visibleTags(tags);
+  if (!shown.length) return '';
+  const rest = shown.slice(max);
+  return `<span class="pl-tagline">${shown.slice(0, max).map((t) => `<span class="tag-chip${PICKLIST_TAG.test(t.trim()) ? ' pl-tag-pick' : ''}" title="${attr(t)}">${esc(t)}</span>`).join('')}${
+    rest.length ? `<span class="tag-chip pl-tag-more" title="${attr(rest.join(', '))}">+${rest.length}</span>` : ''}</span>`;
+}
+
+function ageDays(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((today - d) / 86400000);
+}
+
+function placedHtml(o) {
+  const days = ageDays(o.created_at);
+  if (days == null) return esc(o.created_at || '');
+  const d = new Date(`${o.created_at}T12:00:00`);
+  const label = days === 0 ? 'Today' : days === 1 ? 'Yesterday'
+    : d.toLocaleDateString('en-US', d.getFullYear() === new Date().getFullYear()
+      ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+  const title = `${shortDate(o.created_at)}${days > 1 ? ` · ${days} days ago` : ''}`;
+  return `<span title="${attr(title)}">${label}</span>${days >= AGE_WARN_DAYS ? `<span class="pl-age" title="${days} days old">${days}d</span>` : ''}`;
+}
+
+function shipToHtml(o) {
   const street = [o.ship_address1, o.ship_address2].filter(Boolean).join(', ');
-  const place = [o.ship_city, o.ship_zip].filter(Boolean).join(' ');
+  const city = esc(o.ship_city || '');
+  const state = o.ship_state ? `<strong>${esc(o.ship_state)}</strong>` : '';
+  const place = [[city, state].filter(Boolean).join(', '), esc(o.ship_zip || '')].filter(Boolean).join(' ');
   if (!street && !place) return '<span class="text-secondary">—</span>';
-  return `<div class="ellip-line" title="${esc(street)}">${esc(street)}</div><div class="text-secondary">${esc(place)}</div>`;
+  const country = o.ship_country && o.ship_country !== 'US' ? ` · ${esc(o.ship_country)}` : '';
+  const full = [street, [o.ship_city, o.ship_state].filter(Boolean).join(', '), o.ship_zip, o.ship_country].filter(Boolean).join(', ');
+  return `<div class="pl-cellflex"><span class="pl-place" title="${attr(full)}">${place || esc(street)}${country}</span>${
+    o.po_box ? '<span class="pl-pobox" title="PO Box — only USPS, or a service that hands off to USPS, can deliver">PO Box</span>' : ''}</div>`;
+}
+
+function shippingHtml(o) {
+  if (!o.shipping_method) return '<span class="text-secondary">—</span>';
+  return `<span class="pl-ship${FAST_SHIPPING.test(o.shipping_method) ? ' fast' : ''}" title="${attr(o.shipping_method)}">${esc(shippingLabel(o.shipping_method))}</span>`;
+}
+
+function rowHtml(o, i, action) {
+  const key = orderKey(o);
+  const products = o.lines.length;
+  return `<tr class="${checked.has(key) ? 'selected' : ''}${key === cursorKey ? ' cursor' : ''}" data-key="${attr(key)}">
+    <td class="pl-check"><input type="checkbox" data-check="${attr(key)}" ${checked.has(key) ? 'checked' : ''} aria-label="Select ${attr(o.name)}"></td>
+    <td class="pl-num">${i + 1}</td>
+    <td class="pl-order"><button class="link-btn" data-fraud="${attr(key)}" title="Open order details">${esc(o.name)}</button>${flagsHtml(o)}</td>
+    <td class="pl-storecell"><span class="pl-dot" style="--dot:${storeColor(o.store_id)}"></span>${esc(storeName(o.store_id))}</td>
+    <td class="pl-date">${placedHtml(o)}</td>
+    <td class="pl-customer"><div class="pl-cellflex"><span class="pl-cust-name" title="${attr(o.customer)}">${esc(o.customer)}</span>${compactTags(o.customer_tags, 1)}</div></td>
+    <td class="pl-shipto">${shipToHtml(o)}</td>
+    <td class="pl-shipping">${shippingHtml(o)}</td>
+    <td class="num pl-units" title="${attr(`${plural(o.units, 'unit')} of ${plural(products, 'product')}`)}">${o.units}</td>
+    <td class="num pl-total">${money(o.total)}</td>
+    <td class="pl-tags"><div class="pl-cellflex">${compactTags(o.tags, 2)}</div></td>
+    <td class="pl-actions">${action.replace('KEY', attr(key))}</td>
+  </tr>`;
 }
 
 function render(emptyMessage) {
   const tbody = document.getElementById('pl-orders');
   const empty = document.getElementById('pl-empty');
-  const visible = visibleOrders();
-  const shown = listedOrders();
-  const excludedCount = visible.filter((o) => excluded.has(orderKey(o))).length;
-  document.getElementById('pl-count-pick').textContent = visible.length - excludedCount;
-  document.getElementById('pl-count-excluded').textContent = excludedCount;
+  const scoped = scopedOrders();
+  const picked = scoped.filter((o) => !excluded.has(orderKey(o)));
+  const inView = scoped.filter(inCurrentView);
+  const search = searchText();
+  const shown = inView.filter((o) => lensPass(o, search));
+  document.getElementById('pl-count-pick').textContent = picked.length;
+  document.getElementById('pl-count-excluded').textContent = scoped.length - picked.length;
+  const reviewCount = inView.filter((o) => orderFlags(o).length).length;
+  const review = document.getElementById('pl-review');
+  review.classList.toggle('on', reviewOnly);
+  review.classList.toggle('has', reviewCount > 0);
+  review.setAttribute('aria-pressed', reviewOnly);
+  review.disabled = !reviewCount && !reviewOnly;
+  document.getElementById('pl-count-review').textContent = reviewCount;
   const action = view === 'pick'
-    ? '<button class="btn btn-text btn-small pl-exclude" data-move="KEY" title="Leave this order off the pick list">Exclude</button>'
-    : '<button class="btn btn-text btn-small pl-restore" data-move="KEY" title="Put this order back on the pick list">Restore</button>';
+    ? '<button class="btn btn-text btn-small pl-exclude" data-move="KEY" title="Leave this order off the pick list (E)">Exclude</button>'
+    : '<button class="btn btn-text btn-small pl-restore" data-move="KEY" title="Put this order back on the pick list (E)">Restore</button>';
+  if (cursorKey && !shown.some((o) => orderKey(o) === cursorKey)) cursorKey = null;
   if (!shown.length) {
     tbody.innerHTML = '';
-    const unmatched = !emptyMessage && orders.length && !visible.length;
-    empty.innerHTML = esc(emptyMessage
-      || (unmatched ? 'No orders match the rules and filters.'
-        : view === 'excluded' ? 'No excluded orders.' : orders.length ? 'Every order is excluded.' : 'No eligible orders.'))
-      + (unmatched ? '<div><button class="btn btn-outlined btn-small pl-empty-reset" id="pl-empty-reset">Show all orders</button></div>' : '');
-    if (unmatched) document.getElementById('pl-empty-reset').addEventListener('click', resetFilters);
+    let message = emptyMessage;
+    let reset = '';
+    if (!message) {
+      if (!orders.length) message = 'No eligible orders.';
+      else if (!scoped.length) {
+        message = 'No orders match the view and filters.';
+        reset = '<button class="btn btn-outlined btn-small" data-empty="all">Show all orders</button>';
+      } else if (!inView.length) message = view === 'excluded' ? 'No excluded orders.' : 'Every order is excluded.';
+      else {
+        message = search ? `No orders match “${search}”.` : 'Nothing needs review.';
+        reset = '<button class="btn btn-outlined btn-small" data-empty="lens">Show every order</button>';
+      }
+    }
+    empty.innerHTML = `${esc(message)}${reset ? `<div class="pl-empty-reset">${reset}</div>` : ''}`;
     empty.style.display = '';
   } else {
     empty.style.display = 'none';
-    tbody.innerHTML = shown.map((o, i) => `<tr class="${checked.has(orderKey(o)) ? 'selected' : ''}">
-      <td class="pl-check"><input type="checkbox" data-check="${esc(orderKey(o))}" ${checked.has(orderKey(o)) ? 'checked' : ''} aria-label="Select ${esc(o.name)}"></td>
-      <td class="pl-num">${i + 1}</td>
-      <td><button class="link-btn" data-fraud="${esc(orderKey(o))}" title="Open order details">${esc(o.name)}</button></td>
-      <td><span class="pl-store">${esc(storeName(o.store_id))}</span></td>
-      <td class="pl-date">${esc(shortDate(o.created_at))}</td>
-      <td class="pl-customer"><div class="ellip-line" title="${esc(o.customer)}">${esc(o.customer)}</div>${tagsHtml(o.customer_tags)}</td>
-      <td class="pl-address">${shipAddressHtml(o)}</td>
-      <td>${o.ship_state ? `<span class="pl-state">${esc(o.ship_state)}</span>` : ''}</td>
-      <td class="pl-shipping" title="${esc(o.shipping_method)}">${o.shipping_method ? `<div class="pl-clamp">${esc(o.shipping_method)}</div>` : '<span class="text-secondary">—</span>'}</td>
-      <td class="num pl-total">${money(o.total)}</td>
-      <td class="wrap pl-tags">${tagsHtml(o.tags)}</td>
-      <td class="pl-actions">${action.replace('KEY', esc(orderKey(o)))}</td>
-    </tr>`).join('');
+    tbody.innerHTML = shown.map((o, i) => rowHtml(o, i, action)).join('');
   }
   // Only rows on screen can stay selected: filtering or excluding drops the rest.
   const onScreen = new Set(shown.map(orderKey));
   [...checked].forEach((k) => { if (!onScreen.has(k)) checked.delete(k); });
   renderSortHeads();
-  renderSummary();
+  renderSummary(picked, scoped.length, search || reviewOnly);
   renderSelection(shown.length);
-  renderFilterState(visible.length);
+  renderShowing(shown.length, scoped.length !== orders.length || search || reviewOnly);
+  renderFilterBar();
+  renderViewTabs();
+  renderPopList();
 }
 
-/* Says how many orders the rules and filters are holding back, with one
-   click to show them all again. */
-function renderFilterState(visibleCount) {
-  const qf = quickFilters();
-  QF_IDS.forEach((id) => {
-    const input = document.getElementById(id);
-    input.parentElement.classList.toggle('filled', !!input.value.trim());
-  });
-  document.getElementById('qf-clear').hidden = !(qf.tag || qf.ctag || qf.states.length);
-  const filtered = activePreset || ruleModes.size || qf.tag || qf.ctag || qf.states.length || qf.search;
+document.getElementById('pl-empty').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-empty]');
+  if (!btn) return;
+  if (btn.dataset.empty === 'all') resetFilters();
+  else clearLens();
+});
+
+/* How many rows are on screen against every eligible order, with one click
+   to show them all again. */
+function renderShowing(count, narrowed) {
   const el = document.getElementById('pl-showing');
-  el.innerHTML = filtered && orders.length
-    ? `Showing <strong>${visibleCount}</strong> of ${orders.length} orders<button class="link-btn" id="pl-reset">Show all</button>`
+  el.innerHTML = narrowed && orders.length
+    ? `Showing <strong>${count}</strong> of ${orders.length}<button class="link-btn" id="pl-reset">Show all</button>`
     : '';
   const reset = document.getElementById('pl-reset');
   if (reset) reset.addEventListener('click', resetFilters);
 }
 
+function clearLens() {
+  document.getElementById('qf-search').value = '';
+  document.querySelector('.pl-search').classList.remove('filled');
+  reviewOnly = false;
+  render();
+}
+
 function resetFilters() {
-  QF_IDS.forEach((id) => { document.getElementById(id).value = ''; });
-  ruleModes.clear();
-  remember(RULES_KEY, {});
+  facets.clear();
+  setRuleModes(new Map());
   activePreset = null;
   remember(PRESET_KEY, null);
-  renderPresets();
-  renderRules();
-  render();
+  closePop();
+  clearLens();
 }
 
 function renderSelection(rowCount) {
@@ -522,6 +917,7 @@ function toggleChecked(key, on, range) {
     ? keys.slice(Math.min(from, to), Math.max(from, to) + 1) : [key];
   targets.forEach((k) => (on ? checked.add(k) : checked.delete(k)));
   lastChecked = key;
+  cursorKey = key;
   render();
 }
 
@@ -531,25 +927,34 @@ function clearChecked() {
   render();
 }
 
-function renderSummary() {
-  const inc = includedOrders();
-  const units = inc.reduce((n, o) => n + o.units, 0);
-  const products = new Set(inc.flatMap((o) => o.lines.map((l) => l.barcode || `?${l.title}`))).size;
-  document.getElementById('pl-summary').textContent = inc.length
-    ? `On the pick list: ${inc.length} order${inc.length === 1 ? '' : 's'} · ${units} unit${units === 1 ? '' : 's'} · ${products} product${products === 1 ? '' : 's'}`
+/* The pick list as Generate would make it; the note says what else is in play. */
+function renderSummary(picked, scopedCount, lens) {
+  const units = picked.reduce((n, o) => n + o.units, 0);
+  const products = new Set(picked.flatMap((o) => o.lines.map((l) => l.barcode || `?${l.title}`))).size;
+  document.getElementById('pl-summary').textContent = picked.length
+    ? `On the pick list: ${plural(picked.length, 'order')} · ${plural(units, 'unit')} · ${plural(products, 'product')}`
     : 'Nothing on the pick list';
-  document.getElementById('pl-generate').disabled = !inc.length;
+  const excludedCount = scopedCount - picked.length;
+  const flagged = picked.filter((o) => o.issues && o.issues.length).length;
+  document.getElementById('pl-summary-note').textContent = [
+    scopedCount !== orders.length ? `${scopedCount} of ${orders.length} eligible orders match the view and filters` : '',
+    excludedCount ? `${excludedCount} excluded` : '',
+    flagged ? `${plural(flagged, 'order')} will be left out` : '',
+    lens ? 'search and Needs review don’t change it' : '',
+  ].filter(Boolean).join(' · ');
+  document.getElementById('pl-generate').disabled = !picked.length;
 }
 
 document.getElementById('pl-orders').addEventListener('click', (e) => {
   const move = e.target.closest('[data-move]');
   if (move) {
-    moveOrders([move.dataset.move]);
-    render();
+    cursorKey = move.dataset.move;
+    moveRows([move.dataset.move]);
     return;
   }
   const fraud = e.target.closest('[data-fraud]');
   if (fraud) {
+    cursorKey = fraud.dataset.fraud;
     showOrder(fraud.dataset.fraud);
     return;
   }
@@ -571,23 +976,27 @@ document.getElementById('pl-check-all').addEventListener('change', (e) => {
   render();
 });
 document.getElementById('pl-bulk-action').addEventListener('click', () => {
-  const n = checked.size;
-  const plural = `${n} order${n === 1 ? '' : 's'}`;
-  moveOrders([...checked]);
-  clearChecked();
-  snackbar(view === 'pick' ? `${plural} excluded — see the Excluded tab` : `${plural} back on the pick list`);
+  const keys = [...checked];
+  checked.clear();
+  lastChecked = null;
+  moveRows(keys);
 });
 document.getElementById('pl-bulk-clear').addEventListener('click', clearChecked);
-const QF_IDS = ['qf-tag', 'qf-ctag', 'qf-state', 'qf-search'];
-QF_IDS.forEach((id) => document.getElementById(id).addEventListener('input', () => render()));
-document.getElementById('qf-clear').addEventListener('click', () => {
-  ['qf-tag', 'qf-ctag', 'qf-state'].forEach((id) => { document.getElementById(id).value = ''; });
+const searchBox = document.getElementById('qf-search');
+searchBox.addEventListener('input', () => {
+  searchBox.parentElement.classList.toggle('filled', !!searchBox.value);
   render();
 });
-document.getElementById('qf-search').addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && e.target.value) {
-    e.target.value = '';
-    render();
+searchBox.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && searchBox.value) {
+    e.stopPropagation();
+    clearLens();
+  } else if (e.key === 'Enter' || e.key === 'ArrowDown') {
+    // Straight from finding to the keyboard row.
+    e.preventDefault();
+    searchBox.blur();
+    cursorKey = null;
+    moveCursor(1);
   }
 });
 document.getElementById('pl-refresh').addEventListener('click', loadOrders);
@@ -886,7 +1295,7 @@ function moveAndAdvance(key) {
   moveOrders([key]);
   render();
   const after = listedOrders();
-  snackbar(view === 'pick' ? `${name} excluded` : `${name} back on the pick list`);
+  moveSnackbar(view === 'pick' ? `${name} excluded` : `${name} back on the pick list`);
   if (!after.length) {
     closeModal();
     return;
@@ -1085,7 +1494,7 @@ function applyOrderUpdate(updated) {
   const ctags = document.getElementById('om-ctags');
   if (ctags) ctags.innerHTML = tagsHtml(updated.customer_tags);
   if (!listedOrders().some((o) => orderKey(o) === key)) {
-    snackbar(`${updated.name} no longer fits the rules and filters in use — it leaves this list when you move on`);
+    snackbar(`${updated.name} no longer fits the view and filters in use — it leaves this list when you move on`);
   }
 }
 
@@ -1141,7 +1550,7 @@ function linesTable(lines) {
 }
 
 async function openGenerate() {
-  const picked = includedOrders();
+  const picked = pickedOrders();
   if (!picked.length) return;
   const body = { orders: picked.map((o) => ({ store_id: o.store_id, order_id: o.id })) };
   openModal(genFrame(`<div class="om-loading"><span class="spinner"></span> Checking ${plural(picked.length, 'order')} with Shopify and BackOffice…</div>`, GEN_CANCEL), 'gen');

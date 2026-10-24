@@ -13,6 +13,7 @@ import psycopg2.extras
 import db
 import order_gate
 import order_risk
+import po_box
 import profit
 from shopify_client import WEIGHT_TO_LB
 
@@ -81,6 +82,7 @@ def from_shopify_order(node, store_id):
         "ship_zip": addr.get("zip") or "",
         "ship_state": addr.get("provinceCode") or "",
         "ship_country": addr.get("countryCodeV2") or "",
+        "po_box": po_box.is_po_box(addr),
         "billing_matches_shipping": addresses_match(node.get("billingAddress"), node.get("shippingAddress")),
         "total": ((node.get("totalPriceSet") or {}).get("shopMoney") or {}).get("amount"),
         "shipping_method": (node.get("shippingLine") or {}).get("title") or "",
@@ -197,23 +199,43 @@ def summary(order):
     return {key: order.get(key) for key in ("store_id", "id", "name", "customer", "ship_state", "units")}
 
 
+def pick_issues(order, known_upcs):
+    """The products that would leave the order off a pick list: no barcode, or
+    a barcode BackOffice does not know. known_upcs None means BackOffice was
+    not asked, so only missing barcodes count."""
+    issues = []
+    for line in order["lines"]:
+        if not line["barcode"]:
+            issues.append({"kind": "no_barcode", "text": f"{line['title']} has no barcode in Shopify"})
+        elif known_upcs is not None and line["barcode"] not in known_upcs:
+            issues.append({"kind": "unknown_barcode",
+                           "text": f"{line['title']} — barcode {line['barcode']} is not in BackOffice"})
+    return issues
+
+
 def split_blocked(orders, known_upcs):
     """(orders that can be picked, orders left out with reasons). An order is
-    left out whole when any of its products has no barcode or a barcode
-    BackOffice does not know — the quotation never misses part of an order."""
+    left out whole when any of its products has an issue — the quotation never
+    misses part of an order."""
     included, blocked = [], []
     for order in orders:
-        reasons = []
-        for line in order["lines"]:
-            if not line["barcode"]:
-                reasons.append(f"{line['title']} has no barcode in Shopify")
-            elif line["barcode"] not in known_upcs:
-                reasons.append(f"{line['title']} — barcode {line['barcode']} is not in BackOffice")
+        reasons = [issue["text"] for issue in pick_issues(order, known_upcs)]
         if reasons:
             blocked.append({**summary(order), "reasons": reasons})
         else:
             included.append(order)
     return included, blocked
+
+
+def parse_tag_list(raw):
+    """The "tags hidden on the Pick lists page" setting → unique tags, first spelling kept."""
+    seen, tags = set(), []
+    for tag in str(raw or "").split(","):
+        tag = tag.strip()
+        if tag and tag.lower() not in seen:
+            seen.add(tag.lower())
+            tags.append(tag)
+    return tags
 
 
 def group_lines(orders, items):

@@ -258,12 +258,19 @@
         </div>
       </div>
 
+      <div class="card" id="card-picklist-page">
+        <h2>Pick lists page</h2>
+        <div class="field"><label>Tags to hide in the order list</label>
+          <input id="picklist_hidden_tags" placeholder="Login with Shop, Shop, Wrote Judge.me email review" spellcheck="false">
+          <span class="hint">Comma-separated, order and customer tags alike. They only leave the table: filters, rules and the order window still see them.</span></div>
+      </div>
+
       <div class="card" id="card-picklist-rules">
         <h2>Pick list rules</h2>
-        <p class="hint mb-8">Saved filters that appear as chips on the Pick lists page, for anyone to switch on.</p>
+        <p class="hint mb-8">Saved filters anyone can switch on from the Rules menu on the Pick lists page.</p>
         <div class="plr-legend mb-16">
           <span class="chip pl-rule-chip mode-add"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>Show rule</span>
-          <span class="hint">brings matching orders into view (click again on the Pick lists page to narrow to them)</span>
+          <span class="hint">keeps matching orders: on the Pick lists page, <strong>Show</strong> keeps orders matching any such rule, <strong>Require</strong> keeps only those matching it</span>
           <span class="chip pl-rule-chip mode-hide"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>Hide rule</span>
           <span class="hint">takes matching orders out</span>
         </div>
@@ -274,7 +281,7 @@
 
       <div class="card" id="card-picklist-presets">
         <h2>Rule presets</h2>
-        <p class="hint mb-16">Combine saved rules with AND / OR into one filter people switch on with a click on the Pick lists page. While a preset is on, it decides which orders show and the rule chips pause; quick filters and search still narrow on top.</p>
+        <p class="hint mb-16">Combine saved rules with AND / OR into one filter. Each preset is a saved-view tab on the Pick lists page: while one is on, it decides which orders go on the pick list and the rules pause; the other filters still narrow on top.</p>
         <input type="hidden" id="picklist_presets">
         <div id="pl-presets-list"></div>
         <button class="btn btn-outlined plr-add" id="add-pl-preset">+ New preset</button>

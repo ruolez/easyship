@@ -53,12 +53,17 @@ class FromShopifyOrderTest(unittest.TestCase):
             "fulfillment_status": "UNFULFILLED", "financial_status": "PAID", "fully_paid": True, "on_hold": False,
             "tags": ["wholesale"], "customer": "Ann Smith", "customer_tags": ["vip"],
             "ship_address1": "12 Elm St", "ship_address2": "Apt 4", "ship_city": "Austin", "ship_zip": "78701",
-            "ship_state": "TX", "ship_country": "US", "billing_matches_shipping": True,
+            "ship_state": "TX", "ship_country": "US", "po_box": False, "billing_matches_shipping": True,
             "total": "42.00", "shipping_method": "UPS Ground",
             "risk_level": "LOW", "risk_recommendation": "ACCEPT",
             "lines": [{"title": "Widget", "sku": "SKU-Widget", "barcode": "0001", "qty": 2}],
             "units": 2,
         })
+
+
+    def test_po_box_destination_is_flagged(self):
+        address = {"address1": "PO Box 638", "city": "Winsted", "provinceCode": "MN", "zip": "55395"}
+        self.assertEqual(order(shippingAddress=address)["po_box"], True)
 
 
 class OrderProductsTest(unittest.TestCase):
@@ -178,6 +183,28 @@ class SplitBlockedTest(unittest.TestCase):
             {"store_id": STORE, "id": "g3", "name": "#3", "customer": "Ann Smith", "ship_state": "TX", "units": 1,
              "reasons": ["C has no barcode in Shopify"]},
         ]))
+
+
+class PickIssuesTest(unittest.TestCase):
+    def test_every_line_without_a_known_barcode_is_an_issue(self):
+        o = order(lines=[line("A", "111"), line("B", "999"), line("C", "")])
+        self.assertEqual(picklists.pick_issues(o, {"111"}), [
+            {"kind": "unknown_barcode", "text": "B — barcode 999 is not in BackOffice"},
+            {"kind": "no_barcode", "text": "C has no barcode in Shopify"},
+        ])
+
+    def test_without_a_backoffice_answer_only_missing_barcodes_count(self):
+        o = order(lines=[line("B", "999"), line("C", "")])
+        self.assertEqual(picklists.pick_issues(o, None),
+                         [{"kind": "no_barcode", "text": "C has no barcode in Shopify"}])
+
+
+class ParseTagListTest(unittest.TestCase):
+    def test_comma_list_is_trimmed_and_unique_ignoring_case(self):
+        self.assertEqual(picklists.parse_tag_list(" Shop, Login with Shop,,shop ,"), ["Shop", "Login with Shop"])
+
+    def test_empty_setting_hides_nothing(self):
+        self.assertEqual([picklists.parse_tag_list(v) for v in (None, "", " , ")], [[], [], []])
 
 
 class GroupLinesTest(unittest.TestCase):
