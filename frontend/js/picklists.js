@@ -3,6 +3,7 @@ const RULES_KEY = 'easyship.picklistRules';
 const CUSTOMER_KEY = 'easyship.picklistCustomer';
 const REP_KEY = 'easyship.picklistRep';
 const SORT_KEY = 'easyship.picklistSort';
+const PRESET_KEY = 'easyship.picklistPreset';
 
 let stores = [];
 let selectedStores = new Set();
@@ -11,6 +12,9 @@ let rules = [];
 // Rule id → how its chip is switched on: 'add' (orders matching any Add rule
 // are shown), 'narrow' (orders must also match it) or 'hide'.
 let ruleModes = new Map();
+// Presets combine rules into one filter; while one is on it decides alone and the rule chips pause.
+let presets = [];
+let activePreset = null;
 const excluded = new Set();
 const checked = new Set();
 let lastChecked = null; // anchor for Shift+click ranges
@@ -172,10 +176,14 @@ async function loadOrders() {
   orders.forEach((o) => counts.set(o.store_id, (counts.get(o.store_id) || 0) + 1));
   renderStores(counts);
   rules = res.rules;
+  presets = res.presets || [];
+  const savedPreset = recall(PRESET_KEY, null);
+  activePreset = presets.some((p) => p.id === savedPreset) ? savedPreset : null;
   const known = new Set(orders.map(orderKey));
   [...excluded].forEach((k) => { if (!known.has(k)) excluded.delete(k); });
   ruleModes = restoreRuleModes(recall(RULES_KEY, {}));
   showLoadErrors(res.errors);
+  renderPresets();
   renderRules();
   render();
 }
@@ -224,9 +232,59 @@ function restoreRuleModes(saved) {
   return modes;
 }
 
+/* ---------- Presets ---------- */
+const PRESET_ICON = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>';
+
+/* (rule AND/OR rule …) AND/OR (…); an item can be negated. */
+function presetMatches(preset, o) {
+  const item = (it) => o.rule_ids.includes(it.rule) !== it.negate;
+  const group = (g) => (g.join === 'or' ? g.items.some(item) : g.items.every(item));
+  return preset.join === 'or' ? preset.groups.some(group) : preset.groups.every(group);
+}
+
+const ruleName = (id) => (rules.find((r) => r.id === id) || {}).name || 'a deleted rule';
+
+/* "Wholesale or Big orders, and not Same address" — the preset as a sentence of rule tokens. */
+function presetExpressionHtml(preset) {
+  const join = (j) => `<span class="pl-pjoin">${j === 'or' ? 'or' : 'and'}</span>`;
+  const groups = preset.groups.map((g) => {
+    const items = g.items.map((it) => `${it.negate ? '<span class="pl-pnot">not</span>' : ''}<span class="pl-ptoken">${esc(ruleName(it.rule))}</span>`);
+    const body = items.join(join(g.join));
+    return preset.groups.length > 1 && g.items.length > 1 ? `<span class="pl-pgroup">${body}</span>` : body;
+  });
+  return groups.join(join(preset.join));
+}
+
+function setPreset(id) {
+  activePreset = id;
+  remember(PRESET_KEY, id);
+  renderPresets();
+  renderRules();
+  render();
+}
+
+function renderPresets() {
+  document.getElementById('pl-presets-row').style.display = presets.length ? '' : 'none';
+  const el = document.getElementById('pl-presets');
+  el.innerHTML = presets.map((p) => {
+    const on = p.id === activePreset;
+    return `<button class="chip pl-preset-chip${on ? ' on' : ''}" data-preset="${esc(p.id)}" aria-pressed="${on}"
+      title="${on ? 'Click to switch this preset off' : 'Show only the orders this preset matches'}">${PRESET_ICON}${esc(p.name)}</button>`;
+  }).join('');
+  const preset = presets.find((p) => p.id === activePreset);
+  const desc = document.getElementById('pl-preset-desc');
+  desc.hidden = !preset;
+  desc.innerHTML = preset ? `<span class="pl-pdesc-lead">Showing orders that match</span> ${presetExpressionHtml(preset)}` : '';
+  el.querySelectorAll('.pl-preset-chip').forEach((chip) => {
+    chip.addEventListener('click', () => setPreset(chip.dataset.preset === activePreset ? null : chip.dataset.preset));
+  });
+}
+
 function renderRules() {
   const el = document.getElementById('pl-rules');
   document.getElementById('pl-rules-row').style.display = rules.length ? '' : 'none';
+  const pausedBy = presets.find((p) => p.id === activePreset);
+  document.getElementById('pl-rules-row').classList.toggle('paused', !!pausedBy);
   const offTip = (r) => (r.action === 'hide' ? 'Click to hide orders matching this rule'
     : 'Click to add orders matching this rule; click again to narrow to them');
   el.innerHTML = rules.map((r) => {
@@ -238,10 +296,14 @@ function renderRules() {
   document.getElementById('pl-rule-legend').innerHTML = `
       ${['add', 'narrow', 'hide'].filter((m) => m !== 'hide' || rules.some((r) => r.action === 'hide')).map((m) =>
         `<span class="mode-${m}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${RULE_MODE[m].icon}</svg>${{ add: 'Add', narrow: 'Narrow', hide: 'Hide' }[m]}</span>`).join('')}
-      <span class="hint">click a rule again to change</span>`;
+      <span class="hint">${pausedBy ? `paused while <strong>${esc(pausedBy.name)}</strong> is on` : 'click a rule again to change'}</span>`;
   el.querySelectorAll('.pl-rule-chip').forEach((chip) => {
     chip.addEventListener('click', () => {
       const rule = rules.find((r) => r.id === chip.dataset.rule);
+      if (activePreset) {
+        setPreset(null);
+        snackbar('Preset switched off — the rule chips work again');
+      }
       const next = nextRuleMode(rule, ruleModes.get(rule.id));
       if (next) ruleModes.set(rule.id, next);
       else ruleModes.delete(rule.id);
@@ -265,12 +327,17 @@ function quickFilters() {
 /* Hide rules drop what they match; when any keep rule is on, an order must
    match at least one of them. Quick filters narrow further. */
 function passesFilters(o, qf) {
-  const inMode = (mode) => [...ruleModes].filter(([, m]) => m === mode).map(([id]) => id);
-  const matches = (id) => o.rule_ids.includes(id);
-  if (inMode('hide').some(matches)) return false;
-  const adds = inMode('add');
-  if (adds.length && !adds.some(matches)) return false;
-  if (!inMode('narrow').every(matches)) return false;
+  const preset = presets.find((p) => p.id === activePreset);
+  if (preset) {
+    if (!presetMatches(preset, o)) return false;
+  } else {
+    const inMode = (mode) => [...ruleModes].filter(([, m]) => m === mode).map(([id]) => id);
+    const matches = (id) => o.rule_ids.includes(id);
+    if (inMode('hide').some(matches)) return false;
+    const adds = inMode('add');
+    if (adds.length && !adds.some(matches)) return false;
+    if (!inMode('narrow').every(matches)) return false;
+  }
   const has = (tags, needle) => tags.some((t) => t.toLowerCase().includes(needle));
   if (qf.tag && !has(o.tags, qf.tag)) return false;
   if (qf.ctag && !has(o.customer_tags, qf.ctag)) return false;
@@ -414,7 +481,7 @@ function renderFilterState(visibleCount) {
     input.parentElement.classList.toggle('filled', !!input.value.trim());
   });
   document.getElementById('qf-clear').hidden = !(qf.tag || qf.ctag || qf.states.length);
-  const filtered = ruleModes.size || qf.tag || qf.ctag || qf.states.length || qf.search;
+  const filtered = activePreset || ruleModes.size || qf.tag || qf.ctag || qf.states.length || qf.search;
   const el = document.getElementById('pl-showing');
   el.innerHTML = filtered && orders.length
     ? `Showing <strong>${visibleCount}</strong> of ${orders.length} orders<button class="link-btn" id="pl-reset">Show all</button>`
@@ -427,6 +494,9 @@ function resetFilters() {
   QF_IDS.forEach((id) => { document.getElementById(id).value = ''; });
   ruleModes.clear();
   remember(RULES_KEY, {});
+  activePreset = null;
+  remember(PRESET_KEY, null);
+  renderPresets();
   renderRules();
   render();
 }

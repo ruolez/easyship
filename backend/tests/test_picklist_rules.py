@@ -170,5 +170,45 @@ class MatchedRuleIdsTest(unittest.TestCase):
         self.assertEqual(picklist_rules.matched_rule_ids(rules, order(tags=["A"])), ["first", "third"])
 
 
+def preset(*groups, join="and", name="Retail", pid="p1"):
+    return {"id": pid, "name": name, "join": join,
+            "groups": [{"join": gj, "items": [{"rule": r, "negate": n} for r, n in items]} for gj, items in groups]}
+
+
+class ParsePresetsTest(unittest.TestCase):
+    RULES = ["wholesale", "big", "same"]
+
+    def test_bad_input_gives_no_presets(self):
+        self.assertEqual([picklist_rules.parse_presets(raw, self.RULES) for raw in (None, "", "nope", "{}", "[3]")],
+                         [[], [], [], [], []])
+
+    def test_clean_preset_round_trips(self):
+        clean = preset(("or", [("wholesale", False), ("big", False)]), ("and", [("same", True)]))
+        self.assertEqual(picklist_rules.parse_presets(json.dumps([clean]), self.RULES), [clean])
+
+    def test_joins_and_negation_are_normalized(self):
+        raw = [{"id": "p1", "name": "  Mixed ", "join": "OR", "groups": [
+            {"join": "nonsense", "items": [{"rule": "big", "negate": "yes"}, {"rule": "same", "negate": True}]}]}]
+        self.assertEqual(picklist_rules.parse_presets(raw, self.RULES), [preset(
+            ("and", [("big", False), ("same", True)]), join="or", name="Mixed")])
+
+    def test_items_of_deleted_rules_then_empty_groups_then_empty_presets_go(self):
+        raw = [preset(("and", [("gone", False), ("big", False)]), ("or", [("gone", True)])),
+               preset(("and", [("gone", False)]), pid="p2", name="Only gone")]
+        self.assertEqual(picklist_rules.parse_presets(raw, self.RULES), [preset(("and", [("big", False)]))])
+
+    def test_repeated_items_in_a_group_are_kept_once(self):
+        raw = [preset(("and", [("big", False), ("big", False), ("big", True)]))]
+        self.assertEqual(picklist_rules.parse_presets(raw, self.RULES)[0]["groups"][0]["items"],
+                         [{"rule": "big", "negate": False}, {"rule": "big", "negate": True}])
+
+    def test_preset_without_a_name_is_dropped_and_ids_stay_unique(self):
+        raw = [preset(("and", [("big", False)]), name=" "), preset(("and", [("big", False)])),
+               preset(("and", [("same", False)]), name="Twin")]
+        presets = picklist_rules.parse_presets(raw, self.RULES)
+        self.assertEqual(([p["name"] for p in presets], presets[0]["id"], len({p["id"] for p in presets})),
+                         (["Retail", "Twin"], "p1", 2))
+
+
 if __name__ == "__main__":
     unittest.main()

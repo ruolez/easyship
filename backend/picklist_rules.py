@@ -4,7 +4,11 @@ A rule either hides the orders it matches or keeps only them; the page
 toggles rules on and off. Conditions look at order tags, customer tags, the
 ship-to state, the store, the shipping method, the order total and whether the
 billing address matches the ship-to address. Pure functions over plain data, like
-`tag_rules`; `load_rules` is the only DB touchpoint.
+`tag_rules`; the `load_*` functions are the only DB touchpoints.
+
+Presets combine saved rules into one filter: groups of rules joined by AND
+or OR (each rule may be negated), and the groups joined by AND or OR. They
+point at rules by id, so they are always read against the rules in place.
 """
 import json
 import math
@@ -14,7 +18,10 @@ import uuid
 import db
 
 RULES_KEY = "picklist_rules"
+PRESETS_KEY = "picklist_presets"
 ACTIONS = ("hide", "keep")
+JOINS = ("and", "or")
+MAX_NAME = 40
 MATCHES = ("all", "any")
 # field -> the operators it accepts; tag and text fields hold one value, list fields many.
 TAG_FIELDS = {"order_tag": "tags", "customer_tag": "customer_tags"}
@@ -72,29 +79,37 @@ def _parse_condition(item):
     return {"field": field, "op": op, "value": value} if value else None
 
 
-def parse_rules(raw):
-    """Rules as stored in settings (JSON text, or an already-decoded list) →
-    clean list. Rules without a name or a usable condition are dropped, and
-    each rule keeps a unique id so the page can remember which are on."""
+def _json_list(raw):
+    """Settings JSON text, or an already-decoded value → a list ([] when unusable)."""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw) if raw.strip() else []
         except ValueError:
             return []
-    if not isinstance(raw, list):
-        return []
+    return raw if isinstance(raw, list) else []
+
+
+def _unique_id(raw_id, seen):
+    rid = str(raw_id or "")
+    if not _ID.match(rid) or rid in seen:
+        rid = uuid.uuid4().hex[:12]
+    seen.add(rid)
+    return rid
+
+
+def parse_rules(raw):
+    """Rules as stored in settings (JSON text, or an already-decoded list) →
+    clean list. Rules without a name or a usable condition are dropped, and
+    each rule keeps a unique id so the page can remember which are on."""
     rules, seen = [], set()
-    for item in raw:
+    for item in _json_list(raw):
         if not isinstance(item, dict):
             continue
         name = str(item.get("name") or "").strip()
         conditions = [c for c in map(_parse_condition, item.get("conditions") or []) if c]
         if not name or not conditions:
             continue
-        rid = str(item.get("id") or "")
-        if not _ID.match(rid) or rid in seen:
-            rid = uuid.uuid4().hex[:12]
-        seen.add(rid)
+        rid = _unique_id(item.get("id"), seen)
         action = str(item.get("action") or "").lower()
         match = str(item.get("match") or "").lower()
         rules.append({
@@ -109,6 +124,47 @@ def parse_rules(raw):
 
 def load_rules():
     return parse_rules(db.get_setting(RULES_KEY))
+
+
+def _join(raw):
+    join = str(raw or "").lower()
+    return join if join in JOINS else "and"
+
+
+def _parse_group(group, known):
+    if not isinstance(group, dict):
+        return None
+    items, used = [], set()
+    for item in group.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        rule_id, negate = str(item.get("rule") or ""), item.get("negate") is True
+        if rule_id in known and (rule_id, negate) not in used:
+            used.add((rule_id, negate))
+            items.append({"rule": rule_id, "negate": negate})
+    return {"join": _join(group.get("join")), "items": items} if items else None
+
+
+def parse_presets(raw, rule_ids):
+    """Presets as stored → clean list, read against the ids of the rules in
+    place: items of rules that are gone are dropped, then groups left empty,
+    then presets left with no group or no name."""
+    known = set(rule_ids)
+    presets, seen = [], set()
+    for item in _json_list(raw):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()[:MAX_NAME]
+        groups = [g for g in (_parse_group(g, known) for g in item.get("groups") or []) if g]
+        if not name or not groups:
+            continue
+        presets.append({"id": _unique_id(item.get("id"), seen), "name": name,
+                        "join": _join(item.get("join")), "groups": groups})
+    return presets
+
+
+def load_presets(rules):
+    return parse_presets(db.get_setting(PRESETS_KEY), [r["id"] for r in rules])
 
 
 def _condition_matches(cond, order):

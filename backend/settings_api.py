@@ -52,6 +52,7 @@ BASE_SETTING_KEYS = [
     "picklist_title_prefix",
     "picklist_number_tag",
     picklist_rules.RULES_KEY,
+    picklist_rules.PRESETS_KEY,
 ]
 
 BASE_SECRET_KEYS = {"shipper_password", profit.SETTING_PASSWORD}
@@ -108,6 +109,8 @@ def get_settings():
             out[key] = MASK if value else ""
         elif key == picklist_rules.RULES_KEY and value:
             out[key] = json.dumps(picklist_rules.parse_rules(value))
+        elif key == picklist_rules.PRESETS_KEY and value:
+            out[key] = json.dumps(picklist_rules.load_presets(picklist_rules.load_rules()))
         else:
             out[key] = value or ""
     for d in providers.descriptors():
@@ -177,6 +180,14 @@ def put_settings():
             value = json.dumps(tag_rules.parse_rules(value)) if (value or "").strip() else ""
         if key == picklist_rules.RULES_KEY:
             value = json.dumps(picklist_rules.parse_rules(value)) if (value or "").strip() else ""
+        if key == picklist_rules.PRESETS_KEY:
+            # Read against the rules this same save leaves in place.
+            if picklist_rules.RULES_KEY in data:
+                rules = picklist_rules.parse_rules(data[picklist_rules.RULES_KEY])
+            else:
+                rules = picklist_rules.load_rules()
+            presets = picklist_rules.parse_presets(value, [r["id"] for r in rules])
+            value = json.dumps(presets) if (value or "").strip() else ""
         if key == profit.SETTING_PASSWORD and (value or "").strip():
             # Only ever compared, never replayed — so it is stored hashed.
             value = generate_password_hash(value.strip())

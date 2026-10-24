@@ -159,5 +159,40 @@ class PicklistRulesSettingsTest(unittest.TestCase):
         self.assertEqual(json.loads(self.client.get("/api/settings").get_data())["picklist_rules"], "")
 
 
+class PicklistPresetsSettingsTest(unittest.TestCase):
+    """Presets point at rules by id, so they are checked against the rules
+    that will be in place after the save."""
+
+    setUp = ProfitSettingsTest.setUp
+    tearDown = ProfitSettingsTest.tearDown
+
+    RULE = {"id": "big", "name": "Big orders", "action": "keep", "match": "all",
+            "conditions": [{"field": "order_total", "op": "at_least", "value": 300}]}
+
+    def preset(self, *rule_ids):
+        return {"id": "p1", "name": "Retail", "join": "and",
+                "groups": [{"join": "or", "items": [{"rule": r, "negate": False} for r in rule_ids]}]}
+
+    def put(self, **body):
+        res = self.client.put("/api/settings", json=body)
+        return res.status_code
+
+    def test_presets_keep_only_rules_that_are_stored(self):
+        self.stored["picklist_rules"] = json.dumps([self.RULE])
+        self.put(picklist_presets=json.dumps([self.preset("big", "gone")]))
+        self.assertEqual(json.loads(self.stored["picklist_presets"]), [self.preset("big")])
+
+    def test_presets_are_checked_against_rules_saved_at_the_same_time(self):
+        self.stored["picklist_rules"] = json.dumps([self.RULE])
+        self.put(picklist_rules="[]", picklist_presets=json.dumps([self.preset("big")]))
+        self.assertEqual((self.stored["picklist_rules"], self.stored["picklist_presets"]), ("[]", "[]"))
+
+    def test_presets_read_back_without_items_of_deleted_rules(self):
+        self.stored["picklist_rules"] = json.dumps([self.RULE])
+        self.stored["picklist_presets"] = json.dumps([self.preset("big", "gone")])
+        out = json.loads(self.client.get("/api/settings").get_data())["picklist_presets"]
+        self.assertEqual(json.loads(out), [self.preset("big")])
+
+
 if __name__ == "__main__":
     unittest.main()

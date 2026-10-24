@@ -9,7 +9,7 @@ const BASE_SETTING_IDS = [
   'profit_min_amount', 'profit_min_margin_pct', 'profit_bypass_password',
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
   'picklist_backoffice_db_id', 'picklist_quote_status', 'picklist_title_prefix',
-  'picklist_number_tag', 'picklist_rules',
+  'picklist_number_tag', 'picklist_rules', 'picklist_presets',
 ];
 let SETTING_IDS = [...BASE_SETTING_IDS];
 
@@ -312,6 +312,13 @@ function plSeg(cls, current, options) {
     `<button type="button" role="radio" data-v="${v}" class="${current === v ? 'on' : ''}" aria-checked="${current === v}">${label}</button>`).join('')}</div>`;
 }
 
+function plUsesHtml(r) {
+  const uses = plPresetsUsing(r.id);
+  return uses.length
+    ? `<span class="plr-uses" title="Used in: ${plAttr(uses.map((p) => p.name || 'Unnamed').join(', '))}">${PLP_ICON}${uses.length}</span>`
+    : '';
+}
+
 function plRuleHtml(r, i, total) {
   const open = plOpen.has(plKey(r));
   const action = r.action === 'hide' ? 'hide' : 'keep';
@@ -326,6 +333,7 @@ function plRuleHtml(r, i, total) {
         <div class="plr-summary">${summary || '<span class="plr-summary-empty">No complete conditions yet</span>'}</div>
       </div>
       ${plChipPreview(r)}
+      ${plUsesHtml(r)}
       <div class="plr-tools">
         <button type="button" class="plr-icon pl-up" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${PL_ICONS.up}</button>
         <button type="button" class="plr-icon pl-down" title="Move down" aria-label="Move down" ${i === total - 1 ? 'disabled' : ''}>${PL_ICONS.down}</button>
@@ -351,6 +359,7 @@ function renderPlRules() {
   const rules = readPlRules();
   document.getElementById('add-pl-rule').style.display = rules.length ? '' : 'none';
   if (!rules.length) {
+    renderPlPresets();
     list.innerHTML = `<div class="plr-empty">
       <div class="plr-empty-title">No rules yet</div>
       <p class="hint">The Pick lists page still has its quick filters. Start from an example or a blank rule:</p>
@@ -361,6 +370,7 @@ function renderPlRules() {
     return;
   }
   list.innerHTML = rules.map((r, i) => plRuleHtml(r, i, rules.length)).join('');
+  renderPlPresets();
 }
 
 /* The editor's current state → the rules (without re-rendering). */
@@ -401,6 +411,7 @@ function syncPlRules() {
     el.querySelectorAll('.plr-join span').forEach((s) => { s.textContent = r.match === 'any' ? 'or' : 'and'; });
     el.querySelectorAll('.plr-cond').forEach((c, j) => c.classList.toggle('incomplete', !plConditionComplete(r.conditions[j])));
   });
+  renderPlPresets(); // rule names show inside the presets
 }
 
 function defaultPlCondition(field = 'order_tag') {
@@ -505,6 +516,277 @@ plList.addEventListener('click', (e) => {
 document.getElementById('add-pl-rule').addEventListener('click', () => {
   addPlRule({ name: '', action: 'keep', match: 'all', conditions: [defaultPlCondition()] });
 });
+
+/* ---------- Rule presets ----------
+   Saved rules combined into one filter: groups of rules joined by AND / OR
+   (each rule can be "doesn't match"), and the groups joined the same way.
+   Stored in the hidden #picklist_presets input. Presets point at rules by id,
+   so only saved rules can be picked; the server drops parts that point at a
+   rule that is gone, and the editor says so first. */
+const plpOpen = new Set();
+let plpNewKey = 0;
+const PLP_ICON = plSvg('<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>');
+
+function readPlPresets() {
+  try {
+    const presets = JSON.parse(document.getElementById('picklist_presets').value || '[]');
+    return Array.isArray(presets) ? presets : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePlPresets(presets) {
+  document.getElementById('picklist_presets').value = JSON.stringify(presets);
+  setDirty(true);
+  // Rule cards show how many presets use them.
+  const rules = readPlRules();
+  document.querySelectorAll('#pl-rules-list .plr').forEach((el, i) => {
+    const old = el.querySelector('.plr-uses');
+    if (old) old.remove();
+    if (rules[i]) el.querySelector('.plr-preview').insertAdjacentHTML('afterend', plUsesHtml(rules[i]));
+  });
+}
+
+const plSavedRules = () => readPlRules().filter((r) => r.id);
+const plRuleById = (id) => readPlRules().find((r) => r.id === id);
+
+function plpExpressionHtml(p) {
+  const join = (j) => `<span class="pl-pjoin">${j === 'or' ? 'or' : 'and'}</span>`;
+  const groups = (p.groups || []).filter((g) => g.items.length).map((g) => {
+    const body = g.items.map((it) => {
+      const rule = plRuleById(it.rule);
+      return `${it.negate ? '<span class="pl-pnot">not</span>' : ''}<span class="pl-ptoken${rule ? '' : ' gone'}">${esc(rule ? rule.name || 'Unnamed rule' : 'deleted rule')}</span>`;
+    }).join(join(g.join));
+    return p.groups.length > 1 && g.items.length > 1 ? `<span class="pl-pgroup">${body}</span>` : body;
+  });
+  return groups.join(join(p.join));
+}
+
+function plpProblems(p) {
+  const problems = [];
+  if (!String(p.name || '').trim()) problems.push('Give the preset a name — presets without one aren’t saved.');
+  const items = (p.groups || []).flatMap((g) => g.items);
+  if (!items.length) problems.push('Add at least one rule.');
+  if (items.some((it) => !plRuleById(it.rule))) problems.push('It uses a rule that was deleted — that part is dropped when you save.');
+  return problems;
+}
+
+function plpRuleOptions(current) {
+  const all = readPlRules();
+  const opts = all.map((r) => (r.id
+    ? `<option value="${plAttr(r.id)}" ${r.id === current ? 'selected' : ''}>${esc(r.name || 'Unnamed rule')}</option>`
+    : `<option disabled>${esc(r.name || 'New rule')} — save rules first</option>`));
+  if (current && !all.some((r) => r.id === current)) opts.unshift(`<option value="${plAttr(current)}" selected>Deleted rule</option>`);
+  return opts.join('');
+}
+
+function plpItemHtml(it, k, join) {
+  const gone = !plRuleById(it.rule);
+  const action = (plRuleById(it.rule) || {}).action;
+  return `${k ? `<div class="plr-join"><span>${join === 'or' ? 'or' : 'and'}</span></div>` : ''}
+    <div class="plp-item${gone ? ' gone' : ''}" data-iidx="${k}">
+      ${plSeg('plp-neg', it.negate ? 'not' : 'is', [['is', 'matches'], ['not', 'doesn’t match']])}
+      <div class="plp-rule-wrap">
+        <span class="plp-rule-dot ${action === 'hide' ? 'hide' : action ? 'keep' : ''}" title="${action === 'hide' ? 'Hide rule' : action ? 'Show rule' : 'Deleted rule'}"></span>
+        <select class="plp-rule" aria-label="Rule">${plpRuleOptions(it.rule)}</select>
+      </div>
+      <button type="button" class="plr-icon plp-item-remove" title="Remove from group" aria-label="Remove rule from group">${PL_ICONS.x}</button>
+    </div>`;
+}
+
+function plpGroupHtml(g, gi, total, topJoin) {
+  return `${gi ? `<div class="plp-gjoin"><span>${topJoin === 'or' ? 'or' : 'and'}</span></div>` : ''}
+    <div class="plp-group" data-gidx="${gi}">
+      <div class="plp-ghead">
+        <span class="plp-gtitle">${total > 1 ? `Group ${gi + 1}` : 'Rules'}</span>
+        ${g.items.length > 1 ? '<span class="plp-glead">match</span>' : '<span class="plp-glead">this rule must be true</span>'}
+        <span ${g.items.length > 1 ? '' : 'hidden'}>${plSeg('plp-gjoin-seg', g.join === 'or' ? 'or' : 'and', [['and', 'all of'], ['or', 'any of']])}</span>
+        ${g.items.length > 1 ? '<span class="plp-glead">these rules</span>' : ''}
+        <span class="plr-spacer"></span>
+        ${total > 1 ? `<button type="button" class="plr-icon danger plp-group-remove" title="Remove group" aria-label="Remove group">${PL_ICONS.trash}</button>` : ''}
+      </div>
+      <div class="plp-items">${g.items.map((it, k) => plpItemHtml(it, k, g.join)).join('')}</div>
+      <button type="button" class="btn btn-text btn-small plp-item-add">${PL_ICONS.plus} Add rule</button>
+    </div>`;
+}
+
+function plpPresetHtml(p, i, total) {
+  const key = p.id || p._key;
+  const open = plpOpen.has(key);
+  const problems = plpProblems(p);
+  const groups = p.groups || [];
+  const expr = plpExpressionHtml(p);
+  return `<div class="plr plp${open ? ' open' : ''}${problems.length ? ' has-problems' : ''}" data-idx="${i}" data-key="${plAttr(key)}">
+    <div class="plr-head">
+      <button type="button" class="plr-icon plr-toggle" aria-expanded="${open}" title="${open ? 'Collapse' : 'Edit this preset'}">${PL_ICONS.chevron}</button>
+      <div class="plr-titles">
+        <input class="plr-name" value="${plAttr(p.name || '')}" placeholder="Name this preset" maxlength="40" aria-label="Preset name">
+        <div class="plr-summary plp-expr">${expr ? `<span>Shows orders that match</span> ${expr}` : '<span class="plr-summary-empty">No rules in it yet</span>'}</div>
+      </div>
+      <span class="chip pl-preset-chip on plr-preview" title="How the preset looks on the Pick lists page when it is on">${PLP_ICON}<span class="plr-preview-name">${esc(String(p.name || '').trim() || 'Unnamed')}</span></span>
+      <div class="plr-tools">
+        <button type="button" class="plr-icon pl-up" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${PL_ICONS.up}</button>
+        <button type="button" class="plr-icon pl-down" title="Move down" aria-label="Move down" ${i === total - 1 ? 'disabled' : ''}>${PL_ICONS.down}</button>
+        <button type="button" class="plr-icon pl-dup" title="Duplicate" aria-label="Duplicate preset">${PL_ICONS.copy}</button>
+        <button type="button" class="plr-icon danger pl-remove" title="Delete preset" aria-label="Delete preset">${PL_ICONS.trash}</button>
+      </div>
+    </div>
+    <div class="plr-problems">${problems.map((t) => `<div>${PL_ICONS.warn}<span>${t}</span></div>`).join('')}</div>
+    <div class="plr-body">
+      ${groups.length > 1 ? `<div class="plr-setting"><span class="plr-label">Groups combine as</span>
+        ${plSeg('plp-join', p.join === 'or' ? 'or' : 'and', [['and', 'every group must match'], ['or', 'any group can match']])}</div>` : ''}
+      <div class="plp-groups">${groups.map((g, gi) => plpGroupHtml(g, gi, groups.length, p.join)).join('')}</div>
+      <button type="button" class="btn btn-outlined btn-small plp-group-add">${PL_ICONS.plus} Add group</button>
+      <span class="plp-group-hint hint">A group is a set of rules in brackets — e.g. (Wholesale or Big orders) and not Same address</span>
+    </div>
+  </div>`;
+}
+
+function renderPlPresets() {
+  const list = document.getElementById('pl-presets-list');
+  if (!list) return;
+  const presets = readPlPresets();
+  const saved = plSavedRules();
+  document.getElementById('add-pl-preset').style.display = presets.length ? '' : 'none';
+  document.getElementById('add-pl-preset').disabled = !saved.length;
+  if (!presets.length) {
+    list.innerHTML = `<div class="plr-empty plp-empty">
+      <div class="plp-empty-art">
+        <span class="pl-ptoken">Wholesale</span><span class="pl-pjoin">or</span><span class="pl-ptoken">Big orders</span>
+        <span class="pl-pjoin">and</span><span class="pl-pnot">not</span><span class="pl-ptoken">Same address</span>
+      </div>
+      <div class="plr-empty-title">No presets yet</div>
+      <p class="hint">${saved.length
+        ? 'A preset combines your rules into one filter that anyone can switch on with a click on the Pick lists page.'
+        : 'Presets are built from saved rules — add a rule above and save first.'}</p>
+      <button type="button" class="btn btn-primary plp-create" ${saved.length ? '' : 'disabled'}>${PL_ICONS.plus} Create a preset</button>
+    </div>`;
+    return;
+  }
+  list.innerHTML = presets.map((p, i) => plpPresetHtml(p, i, presets.length)).join('');
+}
+
+function plpFromDom() {
+  const before = readPlPresets();
+  return [...document.querySelectorAll('#pl-presets-list .plp')].map((el, i) => {
+    const prev = before[i] || {};
+    const top = el.querySelector('.plp-join .on');
+    return {
+      ...(prev.id ? { id: prev.id } : { _key: el.dataset.key }),
+      name: el.querySelector('.plr-name').value,
+      join: top ? top.dataset.v : prev.join || 'and',
+      groups: [...el.querySelectorAll('.plp-group')].map((g) => ({
+        join: g.querySelector('.plp-gjoin-seg .on').dataset.v,
+        items: [...g.querySelectorAll('.plp-item')].map((it) => ({
+          rule: it.querySelector('.plp-rule').value,
+          negate: it.querySelector('.plp-neg .on').dataset.v === 'not',
+        })),
+      })),
+    };
+  });
+}
+
+function syncPlPresets() {
+  const presets = plpFromDom();
+  writePlPresets(presets);
+  document.querySelectorAll('#pl-presets-list .plp').forEach((el, i) => {
+    const p = presets[i];
+    const problems = plpProblems(p);
+    const expr = plpExpressionHtml(p);
+    el.querySelector('.plp-expr').innerHTML = expr ? `<span>Shows orders that match</span> ${expr}` : '<span class="plr-summary-empty">No rules in it yet</span>';
+    el.querySelector('.plr-preview-name').textContent = String(p.name || '').trim() || 'Unnamed';
+    el.querySelector('.plr-problems').innerHTML = problems.map((t) => `<div>${PL_ICONS.warn}<span>${t}</span></div>`).join('');
+    el.classList.toggle('has-problems', problems.length > 0);
+    el.querySelectorAll('.plp-group').forEach((g, gi) => {
+      g.querySelectorAll(':scope .plp-items > .plr-join span').forEach((s) => { s.textContent = p.groups[gi].join === 'or' ? 'or' : 'and'; });
+    });
+    el.querySelectorAll('.plp-gjoin span').forEach((s) => { s.textContent = p.join === 'or' ? 'or' : 'and'; });
+  });
+}
+
+/* A rule for a new line: the first saved rule the group doesn't use yet. */
+function plpNextRule(items) {
+  const saved = plSavedRules();
+  const free = saved.find((r) => !items.some((it) => it.rule === r.id));
+  return (free || saved[0] || {}).id || '';
+}
+
+function addPlPreset() {
+  const key = `newp${++plpNewKey}`;
+  writePlPresets([...plpFromDom(), { _key: key, name: '', join: 'and', groups: [{ join: 'or', items: [{ rule: plpNextRule([]), negate: false }] }] }]);
+  plpOpen.add(key);
+  renderPlPresets();
+  const card = document.querySelector(`#pl-presets-list .plp[data-key="${key}"]`);
+  if (card) {
+    card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    card.querySelector('.plr-name').focus();
+  }
+}
+
+const plpList = document.getElementById('pl-presets-list');
+plpList.addEventListener('input', syncPlPresets);
+plpList.addEventListener('change', () => {
+  syncPlPresets();
+  renderPlPresets(); // the rule's colour dot and "deleted" state follow the pick
+});
+plpList.addEventListener('click', (e) => {
+  if (e.target.closest('.plp-create')) {
+    addPlPreset();
+    return;
+  }
+  const card = e.target.closest('.plp');
+  if (!card) return;
+  const seg = e.target.closest('.plr-seg button');
+  if (seg) {
+    seg.parentElement.querySelectorAll('button').forEach((b) => {
+      b.classList.toggle('on', b === seg);
+      b.setAttribute('aria-checked', String(b === seg));
+    });
+    syncPlPresets();
+    return;
+  }
+  const idx = Number(card.dataset.idx);
+  const key = card.dataset.key;
+  const head = e.target.closest('.plr-head');
+  if (e.target.closest('.plr-toggle') || (head && !e.target.closest('input, button, .plr-preview'))) {
+    if (plpOpen.has(key)) plpOpen.delete(key);
+    else plpOpen.add(key);
+    card.classList.toggle('open', plpOpen.has(key));
+    card.querySelector('.plr-toggle').setAttribute('aria-expanded', String(plpOpen.has(key)));
+    return;
+  }
+  const button = e.target.closest('button');
+  if (!button) return;
+  const presets = plpFromDom();
+  const p = presets[idx];
+  const group = button.closest('.plp-group');
+  const g = group ? p.groups[group.dataset.gidx] : null;
+  if (button.classList.contains('pl-remove')) presets.splice(idx, 1);
+  else if (button.classList.contains('pl-dup')) {
+    const copyKey = `newp${++plpNewKey}`;
+    const { id, _key, ...rest } = p;
+    presets.splice(idx + 1, 0, { ...JSON.parse(JSON.stringify(rest)), name: `${rest.name} (copy)`.slice(0, 40), _key: copyKey });
+    plpOpen.add(copyKey);
+  } else if (button.classList.contains('pl-up') && idx > 0) [presets[idx - 1], presets[idx]] = [presets[idx], presets[idx - 1]];
+  else if (button.classList.contains('pl-down') && idx < presets.length - 1) [presets[idx + 1], presets[idx]] = [presets[idx], presets[idx + 1]];
+  else if (button.classList.contains('plp-group-add')) p.groups.push({ join: 'or', items: [{ rule: plpNextRule([]), negate: false }] });
+  else if (button.classList.contains('plp-group-remove')) p.groups.splice(group.dataset.gidx, 1);
+  else if (button.classList.contains('plp-item-add')) g.items.push({ rule: plpNextRule(g.items), negate: false });
+  else if (button.classList.contains('plp-item-remove')) {
+    g.items.splice(button.closest('.plp-item').dataset.iidx, 1);
+    if (!g.items.length && p.groups.length > 1) p.groups.splice(group.dataset.gidx, 1);
+  } else return;
+  writePlPresets(presets);
+  renderPlPresets();
+});
+document.getElementById('add-pl-preset').addEventListener('click', addPlPreset);
+
+/* Which presets use a rule, for the badge on its card. */
+function plPresetsUsing(ruleId) {
+  if (!ruleId) return [];
+  return readPlPresets().filter((p) => (p.groups || []).some((g) => g.items.some((it) => it.rule === ruleId)));
+}
 
 /* Service-name suggestions for the rule editor: every courier service the
    enabled providers expose, deduped by name. */

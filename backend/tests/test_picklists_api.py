@@ -1,3 +1,4 @@
+import json
 import sys
 import threading
 import types
@@ -464,6 +465,18 @@ class PicklistsApiTest(unittest.TestCase):
         self.picklist = self.active_picklist(status="creating", shopify_tag="picklist 1")
         creating = self.client.post("/api/picklists/42/tags/retry").status_code
         self.assertEqual((missing, untagged, creating), (404, 400, 409))
+
+
+    def test_orders_carry_the_presets_of_the_rules_in_place(self):
+        rule = {"id": "big", "name": "Big", "action": "keep", "match": "all",
+                "conditions": [{"field": "order_total", "op": "at_least", "value": 5}]}
+        good = {"id": "p1", "name": "Retail", "join": "and",
+                "groups": [{"join": "or", "items": [{"rule": "big", "negate": True}]}]}
+        stale = {**good, "id": "p2", "name": "Stale", "groups": [{"join": "and", "items": [{"rule": "gone"}]}]}
+        settings = {**SETTINGS, "picklist_rules": json.dumps([rule]), "picklist_presets": json.dumps([good, stale])}
+        picklists_api.db.get_setting = lambda key, default=None: settings.get(key, default)
+        data = self.client.get("/api/picklists/orders?store_ids=1").get_json()
+        self.assertEqual((data["presets"], data["orders"][0]["rule_ids"]), ([good], ["big"]))
 
 
 if __name__ == "__main__":

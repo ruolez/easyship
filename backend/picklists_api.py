@@ -106,6 +106,7 @@ def eligible_orders():
         "errors": errors,
         "days": PICKLIST_DAYS,
         "rules": [{"id": r["id"], "name": r["name"], "action": r["action"]} for r in rules],
+        "presets": picklist_rules.load_presets(rules),
     })
 
 
