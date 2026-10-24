@@ -130,55 +130,93 @@
     <!-- ================= Printing ================= -->
     <section class="tab-panel" data-panel="printing">
       <div class="card" id="card-printing">
-        <h2>Label printing</h2>
-        <div class="row">
-          <div class="field fixed" style="min-width:320px">
-            <label>Print mode</label>
-            <select id="print_mode">
-              <option value="browser">Browser print dialog</option>
-              <option value="network">Network thermal printer (direct from server)</option>
-              <option value="browserprint">Zebra Browser Print (USB printer on this station)</option>
-            </select>
+        <div class="us-head">
+          <div>
+            <h2>Label printing</h2>
+            <div class="hint">How a label reaches the printer once it is bought</div>
           </div>
         </div>
-        <div class="row mt-16" id="print-network">
-          <div class="field"><label>Printer IP / host</label><input id="printer_host" placeholder="192.168.1.50"></div>
-          <div class="field fixed" style="min-width:100px"><label>Port</label><input id="printer_port" placeholder="9100"></div>
-          <div class="fixed"><button class="btn btn-outlined" id="test-printer">Test print</button></div>
-          <div class="fixed" id="printer-test-result"></div>
+        <select id="print_mode" class="pr-native" aria-hidden="true" tabindex="-1">
+          <option value="browser">Browser print dialog</option>
+          <option value="network">Network thermal printer (direct from server)</option>
+          <option value="browserprint">Zebra Browser Print (USB printer on this station)</option>
+        </select>
+        <div class="pr-modes" id="pr-modes" role="radiogroup" aria-label="Print mode">
+          <button type="button" class="pr-mode" data-mode="browser" role="radio" aria-checked="false">
+            <span class="pr-mode-ico"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg></span>
+            <span class="pr-mode-text"><strong>Browser print dialog</strong><span>Works with any printer. The label opens in the print dialog, one click per label.</span></span>
+            <span class="pr-radio" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="pr-mode" data-mode="network" role="radio" aria-checked="false">
+            <span class="pr-mode-ico"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/></svg></span>
+            <span class="pr-mode-text"><strong>Network thermal printer</strong><span>The server sends labels straight to a Zebra on your network. No dialog.</span></span>
+            <span class="pr-radio" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="pr-mode" data-mode="browserprint" role="radio" aria-checked="false">
+            <span class="pr-mode-ico"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 7v4"/><path d="M14 7v4"/><path d="M8 11h8v3a4 4 0 0 1-8 0z"/><path d="M12 18v4"/></svg></span>
+            <span class="pr-mode-text"><strong>Zebra Browser Print</strong><span>A USB Zebra at each packing station prints silently through the Browser Print app.</span></span>
+            <span class="pr-radio" aria-hidden="true"></span>
+          </button>
         </div>
-        <div class="row mt-16" id="print-browserprint">
-          <div class="fixed"><button class="btn btn-outlined" id="test-browserprint">Test Zebra print (this computer)</button></div>
-          <div class="fixed" id="browserprint-test-result"></div>
-        </div>
-        <div class="row mt-16" id="print-dpi">
-          <div class="field fixed" style="min-width:200px">
-            <label>Printer resolution</label>
-            <select id="printer_dpi">
-              <option value="203">203 dpi (most Zebra)</option>
-              <option value="300">300 dpi</option>
-            </select>
+
+        <div class="pr-panel" id="pr-panel">
+          <div class="pr-panel-row" id="print-network">
+            <div class="pr-panel-title">Printer on the network</div>
+            <div class="row">
+              <div class="field"><label>Printer IP / host</label><input id="printer_host" placeholder="192.168.1.50"></div>
+              <div class="field fixed" style="min-width:110px"><label>Port</label><input id="printer_port" placeholder="9100"></div>
+              <div class="fixed"><button class="btn btn-outlined" id="test-printer">Send a test label</button></div>
+              <div class="fixed pr-result" id="printer-test-result"></div>
+            </div>
+          </div>
+          <div class="pr-panel-row" id="print-browserprint">
+            <div class="pr-panel-title">This packing station</div>
+            <div class="pr-inline">
+              <button class="btn btn-outlined" id="test-browserprint">Send a test label from this computer</button>
+              <span class="pr-result" id="browserprint-test-result"></span>
+            </div>
+          </div>
+          <div class="pr-panel-row" id="print-dpi">
+            <div class="pr-panel-title">Printer resolution</div>
+            <div class="row">
+              <div class="field fixed" style="min-width:220px">
+                <label class="sr-only" for="printer_dpi">Printer resolution</label>
+                <select id="printer_dpi">
+                  <option value="203">203 dpi (most Zebra)</option>
+                  <option value="300">300 dpi</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="pr-note">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            <span id="print-hint"></span>
           </div>
         </div>
-        <div class="hint mt-16" id="print-hint"></div>
       </div>
 
       <div class="card" id="card-workflow">
-        <h2>Workflow</h2>
-        <div class="row">
-          <div class="field">
-            <label>Placeholder email (used when an order has no email)</label>
-            <input id="placeholder_email" type="email" placeholder="shipping@yourcompany.com">
+        <div class="us-head">
+          <div>
+            <h2>Packing workflow</h2>
+            <div class="hint">Defaults for the Scan and Ship pages</div>
           </div>
-          <div class="field fixed" style="min-width:200px">
-            <label>Label wait timeout (seconds)</label>
-            <input id="label_timeout_seconds" type="number" min="30" step="10" placeholder="120">
+        </div>
+        <div class="pr-grid">
+          <div class="field">
+            <label>Placeholder email</label>
+            <input id="placeholder_email" type="email" placeholder="shipping@yourcompany.com">
+            <span class="hint">Sent to the carrier when an order has no email</span>
+          </div>
+          <div class="field">
+            <label>Label wait timeout</label>
+            <div class="pr-unit"><input id="label_timeout_seconds" type="number" min="30" step="10" placeholder="120"><span>seconds</span></div>
             <span class="hint">How long to wait for the shipping provider before offering a retry</span>
           </div>
-          <div class="field fixed" style="min-width:200px">
-            <label>Auto-advance countdown (seconds)</label>
-            <input id="countdown_seconds" type="number" min="0" step="1" placeholder="5">
-            <span class="hint">Seconds after a label prints before returning to scan (0 = off)</span>
+          <div class="field">
+            <label>Auto-advance countdown</label>
+            <div class="pr-unit"><input id="countdown_seconds" type="number" min="0" step="1" placeholder="5"><span>seconds</span></div>
+            <span class="hint">After a label prints, back to Scan after this long (0 = stay)</span>
           </div>
         </div>
       </div>
@@ -352,12 +390,47 @@
 
     <!-- ================= My account ================= -->
     <section class="tab-panel" data-panel="account">
-      <div class="card" id="card-password">
-        <h2>Change my password</h2>
-        <div class="row">
-          <div class="field"><label>New password</label><input type="password" id="my-new-password" autocomplete="new-password"></div>
-          <div class="fixed"><button class="btn btn-outlined" id="change-my-password">Change password</button></div>
+      <div class="card ac-profile">
+        <span class="us-avatar ac-avatar" id="ac-avatar"></span>
+        <div class="ac-who">
+          <div class="ac-name"><span id="ac-name"></span><span class="us-role" id="ac-role" hidden>Admin</span></div>
+          <div class="hint" id="ac-meta"></div>
         </div>
+        <button class="btn btn-outlined btn-small" id="ac-signout">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>Sign out</button>
+      </div>
+
+      <div class="card" id="card-password">
+        <div class="us-head">
+          <div>
+            <h2>Change password</h2>
+            <div class="hint">Use at least 4 characters. You stay signed in here.</div>
+          </div>
+        </div>
+        <form class="ac-form" id="ac-password-form" autocomplete="off">
+          <input type="text" name="username" id="ac-username" autocomplete="username" hidden>
+          <div class="field">
+            <label for="my-new-password">New password</label>
+            <div class="ac-pass">
+              <input type="password" id="my-new-password" autocomplete="new-password">
+              <button type="button" class="ac-eye" data-eye="my-new-password" aria-label="Show password" title="Show password">
+                <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="my-confirm-password">Confirm new password</label>
+            <div class="ac-pass">
+              <input type="password" id="my-confirm-password" autocomplete="new-password">
+              <button type="button" class="ac-eye" data-eye="my-confirm-password" aria-label="Show password" title="Show password">
+                <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></button>
+            </div>
+          </div>
+          <ul class="ac-checks" id="ac-checks">
+            <li data-check="length">At least 4 characters</li>
+            <li data-check="match">Both passwords match</li>
+          </ul>
+          <div><button type="submit" class="btn btn-primary" id="change-my-password" disabled>Change password</button></div>
+        </form>
       </div>
     </section>
 

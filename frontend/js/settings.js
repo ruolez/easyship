@@ -16,6 +16,7 @@ let SETTING_IDS = [...BASE_SETTING_IDS];
 initNav('settings').then(async () => {
   const isAdmin = window.currentUser && window.currentUser.role === 'admin';
   initTabs(isAdmin);
+  renderAccount();
   if (!isAdmin) return;
   await renderProviders();
   await loadPicklistOptions();
@@ -819,9 +820,21 @@ function updatePrintModeUI() {
   document.getElementById('print-browserprint').style.display = mode === 'browserprint' ? '' : 'none';
   document.getElementById('print-dpi').style.display = mode === 'browser' ? 'none' : '';
   document.getElementById('print-hint').textContent = PRINT_HINTS[mode] || '';
+  document.querySelectorAll('#pr-modes .pr-mode').forEach((b) => {
+    b.classList.toggle('on', b.dataset.mode === mode);
+    b.setAttribute('aria-checked', b.dataset.mode === mode);
+  });
 }
 
 document.getElementById('print_mode').addEventListener('change', updatePrintModeUI);
+/* The mode cards drive the hidden select, so Save / Discard and the unsaved bar work as before. */
+document.getElementById('pr-modes').addEventListener('click', (e) => {
+  const card = e.target.closest('[data-mode]');
+  const select = document.getElementById('print_mode');
+  if (!card || select.value === card.dataset.mode) return;
+  select.value = card.dataset.mode;
+  select.dispatchEvent(new Event('change'));
+});
 
 /* ---------- Box sizes ---------- */
 async function loadBoxes() {
@@ -2172,17 +2185,66 @@ function resetPassword(u) {
   });
 }
 
-document.getElementById('change-my-password').addEventListener('click', async () => {
-  const password = document.getElementById('my-new-password').value;
+/* ---------- My account ---------- */
+const MIN_PASSWORD = 4;
+
+function renderAccount() {
+  const me = window.currentUser;
+  if (!me) return;
+  const admin = me.role === 'admin';
+  const avatar = document.getElementById('ac-avatar');
+  avatar.textContent = me.username.charAt(0).toUpperCase();
+  avatar.style.setProperty('--av', usColor(me.username));
+  document.getElementById('ac-name').textContent = me.username;
+  document.getElementById('ac-username').value = me.username;
+  document.getElementById('ac-role').hidden = !admin;
+  const sections = SECTIONS.filter(([k]) => (me.sections || []).includes(k)).map(([, l]) => l);
+  document.getElementById('ac-meta').textContent = admin
+    ? 'Administrator · every page and setting'
+    : `Packer${sections.length ? ` · also ${sections.join(', ')}` : ''}`;
+}
+
+function checkPasswordForm() {
+  const pass = document.getElementById('my-new-password').value;
+  const confirm = document.getElementById('my-confirm-password').value;
+  const checks = { length: pass.length >= MIN_PASSWORD, match: !!pass && pass === confirm };
+  document.querySelectorAll('#ac-checks [data-check]').forEach((li) => {
+    li.classList.toggle('ok', checks[li.dataset.check]);
+    li.classList.toggle('bad', li.dataset.check === 'match' && !!confirm && !checks.match);
+  });
+  document.getElementById('change-my-password').disabled = !(checks.length && checks.match);
+}
+
+['my-new-password', 'my-confirm-password'].forEach((id) => document.getElementById(id).addEventListener('input', checkPasswordForm));
+
+document.querySelectorAll('[data-eye]').forEach((btn) => btn.addEventListener('click', () => {
+  const input = document.getElementById(btn.dataset.eye);
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  btn.classList.toggle('on', show);
+  btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  btn.title = show ? 'Hide password' : 'Show password';
+}));
+
+document.getElementById('ac-password-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('change-my-password');
+  if (btn.disabled) return;
+  btn.disabled = true;
   try {
-    const me = await api('/api/auth/me');
-    await api(`/api/users/${me.id}/password`, {
+    await api(`/api/users/${window.currentUser.id}/password`, {
       method: 'PUT',
-      body: { password },
+      body: { password: document.getElementById('my-new-password').value },
     });
     snackbar('Password changed', 'success');
-    document.getElementById('my-new-password').value = '';
+    ['my-new-password', 'my-confirm-password'].forEach((id) => { document.getElementById(id).value = ''; });
   } catch (err) {
     snackbar(err.message, 'error');
   }
+  checkPasswordForm();
+});
+
+document.getElementById('ac-signout').addEventListener('click', async () => {
+  await api('/api/auth/logout', { method: 'POST' });
+  location.href = '/login.html';
 });
