@@ -594,18 +594,35 @@ const FLAG_ICONS = {
   tag: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.42l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
 };
 
+const ISSUE_SHORT = { no_barcode: 'No barcode', unknown_barcode: 'Not in BackOffice' };
+
+/* Each flag: a label, a short reason that fits the Needs review column, and the full detail. */
 function orderFlags(o) {
   const flags = [];
   if (o.issues && o.issues.length) {
-    flags.push({ tone: 'err', icon: 'block', label: 'Will be left out at Generate', detail: o.issues.map((i) => i.text).join('; ') });
+    const first = o.issues[0];
+    const title = first.text.split(/ has no barcode| — barcode /)[0];
+    flags.push({ tone: 'err', icon: 'block', label: 'Will be left out at Generate',
+      short: `${ISSUE_SHORT[first.kind] || 'Left out'}: ${title}${o.issues.length > 1 ? ` +${o.issues.length - 1}` : ''}`,
+      detail: o.issues.map((i) => i.text).join('; ') });
   }
   if (o.risk_level === 'HIGH' || o.risk_level === 'MEDIUM') {
+    const advice = RECOMMENDATION_TEXT[o.risk_recommendation] || 'Shopify flagged this order';
     flags.push({ tone: o.risk_level === 'HIGH' ? 'err' : 'warn', icon: 'risk', label: `${titleCase(o.risk_level)} risk`,
-      detail: RECOMMENDATION_TEXT[o.risk_recommendation] || 'Shopify flagged this order' });
+      short: `${titleCase(o.risk_level)} risk`, detail: advice });
   }
   const tag = o.tags.find((t) => PICKLIST_TAG.test(t.trim()));
-  if (tag) flags.push({ tone: 'warn', icon: 'tag', label: 'Pick list tag', detail: `Tagged “${tag}” — it may already be on a pick list` });
+  if (tag) {
+    flags.push({ tone: 'warn', icon: 'tag', label: 'Pick list tag', short: `Tagged “${tag}”`,
+      detail: `Tagged “${tag}” — it may already be on a pick list` });
+  }
   return flags;
+}
+
+/* Each flag spelled out: short in the Needs review column, in full in the order window. */
+function flagReasonsHtml(o, full = false) {
+  return orderFlags(o).map((f) => `<span class="pl-why ${f.tone}" title="${attr(`${f.label}: ${f.detail}`)}">${FLAG_ICONS[f.icon]}${
+    full ? `<strong>${esc(f.label)}</strong><span class="pl-why-detail">${esc(f.detail)}</span>` : `<strong class="pl-why-short">${esc(f.short)}</strong>`}</span>`).join('');
 }
 
 function flagsHtml(o) {
@@ -797,6 +814,7 @@ function rowHtml(o, i, action) {
     <td class="pl-check"><input type="checkbox" data-check="${attr(key)}" ${checked.has(key) ? 'checked' : ''} aria-label="Select ${attr(o.name)}"></td>
     <td class="pl-num">${i + 1}</td>
     <td class="pl-order"><button class="link-btn" data-fraud="${attr(key)}" title="Open order details">${esc(o.name)}</button>${flagsHtml(o)}</td>
+    ${reviewOnly ? `<td class="pl-whycell"><div class="pl-cellflex">${flagReasonsHtml(o)}</div></td>` : ''}
     <td class="pl-storecell"><span class="pl-dot" style="--dot:${storeColor(o.store_id)}"></span>${esc(storeName(o.store_id))}</td>
     <td class="pl-date">${placedHtml(o)}</td>
     <td class="pl-customer"><div class="pl-cellflex"><span class="pl-cust-name" title="${attr(o.customer)}">${esc(o.customer)}</span>${compactTags(o.customer_tags, 1)}</div></td>
@@ -826,6 +844,7 @@ function render(emptyMessage) {
   review.setAttribute('aria-pressed', reviewOnly);
   review.disabled = !reviewCount && !reviewOnly;
   document.getElementById('pl-count-review').textContent = reviewCount;
+  document.getElementById('pl-col-why').hidden = !reviewOnly;
   const action = view === 'pick'
     ? '<button class="btn btn-text btn-small pl-exclude" data-move="KEY" title="Leave this order off the pick list (E)">Exclude</button>'
     : '<button class="btn btn-text btn-small pl-restore" data-move="KEY" title="Put this order back on the pick list (E)">Restore</button>';
@@ -1106,7 +1125,8 @@ function riskPanel(risk) {
   </div>`;
 }
 
-function orderBody(d) {
+function orderBody(d, o) {
+  const flags = o ? orderFlags(o) : [];
   const c = d.customer || {};
   const stats = [
     ['Total', money(d.total)],
@@ -1125,6 +1145,7 @@ function orderBody(d) {
       : addressLines(d.billing_address);
   return `
     <div class="om-main">
+      ${flags.length ? `<div class="om-review"><span class="om-label">Needs review</span><div class="om-review-list">${flagReasonsHtml(o, true)}</div></div>` : ''}
       <div class="om-stats">${stats.map(([l, v]) => `<div class="om-stat"><div class="om-label">${l}</div><div class="om-value">${v}</div></div>`).join('')}</div>
       <div class="om-cards">${omCard('Customer', customer)}${omCard('Ship to', ship)}${omCard('Bill to', bill)}</div>
       ${riskPanel(d.risk)}
@@ -1255,7 +1276,7 @@ async function showOrder(key) {
   let html;
   try {
     const d = await current;
-    html = orderBody(d);
+    html = orderBody(d, o);
     if (modalOrderKey === key && !d.customer) {
       document.querySelector('#modal .tagbox[data-kind="customer"]').outerHTML = tagBoxHtml('customer', [], true);
     }

@@ -1790,6 +1790,26 @@ body.pl-page #snackbar.show { transform: translateY(0); }
   background: var(--surface-sunken); border: 1px solid var(--outline); font-size: 12px; color: var(--on-surface);
 }
 .pl-order { font-variant-numeric: tabular-nums; }
+/* Needs review: the reasons, spelled out. */
+.pl-table th.pl-col-why { width: 20%; }
+.pl-table th.pl-col-why[hidden] { display: none; }
+.pl-table td.pl-whycell { max-width: 0; overflow: hidden; }
+/* Reviewing is reading: several reasons wrap rather than cut each other short. */
+.pl-whycell .pl-cellflex { flex-wrap: wrap; gap: 4px; }
+.pl-why {
+  display: inline-flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 100%;
+  padding: 2px 9px 2px 7px; border-radius: 6px; font-size: 12px; line-height: 18px; white-space: nowrap; overflow: hidden;
+}
+.pl-why .ico { flex: none; width: 13px; height: 13px; }
+.pl-why strong { flex: none; font-weight: 650; }
+.pl-why .pl-why-short { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pl-why-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; opacity: 0.85; }
+.pl-why.err { background: var(--error-light); color: var(--error); }
+.pl-why.warn { background: var(--warning-light); color: #92400e; }
+.om-review { padding: 12px 14px; border: 1px solid #fcd34d; border-radius: 8px; background: #fffdf5; }
+.om-review-list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 6px; }
+.om-review .pl-why { white-space: normal; font-size: 13px; }
+.om-review .pl-why-detail { overflow: visible; }
 .pl-flag { display: inline-flex; vertical-align: -3px; margin-left: 6px; cursor: help; }
 .pl-flag .ico { width: 15px; height: 15px; stroke-width: 2.2; }
 .pl-flag.err { color: var(--error); }
