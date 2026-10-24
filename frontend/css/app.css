@@ -1715,7 +1715,12 @@ body.pl-page #snackbar.show { transform: translateY(0); }
   background: var(--surface-sunken); border: 1px solid var(--outline); color: var(--text-secondary);
 }
 .om-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; color: var(--text-secondary); font-size: 13px; }
-.om-meta .order-tags { margin-top: 0; }
+.om-meta .order-tags { margin-top: 0; gap: 6px; }
+/* The order's tags are often the reason to look twice, so they stand out in the header. */
+.om-meta .tag-chip {
+  padding: 2px 10px; font-size: 12.5px; font-weight: 650; line-height: 18px;
+  background: #fef3c7; border-color: #f59e0b; color: #92400e;
+}
 .om-close {
   flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
   border: none; border-radius: 6px; background: none; color: var(--text-secondary); cursor: pointer;
@@ -1783,6 +1788,14 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .om-facts li.ok .ico, .om-check.ok .ico { color: var(--success); }
 .om-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--outline); }
 .om-check-title { font-weight: 600; }
+.om-cardholder {
+  display: inline-block; margin: 4px 0 3px; padding: 2px 10px; border-radius: 6px;
+  background: var(--surface-sunken); border: 1px solid var(--outline-strong); font-size: 13.5px; color: var(--on-surface);
+}
+.om-cardholder strong { font-weight: 700; }
+.om-check.ok .om-cardholder { background: var(--success-light); border-color: rgba(22, 163, 74, 0.35); }
+.om-check.warn .om-cardholder { background: var(--warning-light); border-color: rgba(217, 119, 6, 0.4); }
+.om-check.err .om-cardholder { background: var(--error-light); border-color: rgba(220, 38, 38, 0.4); color: var(--error); }
 .om-check.err .om-check-title { color: var(--error); }
 .om-check.warn .om-check-title { color: var(--warning); }
 .om-check.ok .om-check-title { color: var(--success); }

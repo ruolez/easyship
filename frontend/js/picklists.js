@@ -612,7 +612,8 @@ function riskPanel(risk) {
     const c = risk.cardholder;
     const [t, text] = CARDHOLDER_TEXT[c.status];
     checks.push(`<div class="om-check ${t}">${ICONS.card}<div><div class="om-check-title">${text}</div>
-      <div class="hint">${c.card_names.length > 1 ? 'Cards' : 'Card'}: ${esc(c.card_names.join(', '))} · Billing: ${esc(c.billing_name || '—')} · Shipping: ${esc(c.shipping_name || '—')}</div></div></div>`);
+      <div class="om-cardholder">${c.card_names.length > 1 ? 'Cards' : 'Card'}: <strong>${esc(c.card_names.join(', '))}</strong></div>
+      <div class="hint">Billing: ${esc(c.billing_name || '—')} · Shipping: ${esc(c.shipping_name || '—')}</div></div></div>`);
   }
   if (risk.ip) {
     checks.push(`<div class="om-check">${ICONS.globe}<div><div class="om-check-title">IP ${esc(risk.ip)}</div>
