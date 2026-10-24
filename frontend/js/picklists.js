@@ -169,8 +169,9 @@ async function loadOrders() {
   }
   if (seq !== loadSeq) return; // a newer store selection is loading
   refresh.classList.remove('loading');
-  document.getElementById('pl-window').textContent = `· orders from the last ${res.days} days`;
-  document.getElementById('pl-updated').textContent = `Updated ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+  const updated = document.getElementById('pl-updated');
+  updated.textContent = `Last ${res.days} days · Updated ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+  updated.title = `Paid, unfulfilled orders created in the last ${res.days} days`;
   orders = res.orders;
   const counts = new Map();
   orders.forEach((o) => counts.set(o.store_id, (counts.get(o.store_id) || 0) + 1));
