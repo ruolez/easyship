@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -9,9 +11,11 @@ import db
 import order_risk
 import picklist_rules
 import picklists
+import profit
+import shipping_estimate
 from auth import section_required
-from shopify_client import (PICKLIST_DAYS, ShopifyError, get_order_fraud, get_picklist_orders,
-                            list_picklist_orders)
+from shopify_client import (PICKLIST_DAYS, ShopifyError, change_tags, economics_from_order, get_order_fraud,
+                            get_picklist_orders, list_picklist_orders, list_shop_tags)
 from util import CENTRAL, api_error, audit, central_time
 
 bp = Blueprint("picklists", __name__, url_prefix="/api/picklists")
@@ -130,6 +134,8 @@ def order_fraud():
     risk = order_risk.order_risk(node)
     if risk and risk["ip"]:
         risk["ip_location"] = order_risk.ip_location(risk["ip"])
+    estimate = shipping_estimate.estimate_shipping(
+        store_id, (node.get("shippingAddress") or {}).get("provinceCode"), picklists.order_weight_lb(node))
     customer = node.get("customer") or {}
     total = (node.get("totalPriceSet") or {}).get("shopMoney") or {}
     spent = customer.get("amountSpent") or {}
@@ -146,6 +152,7 @@ def order_fraud():
         "items": node.get("subtotalLineItemsQuantity"),
         "shipping_method": (node.get("shippingLine") or {}).get("title"),
         "customer": {
+            "id": customer.get("id"),
             "name": customer.get("displayName"),
             "orders_count": customer.get("numberOfOrders"),
             "since": (customer.get("createdAt") or "")[:10] or None,
@@ -156,7 +163,97 @@ def order_fraud():
         "shipping_address": _address(node.get("shippingAddress")),
         "billing_address": _address(node.get("billingAddress")),
         "risk": risk,
+        "profit": picklists.order_profitability(economics_from_order(node), estimate, profit.load_thresholds()),
     })
+
+
+TAG_KINDS = ("order", "customer")
+TAG_CACHE_SECONDS = 300
+MAX_TAG_LENGTH = 255
+_tag_cache = {}  # (store_id, kind) -> (read at, tags)
+_tag_lock = threading.Lock()
+
+
+def _clean_tags(raw):
+    """Tags as typed → unique, trimmed tags; commas split like in Shopify."""
+    items = raw if isinstance(raw, list) else [raw]
+    tags = [t.strip() for item in items for t in str(item or "").split(",")]
+    seen, out = set(), []
+    for tag in tags:
+        if tag and len(tag) <= MAX_TAG_LENGTH and tag.lower() not in seen:
+            seen.add(tag.lower())
+            out.append(tag)
+    return out
+
+
+@bp.get("/tags")
+@section_required(SECTION)
+def shop_tags():
+    """The store's order or customer tags for the tag fields' suggestions,
+    kept for a few minutes per store."""
+    store_id = request.args.get("store_id", type=int)
+    kind = request.args.get("kind")
+    if not store_id or kind not in TAG_KINDS:
+        return api_error("store_id and kind (order or customer) are required")
+    key = (store_id, kind)
+    with _tag_lock:
+        cached = _tag_cache.get(key)
+    if not cached or time.monotonic() - cached[0] > TAG_CACHE_SECONDS:
+        try:
+            cached = (time.monotonic(), list_shop_tags(store_id, kind))
+        except ShopifyError as e:
+            return api_error(str(e), 502)
+        with _tag_lock:
+            _tag_cache[key] = cached
+    return jsonify({"tags": cached[1]})
+
+
+@bp.post("/orders/tags")
+@section_required(SECTION)
+def change_order_tags():
+    """Add and remove tags on the order or its customer in Shopify, then send
+    the order back as the list shows it, with the rules it now matches."""
+    data = request.get_json(silent=True) or {}
+    kind = data.get("kind")
+    store_id = data.get("store_id")
+    order_gid = str(data.get("order_id") or "").strip()
+    if kind not in TAG_KINDS or not isinstance(store_id, int) or not order_gid:
+        return api_error("store_id, order_id and kind (order or customer) are required")
+    try:
+        nodes = get_picklist_orders(store_id, [order_gid])
+    except ShopifyError as e:
+        return api_error(str(e), 502)
+    if not nodes:
+        return api_error("Order not found in Shopify", 404)
+    node = nodes[0]
+    owner = node if kind == "order" else node.get("customer")
+    if not owner or not owner.get("id"):
+        return api_error("This order has no customer to tag")
+    current = list(owner.get("tags") or [])
+    have = {t.lower(): t for t in current}
+    add = [t for t in _clean_tags(data.get("add") or []) if t.lower() not in have]
+    drop = {t.lower() for t in _clean_tags(data.get("remove") or [])}
+    remove = [t for t in current if t.lower() in drop]
+    if not add and not remove:
+        return api_error("No tags to add or remove")
+    try:
+        change_tags(store_id, owner["id"], add=add, remove=remove)
+    except ShopifyError as e:
+        if "ACCESS_DENIED" in str(e) or "access denied" in str(e).lower():
+            return api_error(f"This store's Shopify token can't change {kind} tags. Add the write_orders and "
+                             "write_customers scopes to the store's app, then try again.", 502)
+        return api_error(str(e), 502)
+    owner["tags"] = [t for t in current if t not in remove] + add
+    with _tag_lock:
+        cached = _tag_cache.get((store_id, kind))
+        if cached:
+            known = {t.lower() for t in cached[1]}
+            _tag_cache[(store_id, kind)] = (cached[0], [t for t in add if t.lower() not in known] + cached[1])
+    audit("picklist.tags", {"store_id": store_id, "order": node.get("name"), "kind": kind,
+                            "added": add, "removed": remove})
+    order = picklists.from_shopify_order(node, store_id)
+    order["rule_ids"] = picklist_rules.matched_rule_ids(picklist_rules.load_rules(), order)
+    return jsonify({"order": order})
 
 
 @bp.get("/sales-reps")

@@ -13,6 +13,8 @@ import psycopg2.extras
 import db
 import order_gate
 import order_risk
+import profit
+from shopify_client import WEIGHT_TO_LB
 
 STATUSES = ("creating", "active", "cancelled")
 _ADDRESS_NOISE = re.compile(r"[.,#']")
@@ -89,15 +91,31 @@ def from_shopify_order(node, store_id):
     }
 
 
+def _amount(money_set):
+    return ((money_set or {}).get("shopMoney") or {}).get("amount")
+
+
+def _float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def order_products(node):
     """The order's products for the order window: everything still on the
-    order (removed items are left out), with what is left to ship."""
+    order (removed items are left out), with what is left to ship, the price
+    paid after discounts and the margin over the Shopify unit cost."""
     products = []
     for li in (node.get("lineItems") or {}).get("nodes") or []:
         qty = li.get("currentQuantity") or 0
         if qty <= 0:
             continue
         variant = li.get("variantTitle") or ""
+        original = _amount(li.get("originalUnitPriceSet"))
+        price = _amount(li.get("discountedUnitPriceAfterAllDiscountsSet")) or original
+        cost = ((((li.get("variant") or {}).get("inventoryItem") or {}).get("unitCost")) or {}).get("amount")
+        paid, unit_cost = _float(price), _float(cost)
         products.append({
             "title": li.get("title") or "",
             "variant": "" if variant == "Default Title" else variant,
@@ -106,10 +124,56 @@ def order_products(node):
             "qty": qty,
             "to_ship": li.get("unfulfilledQuantity") or 0,
             "ships": li.get("requiresShipping") is not False,
-            "price": ((li.get("originalUnitPriceSet") or {}).get("shopMoney") or {}).get("amount"),
+            "price": price,
+            "price_original": original if (_float(original) or 0) > (paid or 0) else None,
+            "cost": cost,
+            "margin_pct": round((paid - unit_cost) / paid * 100, 1) if paid and unit_cost is not None else None,
             "image": (li.get("image") or {}).get("url"),
         })
     return products
+
+
+def order_weight_lb(node):
+    """Weight of what is left to ship, from the variants' Shopify weights — the
+    same figure the Ship page starts from."""
+    total = 0.0
+    for li in (node.get("lineItems") or {}).get("nodes") or []:
+        qty = li.get("unfulfilledQuantity") or 0
+        if qty <= 0 or li.get("requiresShipping") is False:
+            continue
+        weight = ((((li.get("variant") or {}).get("inventoryItem") or {}).get("measurement")) or {}).get("weight") or {}
+        total += (_float(weight.get("value")) or 0) * WEIGHT_TO_LB.get(weight.get("unit"), 0) * qty
+    return round(total, 2)
+
+
+NO_THRESHOLDS = profit.parse_thresholds(None, None)
+
+
+def order_profitability(economics, estimate, thresholds):
+    """Revenue − product cost − estimated shipping, judged against the profit
+    check's thresholds. Without a shipping estimate the profit is before
+    shipping and is not judged, since it would only look better than it is."""
+    if not economics.get("available"):
+        return {"available": False, "reason_text": economics.get("reason_text"), "shipping_estimate": estimate}
+    shipping = estimate.get("cost")
+    judged = profit.evaluate(economics, shipping if shipping is not None else 0, None,
+                             thresholds if shipping is not None else NO_THRESHOLDS)
+    return {
+        "available": True,
+        "currency": economics["currency"],
+        "items_subtotal": economics["items_subtotal"],
+        "shipping_paid": economics["shipping_paid"],
+        "revenue": economics["revenue"],
+        "items_cost": economics["items_cost"],
+        "missing_cost": economics["missing_cost"],
+        "shipping_estimate": estimate,
+        "includes_shipping": shipping is not None,
+        "profit": judged["profit"],
+        "margin_pct": judged["margin_pct"],
+        "below_threshold": judged["below_threshold"],
+        "reasons": judged["reasons"],
+        "thresholds": {"min_amount": thresholds["min_amount"], "min_margin_pct": thresholds["min_margin_pct"]},
+    }
 
 
 def ineligible_reason(order, reserved_keys):

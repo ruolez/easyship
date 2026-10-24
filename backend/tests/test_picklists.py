@@ -74,10 +74,60 @@ class OrderProductsTest(unittest.TestCase):
         ]}}
         self.assertEqual(picklists.order_products(node), [
             {"title": "Glow Serum", "variant": "30 ml", "sku": "GS-30", "barcode": "0812", "qty": 2, "to_ship": 2,
-             "ships": True, "price": "19.50", "image": "https://cdn.shopify.com/g.jpg"},
+             "ships": True, "price": "19.50", "price_original": None, "cost": None, "margin_pct": None,
+             "image": "https://cdn.shopify.com/g.jpg"},
             {"title": "Gift card", "variant": "", "sku": "", "barcode": "", "qty": 1, "to_ship": 1,
-             "ships": False, "price": None, "image": None},
+             "ships": False, "price": None, "price_original": None, "cost": None, "margin_pct": None, "image": None},
         ])
+
+    def test_discounted_price_unit_cost_and_margin(self):
+        def item(original, discounted, cost):
+            return {"title": "Wrap", "currentQuantity": 1, "unfulfilledQuantity": 1, "requiresShipping": True,
+                    "originalUnitPriceSet": {"shopMoney": {"amount": original}},
+                    "discountedUnitPriceAfterAllDiscountsSet": {"shopMoney": {"amount": discounted}},
+                    "variant": {"barcode": "1", "inventoryItem": {"unitCost": cost and {"amount": cost}}}}
+        products = picklists.order_products({"lineItems": {"nodes": [
+            item("20.00", "16.00", "12.00"), item("10.00", "10.00", "12.50"), item("5.00", "0.00", "1.00")]}})
+        self.assertEqual([(p["price"], p["price_original"], p["cost"], p["margin_pct"]) for p in products],
+                         [("16.00", "20.00", "12.00", 25.0), ("10.00", None, "12.50", -25.0),
+                          ("0.00", "5.00", "1.00", None)])
+
+
+class OrderWeightTest(unittest.TestCase):
+    def test_unfulfilled_shipping_items_in_pounds(self):
+        def item(qty, value, unit, ships=True):
+            return {"unfulfilledQuantity": qty, "requiresShipping": ships,
+                    "variant": {"inventoryItem": {"measurement": {"weight": {"value": value, "unit": unit}}}}}
+        lines = [item(2, 8, "OUNCES"), item(1, 1000, "GRAMS"), item(3, 1, "POUNDS", ships=False),
+                 item(0, 5, "POUNDS"), {"unfulfilledQuantity": 1, "variant": None}]
+        self.assertEqual(picklists.order_weight_lb({"lineItems": {"nodes": lines}}), 3.2)
+
+
+class OrderProfitabilityTest(unittest.TestCase):
+    ECON = {"available": True, "reason": None, "reason_text": None, "currency": "USD",
+            "items_subtotal": 100.0, "shipping_paid": 10.0, "revenue": 110.0, "items_cost": 60.0,
+            "line_count": 2, "missing_cost": []}
+    ESTIMATE = {"cost": 15.0, "samples": 4, "tolerance_lb": 0.25, "state": "CT", "weight_lb": 2.0}
+    NO_ESTIMATE = {"cost": None, "samples": 0, "tolerance_lb": None, "state": "CT", "weight_lb": 2.0}
+    THRESHOLDS = {"min_amount": 40.0, "min_margin_pct": None, "enabled": True}
+
+    def test_estimated_shipping_is_deducted_and_checked_against_the_thresholds(self):
+        result = picklists.order_profitability(self.ECON, self.ESTIMATE, self.THRESHOLDS)
+        self.assertEqual({k: result[k] for k in ("profit", "margin_pct", "includes_shipping", "below_threshold", "reasons")},
+                         {"profit": 35.0, "margin_pct": 31.8, "includes_shipping": True, "below_threshold": True,
+                          "reasons": ["Profit $35.00 is below the $40.00 minimum"]})
+
+    def test_without_an_estimate_profit_is_before_shipping_and_not_judged(self):
+        result = picklists.order_profitability(self.ECON, self.NO_ESTIMATE, self.THRESHOLDS)
+        self.assertEqual({k: result[k] for k in ("profit", "includes_shipping", "below_threshold", "reasons", "shipping_estimate")},
+                         {"profit": 50.0, "includes_shipping": False, "below_threshold": False, "reasons": [],
+                          "shipping_estimate": self.NO_ESTIMATE})
+
+    def test_unavailable_economics_say_why(self):
+        econ = {**self.ECON, "available": False, "reason_text": "the order has more than 100 line items"}
+        self.assertEqual(picklists.order_profitability(econ, self.ESTIMATE, self.THRESHOLDS),
+                         {"available": False, "reason_text": "the order has more than 100 line items",
+                          "shipping_estimate": self.ESTIMATE})
 
 
 class AddressesMatchTest(unittest.TestCase):

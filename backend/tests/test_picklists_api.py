@@ -16,6 +16,7 @@ import auth  # noqa: E402
 import backoffice  # noqa: E402
 import picklists  # noqa: E402
 import picklists_api  # noqa: E402
+import shipping_estimate  # noqa: E402
 from shopify_client import ShopifyError  # noqa: E402
 
 STORE = 1
@@ -36,6 +37,22 @@ def node(gid, name, barcode="111", qty=1, financial="PAID", tags=()):
         "lineItems": {"nodes": [{"title": "Apple", "sku": "A", "quantity": qty, "unfulfilledQuantity": qty,
                                  "requiresShipping": True, "variant": {"barcode": barcode}}]},
     }
+
+
+FRAUD_NODE = {
+    "id": "g1", "name": "#1", "createdAt": "2026-10-20T10:00:00Z", "tags": [], "currencyCode": "USD",
+    "currentSubtotalPriceSet": {"shopMoney": {"amount": "40.00"}},
+    "currentShippingPriceSet": {"shopMoney": {"amount": "5.00"}},
+    "customer": {"id": "gid://shopify/Customer/5", "displayName": "Ann", "tags": []},
+    "shippingAddress": {"provinceCode": "CT"},
+    "lineItems": {"pageInfo": {"hasNextPage": False}, "nodes": [{
+        "title": "Wrap", "sku": "W", "quantity": 2, "currentQuantity": 2, "unfulfilledQuantity": 2,
+        "requiresShipping": True,
+        "originalUnitPriceSet": {"shopMoney": {"amount": "20.00"}},
+        "discountedUnitPriceAfterAllDiscountsSet": {"shopMoney": {"amount": "20.00"}},
+        "variant": {"barcode": "111", "inventoryItem": {
+            "unitCost": {"amount": "12.00"}, "measurement": {"weight": {"value": 8, "unit": "OUNCES"}}}}}]},
+}
 
 
 class PicklistsApiTest(unittest.TestCase):
@@ -66,7 +83,15 @@ class PicklistsApiTest(unittest.TestCase):
             (backoffice, "find_items_by_upc", lambda db_id, upcs: {u: ITEM for u in upcs if u == "111"}),
             (backoffice, "create_quotation", self.fake_create_quotation),
             (backoffice, "delete_quotation", self.fake_delete_quotation),
+            (picklists_api, "get_order_fraud", lambda sid, gid: self.fraud_node),
+            (picklists_api, "list_shop_tags", self.fake_shop_tags),
+            (picklists_api, "change_tags", self.fake_change_tags),
+            (shipping_estimate, "estimate_shipping", lambda sid, state, weight: {
+                "cost": 7.5, "samples": 3, "tolerance_lb": 0.1, "state": state, "weight_lb": weight}),
         ]
+        self.fraud_node = FRAUD_NODE
+        self.tag_error = None
+        picklists_api._tag_cache.clear()
         self._orig = [(obj, name, getattr(obj, name)) for obj, name, _ in patches]
         for obj, name, value in patches:
             setattr(obj, name, value)
@@ -114,6 +139,15 @@ class PicklistsApiTest(unittest.TestCase):
             raise backoffice.BackofficeError(self.delete_error)
         self.calls.append(("delete_quotation", db_id, qid, number))
         return True
+
+    def fake_shop_tags(self, store_id, kind):
+        self.calls.append(("shop_tags", store_id, kind))
+        return {"order": ["Wholesale", "rush"], "customer": ["VIP"]}[kind]
+
+    def fake_change_tags(self, store_id, gid, add=(), remove=()):
+        if self.tag_error:
+            raise ShopifyError(self.tag_error)
+        self.calls.append(("change_tags", store_id, gid, list(add), list(remove)))
 
     def body(self, ids, **extra):
         return {"orders": [{"store_id": STORE, "order_id": gid} for gid in ids], **extra}
@@ -262,6 +296,70 @@ class PicklistsApiTest(unittest.TestCase):
         self.picklist["created_at"] -= timedelta(minutes=10)
         stale = self.client.post("/api/picklists/42/cancel").status_code
         self.assertEqual((fresh, stale, self.calls), (409, 200, [("cancel", 42)]))
+
+
+    # ----- order window -----
+
+    def test_order_window_carries_the_profit_and_the_customer_id(self):
+        res = self.client.get("/api/picklists/orders/risk?store_id=1&order_id=g1")
+        data = res.get_json()
+        self.assertEqual(
+            (data["customer"]["id"],
+             {k: data["profit"][k] for k in ("revenue", "items_cost", "includes_shipping", "profit", "margin_pct")},
+             data["profit"]["shipping_estimate"]),
+            ("gid://shopify/Customer/5",
+             {"revenue": 45.0, "items_cost": 24.0, "includes_shipping": True, "profit": 13.5, "margin_pct": 30.0},
+             {"cost": 7.5, "samples": 3, "tolerance_lb": 0.1, "state": "CT", "weight_lb": 1.0}))
+
+    # ----- tags -----
+
+    def test_tag_suggestions_are_read_once_per_store_and_kind(self):
+        got = [self.client.get(f"/api/picklists/tags?store_id=1&kind={kind}").get_json()["tags"]
+               for kind in ("order", "order", "customer")]
+        self.assertEqual((got, [c for c in self.calls if c[0] == "shop_tags"]),
+                         ([["Wholesale", "rush"], ["Wholesale", "rush"], ["VIP"]],
+                          [("shop_tags", 1, "order"), ("shop_tags", 1, "customer")]))
+
+    def test_unknown_tag_kind_is_refused(self):
+        self.assertEqual(self.client.get("/api/picklists/tags?store_id=1&kind=product").status_code, 400)
+
+    def tag_change(self, **body):
+        res = self.client.post("/api/picklists/orders/tags",
+                               json={"store_id": STORE, "order_id": "g1", "kind": "order", **body})
+        return res.status_code, res.get_json()
+
+    def test_order_tags_change_in_shopify_and_the_order_comes_back_with_its_rules(self):
+        self.shopify[STORE][0]["tags"] = ["old", "Keep"]
+        status, data = self.tag_change(add=["rush, Gift ", "keep"], remove=["OLD"])
+        self.assertEqual(
+            (status, data["order"]["tags"], data["order"]["rule_ids"], self.calls[-1]),
+            (200, ["Keep", "rush", "Gift"], [], ("change_tags", STORE, "g1", ["rush", "Gift"], ["old"])))
+
+    def test_customer_tags_go_to_the_orders_customer(self):
+        self.shopify[STORE][0]["customer"] = {"id": "gid://shopify/Customer/5", "displayName": "Ann", "tags": ["vip"]}
+        status, data = self.tag_change(kind="customer", add=["wholesale"])
+        self.assertEqual((status, data["order"]["customer_tags"], self.calls[-1]),
+                         (200, ["vip", "wholesale"], ("change_tags", STORE, "gid://shopify/Customer/5", ["wholesale"], [])))
+
+    def test_new_tags_join_the_suggestions(self):
+        self.client.get("/api/picklists/tags?store_id=1&kind=order")
+        self.tag_change(add=["fragile"])
+        tags = self.client.get("/api/picklists/tags?store_id=1&kind=order").get_json()["tags"]
+        self.assertEqual(tags, ["fragile", "Wholesale", "rush"])
+
+    def test_tag_change_refusals(self):
+        self.shopify[STORE][0]["customer"] = None
+        cases = [({"add": []}, 400), ({"add": ["x"], "kind": "product"}, 400),
+                 ({"add": ["x"], "order_id": "gone"}, 404), ({"add": ["x"], "kind": "customer"}, 400)]
+        self.assertEqual([self.tag_change(**body)[0] for body, _ in cases], [code for _, code in cases])
+        self.assertEqual([c for c in self.calls if c[0] == "change_tags"], [])
+
+    def test_missing_write_scope_is_explained(self):
+        self.tag_error = "Shopify GraphQL error: [{'extensions': {'code': 'ACCESS_DENIED'}}]"
+        status, data = self.tag_change(add=["x"])
+        self.assertEqual((status, data["error"]),
+                         (502, "This store's Shopify token can't change order tags. Add the write_orders and "
+                               "write_customers scopes to the store's app, then try again."))
 
 
 if __name__ == "__main__":

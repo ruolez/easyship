@@ -526,6 +526,7 @@ document.getElementById('pl-refresh').addEventListener('click', loadOrders);
    Next or ← →, and Exclude moves straight on to the next order. Details are
    cached per order and the next one is fetched ahead. */
 let modalOrderKey = null;
+let modalIndex = 0;
 const orderDetails = new Map();
 
 const RECOMMENDATION_TEXT = {
@@ -635,7 +636,7 @@ function orderBody(d) {
   const customer = `<div class="om-strong">${esc(c.name || '—')}</div>
     ${d.email ? `<div>${esc(d.email)}</div>` : ''}${d.phone ? `<div>${esc(d.phone)}</div>` : ''}
     <div class="hint">${[c.since ? `Customer since ${esc(shortDate(c.since))}` : '', c.amount_spent != null ? `spent ${money(c.amount_spent)}` : ''].filter(Boolean).join(' · ')}</div>
-    ${tagsHtml(c.tags || [])}`;
+    <span id="om-ctags">${tagsHtml(c.tags || [])}</span>`;
   const ship = d.shipping_address ? addressLines(d.shipping_address) : '<span class="text-secondary">—</span>';
   const bill = !d.billing_address ? '<span class="text-secondary">—</span>'
     : sameAddress(d.billing_address, d.shipping_address)
@@ -646,8 +647,60 @@ function orderBody(d) {
       <div class="om-stats">${stats.map(([l, v]) => `<div class="om-stat"><div class="om-label">${l}</div><div class="om-value">${v}</div></div>`).join('')}</div>
       <div class="om-cards">${omCard('Customer', customer)}${omCard('Ship to', ship)}${omCard('Bill to', bill)}</div>
       ${riskPanel(d.risk)}
+      ${profitPanel(d.profit)}
     </div>
     ${productsPanel(d.products || [])}`;
+}
+
+/* Profitability, as in Shopify Automation's order window: revenue − product
+   cost − the shipping EasyShip's past labels suggest, against the profit
+   check's thresholds. */
+function estimateText(est) {
+  if (est.cost == null) {
+    if (!est.weight_lb) return 'No estimate — the products have no weight in Shopify';
+    return `No estimate — no EasyShip labels to ${esc(est.state || 'this state')} near ${est.weight_lb} lb in the last 90 days`;
+  }
+  return `Average of ${plural(est.samples, 'EasyShip label')} to ${esc(est.state)} within ±${est.tolerance_lb} lb (${est.weight_lb} lb of products)`;
+}
+
+function profitPanel(p) {
+  if (!p) return '';
+  const head = (extra = '') => `<div class="om-profit-top"><span class="om-label">Profitability</span>${extra}</div>`;
+  if (!p.available) {
+    return `<div class="om-profit">${head()}<div class="text-secondary">Profit can't be worked out: ${esc(p.reason_text || 'unknown reason')}.</div></div>`;
+  }
+  const est = p.shipping_estimate || {};
+  const tone = p.below_threshold || p.profit < 0 ? 'err' : p.includes_shipping ? 'ok' : '';
+  const margin = p.margin_pct != null ? ` · ${pct(p.margin_pct)} margin` : '';
+  const pill = `<span class="om-pill ${tone}">${signedMoney(p.profit)}${margin}${p.includes_shipping ? '' : ' before shipping'}</span>`;
+  const row = (label, value, cls = '', note = '') =>
+    `<div class="profit-row${cls ? ` ${cls}` : ''}"><span>${label}${note ? ` <span class="hint">(${note})</span>` : ''}</span><span class="num">${value}</span></div>`;
+  const missing = p.missing_cost.length;
+  const t = p.thresholds || {};
+  const limits = [t.min_amount != null ? `profit ≥ ${money(t.min_amount)}` : '', t.min_margin_pct != null ? `margin ≥ ${t.min_margin_pct}%` : '']
+    .filter(Boolean).join(' · ');
+  let check = '';
+  if (limits && !p.includes_shipping) check = `<div class="hint">Profit check (${limits}) needs a shipping estimate</div>`;
+  else if (limits && p.reasons.length) check = `<ul class="profit-reasons">${p.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`;
+  else if (limits) check = `<div class="om-profit-ok">${ICONS.ok}<span>Clears the profit check (${limits})</span></div>`;
+  return `<div class="om-profit ${tone}">
+    ${head(pill)}
+    <div class="om-profit-grid">
+      <div class="profit-table">
+        ${row('Products (after discounts)', money(p.items_subtotal))}
+        ${row('+ Shipping paid', money(p.shipping_paid))}
+        ${row('− Product cost', money(p.items_cost), '', missing ? `${missing} without cost, at 90% of price` : '')}
+        ${row('− Est. shipping', est.cost == null ? '—' : money(est.cost))}
+        ${row(p.includes_shipping ? '= Profit' : '= Profit before shipping', signedMoney(p.profit), `total${tone === 'err' ? ' bad' : ''}`)}
+      </div>
+      <div class="om-profit-side">
+        <div class="om-label">Estimated shipping</div>
+        <div class="om-profit-ship">${est.cost == null ? '—' : money(est.cost)}</div>
+        <div class="hint">${estimateText(est)}</div>
+        ${check}
+      </div>
+    </div>
+  </div>`;
 }
 
 /* The order's products beside the details; a long list scrolls on its own
@@ -663,8 +716,11 @@ function productsPanel(products) {
         <div class="om-product-codes">${[p.sku && `SKU ${esc(p.sku)}`, p.barcode ? esc(p.barcode) : p.ships && '<span class="om-nobarcode">No barcode</span>']
           .filter(Boolean).join(' · ')}</div>
         ${!p.ships ? '<div class="hint">No shipping needed</div>' : p.to_ship < p.qty ? `<div class="hint">${p.to_ship} left to ship</div>` : ''}
+        ${p.cost != null
+          ? `<div class="om-product-cost">Cost ${money(p.cost)}${p.margin_pct != null ? ` · <span class="${p.margin_pct < 0 ? 'neg' : p.margin_pct < 15 ? 'low' : 'good'}">${pct(p.margin_pct)} margin</span>` : ''}</div>`
+          : p.ships ? '<div class="om-product-cost low">No cost in Shopify</div>' : ''}
       </div>
-      <div class="om-product-qty"><strong>×${p.qty}</strong><span class="hint">${money(p.price)}</span></div>
+      <div class="om-product-qty"><strong>×${p.qty}</strong><span class="hint">${money(p.price)}</span>${p.price_original ? `<s class="hint">${money(p.price_original)}</s>` : ''}</div>
     </li>`).join('');
   return `<aside class="om-products">
     <div class="om-products-inner">
@@ -683,12 +739,13 @@ async function showOrder(key) {
   }
   const o = list[idx];
   modalOrderKey = key;
+  modalIndex = idx;
   openModal(`
     <div class="om-head">
       <div>
         <div class="om-title">Order ${esc(o.name)}<span id="om-status"></span></div>
         <div class="om-meta">${esc(storeName(o.store_id))} · ${esc(shortDate(o.created_at))} · ${esc(o.customer)} · ${o.units} unit${o.units === 1 ? '' : 's'}
-          ${o.tags.length ? tagsHtml(o.tags) : ''}</div>
+          <span id="om-tags">${tagsHtml(o.tags)}</span></div>
       </div>
       <button class="om-close" onclick="closeModal()" aria-label="Close">${ICONS.close}</button>
     </div>
@@ -697,12 +754,12 @@ async function showOrder(key) {
       <button class="btn btn-outlined btn-small" id="om-prev" ${idx === 0 ? 'disabled' : ''}>${ICONS.prev} Previous</button>
       <span class="om-pos">${idx + 1} of ${list.length}</span>
       <button class="btn btn-outlined btn-small" id="om-next" ${idx === list.length - 1 ? 'disabled' : ''}>Next ${ICONS.next}</button>
-      <span class="om-keys" aria-label="Keyboard shortcuts">
-        <span><kbd>←</kbd><kbd>→</kbd> Previous / Next</span>
-        <span><kbd>E</kbd> ${view === 'pick' ? 'Exclude' : 'Restore'}</span>
-        <span><kbd>Esc</kbd> Close</span>
+      <span class="om-keys" title="← → Previous / Next · E ${view === 'pick' ? 'Exclude' : 'Restore'} · Esc Close" aria-label="Keyboard shortcuts: arrow keys for previous and next, E to ${view === 'pick' ? 'exclude' : 'restore'}, Escape to close">
+        <span><kbd>←</kbd><kbd>→</kbd></span><span><kbd>E</kbd></span><span><kbd>Esc</kbd></span>
       </span>
       <span class="om-spacer"></span>
+      ${tagBoxHtml('order', o.tags)}
+      ${tagBoxHtml('customer', o.customer_tags)}
       ${view === 'pick'
         ? '<button class="btn btn-danger" id="om-move" title="Shortcut: E">Exclude from pick list <kbd>E</kbd></button>'
         : '<button class="btn btn-outlined" id="om-move" title="Shortcut: E">Restore to pick list <kbd>E</kbd></button>'}
@@ -710,6 +767,7 @@ async function showOrder(key) {
   document.getElementById('om-prev').addEventListener('click', () => stepOrder(-1));
   document.getElementById('om-next').addEventListener('click', () => stepOrder(1));
   document.getElementById('om-move').addEventListener('click', () => moveAndAdvance(key));
+  document.querySelectorAll('#modal .tagbox').forEach((box) => wireTagBox(box, key));
   const current = fetchOrderDetail(o);
   if (list[idx + 1]) fetchOrderDetail(list[idx + 1]).catch(() => {}); // ready before Next / Exclude
 
@@ -717,6 +775,9 @@ async function showOrder(key) {
   try {
     const d = await current;
     html = orderBody(d);
+    if (modalOrderKey === key && !d.customer) {
+      document.querySelector('#modal .tagbox[data-kind="customer"]').outerHTML = tagBoxHtml('customer', [], true);
+    }
     if (modalOrderKey === key) {
       document.getElementById('om-status').innerHTML = [d.financial_status, d.fulfillment_status]
         .filter(Boolean).map((v) => `<span class="om-chip">${esc(titleCase(v))}</span>`).join('');
@@ -731,18 +792,25 @@ async function showOrder(key) {
   if (retry) retry.addEventListener('click', () => showOrder(key));
 }
 
+/* Where the open order sits; a tag change can drop it out of the listing,
+   and Previous / Next then go from the gap it left. */
+function modalPosition(list, delta = 1) {
+  const idx = list.findIndex((o) => orderKey(o) === modalOrderKey);
+  if (idx >= 0) return idx;
+  return delta > 0 ? modalIndex - 1 : modalIndex;
+}
+
 function stepOrder(delta) {
   const list = listedOrders();
-  const idx = list.findIndex((o) => orderKey(o) === modalOrderKey);
-  const target = list[idx + delta];
+  const target = list[modalPosition(list, delta) + delta];
   if (target) showOrder(orderKey(target));
 }
 
 /* Exclude (or, in the Excluded view, restore) and go straight to the next order. */
 function moveAndAdvance(key) {
   const before = listedOrders();
-  const idx = before.findIndex((o) => orderKey(o) === key);
-  const name = before[idx] ? before[idx].name : '';
+  const idx = Math.max(modalPosition(before), 0);
+  const name = (orders.find((o) => orderKey(o) === key) || {}).name || '';
   moveOrders([key]);
   render();
   const after = listedOrders();
@@ -752,6 +820,201 @@ function moveAndAdvance(key) {
     return;
   }
   showOrder(orderKey(after[Math.min(idx, after.length - 1)]));
+}
+
+/* ---------- Tag fields in the order window ----------
+   Like Shopify's: the current tags as chips (× removes one), typing suggests
+   the store's tags, Enter / comma / a click adds. Every change is saved to
+   Shopify straight away, one at a time per field, and the order comes back
+   with the rules it now matches. */
+const shopTags = new Map(); // `${store}|${kind}` → Promise<string[]>
+const TAG_SUGGESTIONS = 8;
+
+function loadShopTags(storeId, kind) {
+  const key = `${storeId}|${kind}`;
+  if (!shopTags.has(key)) {
+    const pending = api(`/api/picklists/tags?store_id=${storeId}&kind=${kind}`).then((r) => r.tags);
+    pending.catch(() => shopTags.delete(key)); // tried again on the next focus
+    shopTags.set(key, pending);
+  }
+  return shopTags.get(key);
+}
+
+function rememberShopTag(storeId, kind, tag) {
+  const key = `${storeId}|${kind}`;
+  if (shopTags.has(key)) {
+    shopTags.set(key, shopTags.get(key).then((all) => (all.some((t) => t.toLowerCase() === tag.toLowerCase()) ? all : [tag, ...all])));
+  }
+}
+
+const tagChipHtml = (t, pending = false) => `<span class="tagbox-chip${pending ? ' pending' : ''}" data-tag="${attr(t)}">${esc(t)}<button type="button" class="tagbox-x" aria-label="Remove ${attr(t)}" title="Remove">${ICONS.close}</button></span>`;
+
+function tagBoxHtml(kind, tags, disabled = false) {
+  const label = kind === 'order' ? 'Order tags' : 'Customer tags';
+  return `<div class="tagbox${disabled ? ' disabled' : ''}" data-kind="${kind}">
+    <div class="tagbox-field" title="${disabled ? 'This order has no customer' : label}">
+      <span class="tagbox-label">${label}</span>
+      ${(tags || []).map((t) => tagChipHtml(t)).join('')}
+      <input class="tagbox-input" placeholder="${disabled ? 'No customer' : 'Add…'}" ${disabled ? 'disabled' : ''}
+        autocomplete="off" spellcheck="false" aria-label="Add ${kind} tag" aria-autocomplete="list">
+    </div>
+    <ul class="tagbox-menu" role="listbox" hidden></ul>
+  </div>`;
+}
+
+/* Typed text first as "Add …" when it is new, then the store's tags that
+   start with it, then those that contain it (Shopify's popularity order). */
+function tagOptions(all, have, typed) {
+  const needle = typed.toLowerCase();
+  const free = all.filter((t) => !have.has(t.toLowerCase()));
+  const starts = free.filter((t) => t.toLowerCase().startsWith(needle));
+  const contains = needle ? free.filter((t) => !t.toLowerCase().startsWith(needle) && t.toLowerCase().includes(needle)) : [];
+  const options = [...starts, ...contains].slice(0, TAG_SUGGESTIONS).map((tag) => ({ tag }));
+  const known = have.has(needle) || all.some((t) => t.toLowerCase() === needle);
+  return typed && !known ? [{ tag: typed, isNew: true }, ...options] : options;
+}
+
+function highlightTag(tag, typed) {
+  const at = typed ? tag.toLowerCase().indexOf(typed.toLowerCase()) : -1;
+  if (at < 0) return esc(tag);
+  return `${esc(tag.slice(0, at))}<mark>${esc(tag.slice(at, at + typed.length))}</mark>${esc(tag.slice(at + typed.length))}`;
+}
+
+function wireTagBox(box, key) {
+  const kind = box.dataset.kind;
+  const input = box.querySelector('.tagbox-input');
+  const menu = box.querySelector('.tagbox-menu');
+  const order = () => orders.find((o) => orderKey(o) === key);
+  const saved = () => (kind === 'order' ? order().tags : order().customer_tags) || [];
+  const shown = () => [...box.querySelectorAll('.tagbox-chip')].map((c) => c.dataset.tag);
+  let options = [];
+  let active = 0;
+  let queue = Promise.resolve();
+  let saving = 0;
+  const unsaved = new Set();
+
+  function showChips(tags) {
+    box.querySelectorAll('.tagbox-chip').forEach((c) => c.remove());
+    input.insertAdjacentHTML('beforebegin', tags.map((t) => tagChipHtml(t, unsaved.has(t))).join(''));
+  }
+
+  function closeMenu() {
+    menu.hidden = true;
+    options = [];
+  }
+
+  async function openMenu() {
+    const typed = input.value.trim();
+    let all = [];
+    try { all = await loadShopTags(order().store_id, kind); } catch { /* typing still adds */ }
+    if (document.activeElement !== input || input.value.trim() !== typed) return; // moved on meanwhile
+    options = tagOptions(all, new Set(shown().map((t) => t.toLowerCase())), typed);
+    active = 0;
+    if (!options.length) {
+      closeMenu();
+      return;
+    }
+    menu.innerHTML = options.map((opt, i) => `<li class="tagbox-opt${i === active ? ' active' : ''}" role="option" data-i="${i}">
+      ${opt.isNew ? `<span class="hint">Add</span> “${esc(opt.tag)}”` : highlightTag(opt.tag, typed)}</li>`).join('');
+    menu.hidden = false;
+  }
+
+  function markActive() {
+    menu.querySelectorAll('.tagbox-opt').forEach((li, i) => li.classList.toggle('active', i === active));
+    const li = menu.children[active];
+    if (li) li.scrollIntoView({ block: 'nearest' });
+  }
+
+  function save(change, optimistic) {
+    (change.add || []).forEach((t) => unsaved.add(t));
+    showChips(optimistic);
+    saving += 1;
+    queue = queue.then(async () => {
+      try {
+        const o = order();
+        const res = await api('/api/picklists/orders/tags', {
+          method: 'POST', body: { store_id: o.store_id, order_id: o.id, kind, ...change },
+        });
+        (change.add || []).forEach((t) => rememberShopTag(o.store_id, kind, t));
+        applyOrderUpdate(res.order);
+      } catch (err) {
+        snackbar(err.message, 'error');
+      }
+      (change.add || []).forEach((t) => unsaved.delete(t));
+      saving -= 1;
+      // Redraw from Shopify's answer once nothing else is queued, so later chips don't flicker.
+      if (!saving && modalOrderKey === key && box.isConnected) showChips(saved());
+    });
+  }
+
+  function addTag(raw) {
+    const have = new Set(shown().map((t) => t.toLowerCase()));
+    const tags = raw.split(',').map((t) => t.trim()).filter((t) => t && !have.has(t.toLowerCase()));
+    input.value = '';
+    closeMenu();
+    if (tags.length) save({ add: tags }, [...shown(), ...tags]);
+  }
+
+  if (input.disabled) return;
+  input.addEventListener('focus', openMenu);
+  input.addEventListener('input', () => {
+    if (input.value.includes(',')) addTag(input.value);
+    else openMenu();
+  });
+  input.addEventListener('blur', closeMenu);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!options.length) return;
+      e.preventDefault();
+      active = (active + (e.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+      markActive();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const pick = options[active];
+      if (pick && !menu.hidden) addTag(pick.tag);
+      else if (input.value.trim()) addTag(input.value);
+    } else if (e.key === 'Escape') {
+      if (!menu.hidden) closeMenu();
+      else input.blur();
+    }
+  });
+  menu.addEventListener('mousedown', (e) => {
+    const li = e.target.closest('.tagbox-opt');
+    e.preventDefault(); // keep the input focused
+    if (li) addTag(options[Number(li.dataset.i)].tag);
+  });
+  box.querySelector('.tagbox-field').addEventListener('click', (e) => {
+    const x = e.target.closest('.tagbox-x');
+    if (!x) {
+      input.focus();
+      return;
+    }
+    const tag = x.closest('.tagbox-chip').dataset.tag;
+    save({ remove: [tag] }, shown().filter((t) => t !== tag));
+  });
+}
+
+/* A saved tag change: the list, the cached details and the open window all
+   take the order as Shopify now has it. */
+function applyOrderUpdate(updated) {
+  const key = orderKey(updated);
+  const i = orders.findIndex((o) => orderKey(o) === key);
+  if (i < 0) return;
+  orders[i] = { ...orders[i], ...updated };
+  const detail = orderDetails.get(key);
+  if (detail) {
+    orderDetails.set(key, detail.then((d) => ({
+      ...d, tags: updated.tags, customer: d.customer && { ...d.customer, tags: updated.customer_tags },
+    })));
+  }
+  render();
+  if (modalOrderKey !== key) return;
+  document.getElementById('om-tags').innerHTML = tagsHtml(updated.tags);
+  const ctags = document.getElementById('om-ctags');
+  if (ctags) ctags.innerHTML = tagsHtml(updated.customer_tags);
+  if (!listedOrders().some((o) => orderKey(o) === key)) {
+    snackbar(`${updated.name} no longer fits the rules and filters in use — it leaves this list when you move on`);
+  }
 }
 
 /* ---------- Generate ---------- */

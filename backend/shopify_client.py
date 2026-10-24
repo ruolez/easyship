@@ -381,7 +381,7 @@ fragment PicklistOrder on Order {
   tags
   totalPriceSet { shopMoney { amount } }
   shippingLine { title }
-  customer { displayName tags }
+  customer { id displayName tags }
   shippingAddress { name address1 address2 city provinceCode zip countryCodeV2 }
   billingAddress { address1 address2 city provinceCode zip countryCodeV2 }
   fulfillmentOrders(first: 5) { nodes { status } }
@@ -481,12 +481,17 @@ query orderFraud($id: ID!) {
     email
     phone
     tags
+    currencyCode
     displayFinancialStatus
     displayFulfillmentStatus
     totalPriceSet { shopMoney { amount currencyCode } }
+    currentSubtotalPriceSet { shopMoney { amount } }
+    currentShippingPriceSet { shopMoney { amount } }
+    totalShippingPriceSet { shopMoney { amount } }
     subtotalLineItemsQuantity
     shippingLine { title }
     customer {
+      id
       displayName
       numberOfOrders
       createdAt
@@ -495,17 +500,26 @@ query orderFraud($id: ID!) {
     }
     billingAddress { firstName lastName address1 address2 city provinceCode countryCodeV2 zip phone }
     shippingAddress { firstName lastName address1 address2 city provinceCode countryCodeV2 zip phone }
-    lineItems(first: 50) {
+    lineItems(first: 100) {
+      pageInfo { hasNextPage }
       nodes {
         title
         variantTitle
         sku
+        quantity
         currentQuantity
         unfulfilledQuantity
         requiresShipping
         originalUnitPriceSet { shopMoney { amount } }
+        discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
         image { url(transform: { maxWidth: 96, maxHeight: 96 }) altText }
-        variant { barcode }
+        variant {
+          barcode
+          inventoryItem {
+            unitCost { amount }
+            measurement { weight { unit value } }
+          }
+        }
       }
     }
     transactions(first: 20) {
@@ -535,6 +549,42 @@ def get_order_fraud(store_id, order_gid):
     if not order:
         raise ShopifyError("Order not found")
     return order
+
+
+# Shopify returns at most 250 shop tags; anything else can still be typed.
+SHOP_TAGS_QUERIES = {
+    "order": ("query picklistOrderTags { shop { orderTags(first: 250, sort: POPULAR) { nodes } } }", "orderTags"),
+    "customer": ("query picklistCustomerTags { shop { customerTags(first: 250) { nodes } } }", "customerTags"),
+}
+TAGS_ADD_MUTATION = """
+mutation picklistTagsAdd($id: ID!, $tags: [String!]!) {
+  tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
+}
+"""
+TAGS_REMOVE_MUTATION = """
+mutation picklistTagsRemove($id: ID!, $tags: [String!]!) {
+  tagsRemove(id: $id, tags: $tags) { userErrors { field message } }
+}
+"""
+
+
+def list_shop_tags(store_id, kind):
+    """The store's order or customer tags, most used first where Shopify can sort them."""
+    query, field = SHOP_TAGS_QUERIES[kind]
+    data = _graphql(store_id, query)
+    return list(((data.get("shop") or {}).get(field) or {}).get("nodes") or [])
+
+
+def change_tags(store_id, resource_gid, add=(), remove=()):
+    """Add and remove tags on an order or customer. Needs write_orders /
+    write_customers on the store's token."""
+    for mutation, field, tags in ((TAGS_ADD_MUTATION, "tagsAdd", add), (TAGS_REMOVE_MUTATION, "tagsRemove", remove)):
+        if not tags:
+            continue
+        data = _graphql(store_id, mutation, {"id": resource_gid, "tags": list(tags)})
+        errors = (data.get(field) or {}).get("userErrors") or []
+        if errors:
+            raise ShopifyError("; ".join(e.get("message") or "" for e in errors))
 
 
 # Shopify builds tracking links only for carrier names spelled exactly as on
