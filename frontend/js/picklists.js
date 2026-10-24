@@ -1318,6 +1318,7 @@ function showCreated(res, customerName, repName) {
       </div>
       <div class="gen-done-stats">${plural(t.orders, 'order')} · ${plural(t.units, 'unit')} · ${plural(t.lines, 'product')}</div>
       ${res.excluded.length ? `<div class="hint">Left out: ${res.excluded.map((e) => esc(e.name)).join(', ')}</div>` : ''}
+      ${taggingHtml(res.tagging, res.id)}
     </div>
     <div class="om-foot"><span class="om-spacer"></span>
       <button class="btn btn-outlined" id="gen-view">View pick list</button>
@@ -1361,10 +1362,11 @@ async function loadHistory() {
     <td class="num">${p.order_count}</td>
     <td class="num">${p.unit_count}</td>
     <td class="num">${p.line_count}</td>
-    <td>${STATUS_CHIP[p.status] || esc(p.status)}${p.cancelled_at ? `<div class="hint">${esc(p.cancelled_at)}</div>` : ''}</td>
+    <td>${STATUS_CHIP[p.status] || esc(p.status)}${p.cancelled_at ? `<div class="hint">${esc(p.cancelled_at)}</div>` : ''}
+      ${p.tag_failed ? `<div><span class="chip static err" title="Open the pick list to see why and retry">${p.status === 'cancelled' ? 'Tag left on' : 'Tag missing on'} ${plural(p.tag_failed, 'order')}</span></div>` : ''}</td>
     <td>
       <button class="btn btn-text btn-small" data-view="${p.id}">View</button>
-      ${p.status !== 'cancelled' ? `<button class="btn btn-danger btn-small" data-cancel="${p.id}" data-number="${esc(p.quotation_number || '')}">Cancel</button>` : ''}
+      ${p.status !== 'cancelled' ? `<button class="btn btn-danger btn-small" data-cancel="${p.id}" data-number="${attr(p.quotation_number || '')}" data-tag="${attr(p.shopify_tag || '')}">Cancel</button>` : ''}
     </td>
   </tr>`).join('');
 }
@@ -1373,7 +1375,7 @@ document.getElementById('pl-history').addEventListener('click', (e) => {
   const view = e.target.closest('[data-view]');
   if (view) viewPicklist(Number(view.dataset.view));
   const cancel = e.target.closest('[data-cancel]');
-  if (cancel) confirmCancel(Number(cancel.dataset.cancel), cancel.dataset.number);
+  if (cancel) confirmCancel(Number(cancel.dataset.cancel), cancel.dataset.number, cancel.dataset.tag);
 });
 
 async function viewPicklist(id) {
@@ -1387,8 +1389,9 @@ async function viewPicklist(id) {
     return;
   }
   openModal(`
-    <h3>Pick list #${p.id} ${STATUS_CHIP[p.status] || ''}</h3>
-    <div class="hint mb-16">Quotation ${esc(p.quotation_number || '—')} · ${esc(p.customer_name || '')} · ${esc(p.sales_rep_name || '')} · ${esc(p.created_at)} by ${esc(p.created_by || '')}</div>
+    <h3 data-detail="${p.id}">Pick list #${p.id} ${STATUS_CHIP[p.status] || ''}</h3>
+    <div class="hint mb-16">Quotation ${esc(p.quotation_number || '—')} · ${esc(p.customer_name || '')} · ${esc(p.sales_rep_name || '')} · ${esc(p.created_at)} by ${esc(p.created_by || '')}${p.shopify_tag ? ` · Shopify tag <strong>${esc(p.shopify_tag)}</strong>` : ''}</div>
+    ${p.tag_failed ? `<div class="mb-16">${taggingHtml(detailTagging(p), p.id)}</div>` : ''}
     <h4 class="mb-8">Products (${p.lines.length})</h4>
     <div class="pl-preview-lines mb-16"><table>
       <thead><tr><th>Barcode</th><th>Product</th><th>SKU</th><th class="num">Qty</th></tr></thead>
@@ -1396,16 +1399,16 @@ async function viewPicklist(id) {
     </table></div>
     <h4 class="mb-8">Orders (${p.orders.length})</h4>
     <div class="pl-preview-lines"><table>
-      <thead><tr><th>Order</th><th>Store</th><th>Customer</th><th>State</th><th class="num">Units</th></tr></thead>
-      <tbody>${p.orders.map((o) => `<tr><td>${esc(o.order_name)}</td><td>${esc(o.store_name || '')}</td><td>${esc(o.customer_name || '')}</td><td>${esc(o.ship_state || '')}</td><td class="num">${o.units}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>Order</th><th>Store</th><th>Customer</th><th>State</th><th class="num">Units</th>${p.shopify_tag ? '<th>Shopify tag</th>' : ''}</tr></thead>
+      <tbody>${p.orders.map((o) => `<tr><td>${esc(o.order_name)}</td><td>${esc(o.store_name || '')}</td><td>${esc(o.customer_name || '')}</td><td>${esc(o.ship_state || '')}</td><td class="num">${o.units}</td>${p.shopify_tag ? `<td>${tagStateHtml(o)}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div>
     <div class="actions"><button class="btn btn-text" onclick="closeModal()">Close</button></div>`, 'wide');
 }
 
-function confirmCancel(id, number) {
+function confirmCancel(id, number, tag) {
   openModal(`
     <h3>Cancel pick list #${id}?</h3>
-    <p>${number ? `Quotation <strong>${esc(number)}</strong> and its lines will be <strong>deleted from BackOffice</strong>. ` : ''}Its orders become available for a new pick list again.</p>
+    <p>${number ? `Quotation <strong>${esc(number)}</strong> and its lines will be <strong>deleted from BackOffice</strong>. ` : ''}${tag ? `The tag <strong>${esc(tag)}</strong> is removed from its Shopify orders. ` : ''}Its orders become available for a new pick list again.</p>
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Keep it</button>
       <button class="btn btn-danger" id="m-cancel-confirm">Cancel pick list</button>
@@ -1414,15 +1417,92 @@ function confirmCancel(id, number) {
     e.target.disabled = true;
     try {
       const res = await api(`/api/picklists/${id}/cancel`, { method: 'POST' });
-      closeModal();
-      snackbar(res.quotation_deleted ? `Pick list #${id} cancelled — quotation deleted` : `Pick list #${id} cancelled`, 'success');
       loadHistory();
       loadOrders();
+      const t = res.tagging;
+      const done = `Pick list #${id} cancelled${res.quotation_deleted ? ' — quotation deleted' : ''}`;
+      if (t && (t.error || t.failed.length)) {
+        // The cancel itself went through; what is left is the tag on some orders.
+        openModal(`<h3>${esc(done)}</h3>${taggingHtml(t, id)}
+          <div class="actions"><button class="btn btn-primary" onclick="closeModal()">Close</button></div>`);
+        return;
+      }
+      closeModal();
+      snackbar(t ? `${done}, tag removed from ${plural(t.done, 'order')}` : done, 'success');
     } catch (err) {
       e.target.disabled = false;
       snackbar(err.message, 'error');
     }
   });
 }
+
+/* ---------- Shopify tag "picklist <quotation number>" ----------
+   Added to every order when a pick list is created, removed when it is
+   cancelled. Orders Shopify refused are listed with the reason and a Retry. */
+const TAG_STATE = {
+  tagged: ['ok', 'Tagged'],
+  pending: ['warn', 'Waiting'],
+  failed: ['err', 'Not tagged'],
+  removed: ['', 'Removed'],
+  remove_failed: ['err', 'Still tagged'],
+};
+
+function tagStateHtml(o) {
+  if (!o.tag_state) return '<span class="text-secondary">—</span>';
+  const [tone, text] = TAG_STATE[o.tag_state] || ['', o.tag_state];
+  return `<span class="chip static ${tone}"${o.tag_error ? ` title="${attr(o.tag_error)}"` : ''}>${text}</span>`
+    + (o.tag_error ? `<div class="hint">${esc(o.tag_error)}</div>` : '');
+}
+
+/* The detail view's orders as a tag pass result, for the failure panel. */
+function detailTagging(p) {
+  const bad = p.orders.filter((o) => o.tag_state === 'failed' || o.tag_state === 'remove_failed');
+  return {
+    tag: p.shopify_tag, mode: p.status === 'cancelled' ? 'remove' : 'add', done: 0, error: null,
+    failed: bad.map((o) => ({ order_name: o.order_name, store_name: o.store_name, error: o.tag_error || 'Unknown error' })),
+  };
+}
+
+function taggingHtml(t, picklistId, retried = false) {
+  if (!t) return '';
+  const adding = t.mode === 'add';
+  if (!t.error && !t.failed.length) {
+    // A retry only touches the orders that were left, so it speaks for the whole list.
+    const text = retried
+      ? `Tag <strong>${esc(t.tag)}</strong> ${adding ? 'is now on' : 'is now off'} every order`
+      : adding
+        ? `Tagged ${plural(t.done, 'Shopify order')} <strong>${esc(t.tag)}</strong>`
+        : `Tag <strong>${esc(t.tag)}</strong> removed from ${plural(t.done, 'Shopify order')}`;
+    return `<div class="pl-tagging ok">${ICONS.ok}<span>${text}</span></div>`;
+  }
+  const head = t.error
+    ? esc(t.error)
+    : `Tag <strong>${esc(t.tag)}</strong> couldn't be ${adding ? 'added to' : 'removed from'} ${plural(t.failed.length, 'order')}${t.done ? ` · ${t.done} done` : ''}`;
+  return `<div class="pl-tagging err">${ICONS.warn}<div class="pl-tagging-body">
+    <div class="pl-tagging-head">${head}</div>
+    ${t.failed.length ? `<ul>${t.failed.map((f) => `<li><strong>${esc(f.order_name)}</strong>${f.store_name ? ` · ${esc(f.store_name)}` : ''} — ${esc(f.error)}</li>`).join('')}</ul>` : ''}
+    <div class="pl-tagging-foot"><button class="btn btn-outlined btn-small" data-tag-retry="${picklistId}">Retry</button>
+      <span class="hint">${adding ? 'The pick list and quotation are fine; only the tag is missing.' : 'The pick list is cancelled; only the tag is left on.'}</span></div>
+  </div></div>`;
+}
+
+document.getElementById('modal').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-tag-retry]');
+  if (!btn) return;
+  const id = Number(btn.dataset.tagRetry);
+  const panel = btn.closest('.pl-tagging');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Retrying…';
+  try {
+    const res = await api(`/api/picklists/${id}/tags/retry`, { method: 'POST' });
+    if (document.querySelector('#modal [data-detail]')) viewPicklist(id); // the order rows show the new states
+    else panel.outerHTML = taggingHtml(res, id, true);
+    if (document.getElementById('tab-history').style.display !== 'none') loadHistory();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+    snackbar(err.message, 'error');
+  }
+});
 
 loadStores();

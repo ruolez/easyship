@@ -244,6 +244,21 @@ def number_prefix(when, tag):
     return f"{when:%m%d%Y}{tag}"
 
 
+def shopify_tag(quotation_number):
+    """The tag every order of a pick list carries in Shopify while the list is live."""
+    return f"picklist {quotation_number}"
+
+
+# Which orders a tag pass works on. Adding retries what is not on yet; removing
+# touches every order that may carry the tag (a failed add may still have landed).
+TAG_TARGET_STATES = {"add": ("pending", "failed"), "remove": ("pending", "tagged", "failed", "remove_failed")}
+TAG_RESULT_STATES = {"add": ("tagged", "failed"), "remove": ("removed", "remove_failed")}
+
+
+def tag_targets(rows, mode):
+    return [r for r in rows if r["tag_state"] in TAG_TARGET_STATES[mode]]
+
+
 # ---------- Postgres ----------
 
 def active_order_keys(store_ids):
@@ -302,6 +317,28 @@ def activate(picklist_id, quotation_id, quotation_number, customer_name):
     )
 
 
+def start_tagging(picklist_id, tag):
+    """Remember the pick list's tag and mark every order as waiting for it."""
+    db.execute("UPDATE picklists SET shopify_tag = %s WHERE id = %s", (tag, picklist_id))
+    db.execute("UPDATE picklist_orders SET tag_state = 'pending', tag_error = NULL WHERE picklist_id = %s",
+               (picklist_id,))
+
+
+def tag_rows(picklist_id):
+    return db.query(
+        """SELECT o.id, o.store_id, s.name AS store_name, o.order_gid, o.order_name, o.tag_state, o.tag_error
+           FROM picklist_orders o LEFT JOIN shopify_stores s ON s.id = o.store_id
+           WHERE o.picklist_id = %s ORDER BY o.id""",
+        (picklist_id,),
+    ) or []
+
+
+def record_tag_results(results):
+    """[(picklist_orders.id, tag_state, error or None)]"""
+    for row_id, state, error in results:
+        db.execute("UPDATE picklist_orders SET tag_state = %s, tag_error = %s WHERE id = %s", (state, error, row_id))
+
+
 def release(picklist_id):
     """Drop a reservation whose quotation could not be created."""
     db.execute("DELETE FROM picklists WHERE id = %s AND status = 'creating'", (picklist_id,))
@@ -329,7 +366,9 @@ def get_picklist(picklist_id):
 
 def list_picklists(limit=200):
     return db.query(
-        """SELECT p.*, u.username AS created_by_name
+        """SELECT p.*, u.username AS created_by_name,
+                  (SELECT COUNT(*) FROM picklist_orders o
+                    WHERE o.picklist_id = p.id AND o.tag_state IN ('failed', 'remove_failed')) AS tag_failed
            FROM picklists p LEFT JOIN users u ON u.id = p.created_by
            ORDER BY p.id DESC LIMIT %s""",
         (limit,),
@@ -339,7 +378,7 @@ def list_picklists(limit=200):
 def picklist_detail(picklist_id):
     orders = db.query(
         """SELECT o.store_id, s.name AS store_name, o.order_gid, o.order_name, o.customer_name,
-                  o.ship_state, o.units
+                  o.ship_state, o.units, o.tag_state, o.tag_error
            FROM picklist_orders o LEFT JOIN shopify_stores s ON s.id = o.store_id
            WHERE o.picklist_id = %s ORDER BY o.id""",
         (picklist_id,),

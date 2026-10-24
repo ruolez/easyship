@@ -1970,6 +1970,17 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .gen-status .ico { flex: none; width: 16px; height: 16px; color: var(--success); }
 .gen-status strong { font-weight: 650; }
 
+/* Shopify tag outcome of a pick list (Generate result, cancel, detail) */
+.pl-tagging { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 10px 12px; border-radius: 8px; font-size: 13px; text-align: left; }
+.pl-tagging > .ico { flex: none; width: 16px; height: 16px; margin-top: 1px; }
+.pl-tagging.ok { background: var(--success-light); color: var(--success); }
+.pl-tagging.err { background: var(--error-light); color: var(--on-surface); border: 1px solid rgba(220, 38, 38, 0.25); }
+.pl-tagging.err > .ico { color: var(--error); }
+.pl-tagging-body { flex: 1; min-width: 0; }
+.pl-tagging-head { font-weight: 600; }
+.pl-tagging ul { margin: 6px 0 8px 18px; padding: 0; max-height: 160px; overflow-y: auto; overflow-wrap: anywhere; }
+.pl-tagging li + li { margin-top: 2px; }
+.pl-tagging-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .gen-done { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 30px 28px 22px; text-align: center; }
 .gen-done-icon {
   display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; margin-bottom: 6px;

@@ -24,6 +24,9 @@ SECTION = "picklists"
 # A pick list still `creating` this long after it started never finished.
 STALE_CREATING = timedelta(minutes=5)
 STORE_WORKERS = 8
+# Shopify throttles per store; a few writes at a time keep big lists quick
+# without running into it (and _graphql backs off when it does).
+TAG_WORKERS = 4
 
 log = logging.getLogger(__name__)
 
@@ -167,6 +170,14 @@ def order_fraud():
     })
 
 
+def _tag_error_text(error, kind):
+    text = str(error)
+    if "ACCESS_DENIED" in text or "access denied" in text.lower():
+        return (f"This store's Shopify token can't change {kind} tags. Add the write_orders and "
+                "write_customers scopes to the store's app, then try again.")
+    return text
+
+
 TAG_KINDS = ("order", "customer")
 TAG_CACHE_SECONDS = 300
 MAX_TAG_LENGTH = 255
@@ -239,10 +250,7 @@ def change_order_tags():
     try:
         change_tags(store_id, owner["id"], add=add, remove=remove)
     except ShopifyError as e:
-        if "ACCESS_DENIED" in str(e) or "access denied" in str(e).lower():
-            return api_error(f"This store's Shopify token can't change {kind} tags. Add the write_orders and "
-                             "write_customers scopes to the store's app, then try again.", 502)
-        return api_error(str(e), 502)
+        return api_error(_tag_error_text(e, kind), 502)
     owner["tags"] = [t for t in current if t not in remove] + add
     with _tag_lock:
         cached = _tag_cache.get((store_id, kind))
@@ -412,7 +420,51 @@ def create():
     picklists.activate(picklist_id, quotation_id, number, business_name or customer["name"])
     audit("picklist.create", {"picklist": picklist_id, "quotation": number, "orders": totals["orders"],
                               "units": totals["units"], "customer_id": customer_id, "sales_rep_id": rep_id})
-    return jsonify({"id": picklist_id, "quotation_number": number, "totals": totals, "excluded": excluded})
+    tag = picklists.shopify_tag(number)
+    try:
+        picklists.start_tagging(picklist_id, tag)
+        tagging = _write_picklist_tag(picklist_id, tag, "add")
+    except Exception as e:  # noqa: BLE001 — the pick list and quotation exist; only the tags are missing
+        log.exception("Tagging pick list %s failed", picklist_id)
+        tagging = _tagging_result(tag, "add", 0, [], f"Could not tag the orders: {e}")
+    return jsonify({"id": picklist_id, "quotation_number": number, "totals": totals, "excluded": excluded,
+                    "tagging": tagging})
+
+
+def _tagging_result(tag, mode, done, failed, error=None):
+    return {"tag": tag, "mode": mode, "done": done, "failed": failed, "error": error}
+
+
+def _write_picklist_tag(picklist_id, tag, mode):
+    """Add (mode "add") or remove the pick list's Shopify tag on its orders.
+    Every order's outcome is recorded on its picklist_orders row, and one
+    order failing never stops the others."""
+    rows = picklists.tag_targets(picklists.tag_rows(picklist_id), mode)
+    app = current_app._get_current_object()
+    change = {"add": [tag]} if mode == "add" else {"remove": [tag]}
+
+    def run(row):
+        with app.app_context():
+            try:
+                change_tags(row["store_id"], row["order_gid"], **change)
+                return row, None
+            except ShopifyError as e:
+                return row, _tag_error_text(e, "order")
+            except Exception as e:  # noqa: BLE001 — recorded on the order, shown to the user
+                log.exception("Tagging order %s failed", row["order_gid"])
+                return row, f"Unexpected error: {e}"
+
+    results = []
+    if rows:
+        with ThreadPoolExecutor(max_workers=min(TAG_WORKERS, len(rows))) as pool:
+            results = list(pool.map(run, rows))
+    ok, bad = picklists.TAG_RESULT_STATES[mode]
+    picklists.record_tag_results([(row["id"], bad if error else ok, error) for row, error in results])
+    failed = [{"order_name": row["order_name"], "store_name": row["store_name"], "error": error}
+              for row, error in results if error]
+    audit("picklist.tags", {"picklist": picklist_id, "tag": tag, "mode": mode,
+                            "done": len(results) - len(failed), "failed": [f["order_name"] for f in failed]})
+    return _tagging_result(tag, mode, len(results) - len(failed), failed)
 
 
 def _row(p):
@@ -430,6 +482,8 @@ def _row(p):
         "created_by": p.get("created_by_name"),
         "created_at": central_time(p["created_at"]),
         "cancelled_at": central_time(p["cancelled_at"]),
+        "shopify_tag": p.get("shopify_tag"),
+        "tag_failed": p.get("tag_failed") or 0,
     }
 
 
@@ -469,4 +523,27 @@ def cancel(picklist_id):
     picklists.cancel(picklist_id, session["user_id"])
     audit("picklist.cancel", {"picklist": picklist_id, "quotation": p["quotation_number"],
                               "quotation_deleted": deleted})
-    return jsonify({"ok": True, "quotation_deleted": deleted})
+    tagging = None
+    if p.get("shopify_tag"):
+        try:
+            tagging = _write_picklist_tag(picklist_id, p["shopify_tag"], "remove")
+        except Exception as e:  # noqa: BLE001 — the cancel is done; only the tags are left behind
+            log.exception("Removing the tag of pick list %s failed", picklist_id)
+            tagging = _tagging_result(p["shopify_tag"], "remove", 0, [], f"Could not remove the tag: {e}")
+    return jsonify({"ok": True, "quotation_deleted": deleted, "tagging": tagging})
+
+
+@bp.post("/<int:picklist_id>/tags/retry")
+@section_required(SECTION)
+def retry_tags(picklist_id):
+    """Finish what a tag pass left undone: add the tag where it is missing on a
+    live pick list, remove it where it is left on a cancelled one."""
+    p = picklists.get_picklist(picklist_id)
+    if not p:
+        return api_error("Pick list not found", 404)
+    if not p.get("shopify_tag"):
+        return api_error("This pick list has no Shopify tag")
+    if p["status"] == "creating":
+        return api_error("This pick list is still being created", 409)
+    mode = "add" if p["status"] == "active" else "remove"
+    return jsonify(_write_picklist_tag(picklist_id, p["shopify_tag"], mode))

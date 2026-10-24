@@ -86,11 +86,16 @@ class PicklistsApiTest(unittest.TestCase):
             (picklists_api, "get_order_fraud", lambda sid, gid: self.fraud_node),
             (picklists_api, "list_shop_tags", self.fake_shop_tags),
             (picklists_api, "change_tags", self.fake_change_tags),
+            (picklists, "start_tagging", self.fake_start_tagging),
+            (picklists, "tag_rows", lambda pid: [dict(r) for r in self.tag_db.values()]),
+            (picklists, "record_tag_results", self.fake_record_tag_results),
             (shipping_estimate, "estimate_shipping", lambda sid, state, weight: {
                 "cost": 7.5, "samples": 3, "tolerance_lb": 0.1, "state": state, "weight_lb": weight}),
         ]
         self.fraud_node = FRAUD_NODE
         self.tag_error = None
+        self.tag_fail = {}  # order gid -> Shopify error for that order
+        self.tag_db = {}  # picklist_orders.id -> row
         picklists_api._tag_cache.clear()
         self._orig = [(obj, name, getattr(obj, name)) for obj, name, _ in patches]
         for obj, name, value in patches:
@@ -125,7 +130,20 @@ class PicklistsApiTest(unittest.TestCase):
         if taken:
             raise picklists.ReservationConflict(taken)
         self.calls.append(("reserve", [o["name"] for o in orders], [(g["barcode"], g["qty"]) for g in lines]))
+        self.reserved_orders = orders
         return 42
+
+    def fake_start_tagging(self, picklist_id, tag):
+        self.tag_db = {i: {"id": i, "store_id": o["store_id"], "store_name": "Main", "order_gid": o["id"],
+                           "order_name": o["name"], "tag_state": "pending", "tag_error": None}
+                       for i, o in enumerate(self.reserved_orders, 1)}
+
+    def fake_record_tag_results(self, results):
+        for row_id, state, error in results:
+            self.tag_db[row_id].update(tag_state=state, tag_error=error)
+
+    def tag_states(self):
+        return [(r["order_name"], r["tag_state"], r["tag_error"]) for r in self.tag_db.values()]
 
     def fake_create_quotation(self, db_id, **kw):
         if self.quotation_error:
@@ -145,8 +163,8 @@ class PicklistsApiTest(unittest.TestCase):
         return {"order": ["Wholesale", "rush"], "customer": ["VIP"]}[kind]
 
     def fake_change_tags(self, store_id, gid, add=(), remove=()):
-        if self.tag_error:
-            raise ShopifyError(self.tag_error)
+        if self.tag_error or gid in self.tag_fail:
+            raise ShopifyError(self.tag_error or self.tag_fail[gid])
         self.calls.append(("change_tags", store_id, gid, list(add), list(remove)))
 
     def body(self, ids, **extra):
@@ -250,6 +268,7 @@ class PicklistsApiTest(unittest.TestCase):
             ("reserve", ["#1"], [("111", 1)]),
             ("quotation", "PL 42", 2, "19", [(1010, 1)]),
             ("activate", 42, 555, "10222026191", "HOUSE ACCOUNT"),
+            ("change_tags", STORE, "g1", ["picklist 10222026191"], []),
         ]))
 
     def test_create_refuses_orders_taken_in_the_meantime(self):
@@ -360,6 +379,91 @@ class PicklistsApiTest(unittest.TestCase):
         self.assertEqual((status, data["error"]),
                          (502, "This store's Shopify token can't change order tags. Add the write_orders and "
                                "write_customers scopes to the store's app, then try again."))
+
+
+    # ----- Shopify tag "picklist <quotation number>" -----
+
+    def create(self, ids):
+        res = self.client.post("/api/picklists", json=self.body(ids, customer_id=3, sales_rep_id=7))
+        return res.status_code, res.get_json()
+
+    def test_create_tags_every_order_and_says_so(self):
+        self.shopify[STORE].append(node("g4", "#4"))
+        status, data = self.create(["g1", "g4"])
+        self.assertEqual((status, data["tagging"], self.tag_states()), (200,
+            {"tag": "picklist 10222026191", "mode": "add", "done": 2, "failed": [], "error": None},
+            [("#1", "tagged", None), ("#4", "tagged", None)]))
+
+    def test_an_order_shopify_refuses_is_reported_and_the_rest_still_get_tagged(self):
+        self.shopify[STORE].append(node("g4", "#4"))
+        self.tag_fail = {"g1": "Order does not exist"}
+        status, data = self.create(["g1", "g4"])
+        self.assertEqual((status, data["quotation_number"], data["tagging"]["done"], data["tagging"]["failed"],
+                          self.tag_states()), (200, "10222026191", 1,
+            [{"order_name": "#1", "store_name": "Main", "error": "Order does not exist"}],
+            [("#1", "failed", "Order does not exist"), ("#4", "tagged", None)]))
+
+    def test_missing_write_scope_is_explained_on_every_order(self):
+        self.tag_error = "Shopify GraphQL error: [{'extensions': {'code': 'ACCESS_DENIED'}}]"
+        _, data = self.create(["g1"])
+        self.assertEqual(data["tagging"]["failed"][0]["error"],
+                         "This store's Shopify token can't change order tags. Add the write_orders and "
+                         "write_customers scopes to the store's app, then try again.")
+
+    def test_tagging_that_breaks_down_never_undoes_the_pick_list(self):
+        def boom(picklist_id, tag):
+            raise RuntimeError("database went away")
+        picklists.start_tagging = boom
+        status, data = self.create(["g1"])
+        self.assertEqual((status, data["id"], data["tagging"]["error"], [c[0] for c in self.calls]),
+                         (200, 42, "Could not tag the orders: database went away", ["reserve", "quotation", "activate"]))
+
+    def test_retry_adds_the_tag_only_where_it_is_missing(self):
+        self.shopify[STORE].append(node("g4", "#4"))
+        self.tag_fail = {"g1": "Shopify unavailable"}
+        self.create(["g1", "g4"])
+        self.tag_fail = {}
+        self.picklist = self.active_picklist(shopify_tag="picklist 10222026191")
+        before = len(self.calls)
+        res = self.client.post("/api/picklists/42/tags/retry").get_json()
+        self.assertEqual((res["done"], res["failed"], self.calls[before:], self.tag_states()), (1, [],
+            [("change_tags", STORE, "g1", ["picklist 10222026191"], [])],
+            [("#1", "tagged", None), ("#4", "tagged", None)]))
+
+    def test_cancel_removes_the_tag_after_the_quotation_is_gone(self):
+        self.create(["g1"])
+        self.picklist = self.active_picklist(shopify_tag="picklist 10222026191")
+        before = len(self.calls)
+        res = self.client.post("/api/picklists/42/cancel").get_json()
+        self.assertEqual((res["tagging"]["done"], self.calls[before:], self.tag_states()), (1, [
+            ("delete_quotation", DB_ID, 555, "10222026191"), ("cancel", 42),
+            ("change_tags", STORE, "g1", [], ["picklist 10222026191"])], [("#1", "removed", None)]))
+
+    def test_a_tag_that_cannot_be_removed_leaves_the_cancel_done_and_can_be_retried(self):
+        self.create(["g1"])
+        self.picklist = self.active_picklist(shopify_tag="picklist 10222026191")
+        self.tag_fail = {"g1": "Shopify unavailable"}
+        res = self.client.post("/api/picklists/42/cancel")
+        cancelled = (res.status_code, res.get_json()["tagging"]["failed"][0]["error"], self.tag_states())
+        self.tag_fail = {}
+        self.picklist = self.active_picklist(status="cancelled", shopify_tag="picklist 10222026191")
+        retried = self.client.post("/api/picklists/42/tags/retry").get_json()["done"]
+        self.assertEqual((cancelled, retried, self.tag_states()), (
+            (200, "Shopify unavailable", [("#1", "remove_failed", "Shopify unavailable")]), 1, [("#1", "removed", None)]))
+
+    def test_pick_lists_from_before_tagging_cancel_without_touching_shopify(self):
+        self.picklist = self.active_picklist(shopify_tag=None)
+        res = self.client.post("/api/picklists/42/cancel").get_json()
+        self.assertEqual((res["tagging"], [c[0] for c in self.calls]), (None, ["delete_quotation", "cancel"]))
+
+    def test_retry_refusals(self):
+        self.picklist = None
+        missing = self.client.post("/api/picklists/42/tags/retry").status_code
+        self.picklist = self.active_picklist(shopify_tag=None)
+        untagged = self.client.post("/api/picklists/42/tags/retry").status_code
+        self.picklist = self.active_picklist(status="creating", shopify_tag="picklist 1")
+        creating = self.client.post("/api/picklists/42/tags/retry").status_code
+        self.assertEqual((missing, untagged, creating), (404, 400, 409))
 
 
 if __name__ == "__main__":

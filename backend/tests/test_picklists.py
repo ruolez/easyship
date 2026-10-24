@@ -208,5 +208,24 @@ class NumberPrefixTest(unittest.TestCase):
         self.assertEqual(picklists.number_prefix(datetime(2026, 1, 2), "19"), "0102202619")
 
 
+class ShopifyTagTest(unittest.TestCase):
+    def test_tag_names_the_quotation(self):
+        self.assertEqual(picklists.shopify_tag("10222026191"), "picklist 10222026191")
+
+
+class TagTargetsTest(unittest.TestCase):
+    STATES = (None, "pending", "tagged", "failed", "removed", "remove_failed")
+
+    def rows(self):
+        return [{"id": i, "tag_state": state} for i, state in enumerate(self.STATES)]
+
+    def test_adding_retries_what_is_not_tagged_yet(self):
+        self.assertEqual([r["tag_state"] for r in picklists.tag_targets(self.rows(), "add")], ["pending", "failed"])
+
+    def test_removing_touches_every_order_that_may_carry_the_tag(self):
+        self.assertEqual([r["tag_state"] for r in picklists.tag_targets(self.rows(), "remove")],
+                         ["pending", "tagged", "failed", "remove_failed"])
+
+
 if __name__ == "__main__":
     unittest.main()
