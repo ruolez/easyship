@@ -12,7 +12,7 @@ import providers
 import tag_rules
 from auth import admin_required, login_required, sanitize_sections
 from providers.base import ProviderError
-from util import api_error, audit, central_time
+from util import CENTRAL, api_error, audit, central_time
 
 bp = Blueprint("settings", __name__, url_prefix="/api")
 
@@ -172,6 +172,7 @@ def put_settings():
     error = _profit_settings_error(data) or _picklist_settings_error(data)
     if error:
         return api_error(error)
+    changed = []
     for key, value in data.items():
         if key not in keys:
             continue
@@ -192,8 +193,11 @@ def put_settings():
         if key == profit.SETTING_PASSWORD and (value or "").strip():
             # Only ever compared, never replayed — so it is stored hashed.
             value = generate_password_hash(value.strip())
-        db.set_setting(key, (value or "").strip())
-    audit("settings.update", {"keys": [k for k in data if k in keys]})
+        value = (value or "").strip()
+        if value != (db.get_setting(key) or ""):
+            changed.append(key)
+        db.set_setting(key, value)
+    audit("settings.update", {"keys": changed})
     return jsonify({"ok": True})
 
 
@@ -221,40 +225,95 @@ AUDIT_PAGE_DEFAULT = 100
 AUDIT_PAGE_MAX = 500
 
 
+def _like(text):
+    """A substring pattern for ILIKE with the user's own % and _ taken literally."""
+    return "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def _audit_shipments(rows):
+    """Order, carrier and tracking of every shipment the page's rows point at,
+    so a "label.buy" reads as an order rather than a list of ids."""
+    ids = set()
+    for r in rows:
+        detail = r["detail"] or {}
+        ids.update(i for i in detail.get("shipment_ids") or [] if isinstance(i, int))
+        if isinstance(detail.get("shipment_id"), int):
+            ids.add(detail["shipment_id"])
+    if not ids:
+        return {}
+    found = db.query(
+        """SELECT id, shopify_order_name, backoffice_invoice_number, courier_name, tracking_number,
+                  shipping_cost, status FROM shipments WHERE id = ANY(%s)""",
+        (sorted(ids),),
+    ) or []
+    return {str(s["id"]): {
+        "order": s["shopify_order_name"] or s["backoffice_invoice_number"],
+        "courier": s["courier_name"],
+        "tracking": s["tracking_number"],
+        "cost": float(s["shipping_cost"]) if s["shipping_cost"] is not None else None,
+        "status": s["status"],
+    } for s in found}
+
+
 @bp.get("/audit")
 @admin_required
 def list_audit():
     """The audit log, newest first. `group` keeps one family of actions
     (the part before the dot: profit, label, settings…), `action` one exact
-    action."""
+    action, `user` one username, `q` rows whose action or detail contains
+    the text, `days` the last so many days."""
     try:
         limit = min(max(int(request.args.get("limit") or AUDIT_PAGE_DEFAULT), 1), AUDIT_PAGE_MAX)
         offset = max(int(request.args.get("offset") or 0), 0)
     except ValueError:
         return api_error("limit and offset must be whole numbers")
+    try:
+        days = int(request.args.get("days") or 0)
+    except ValueError:
+        return api_error("days must be a whole number")
     clauses, params = [], []
     group = (request.args.get("group") or "").strip()
     action = (request.args.get("action") or "").strip()
+    user = (request.args.get("user") or "").strip()
+    q = (request.args.get("q") or "").strip()
     if group:
         clauses.append("split_part(a.action, '.', 1) = %s")
         params.append(group)
     if action:
         clauses.append("a.action = %s")
         params.append(action)
+    if user:
+        clauses.append("u.username = %s")
+        params.append(user)
+    if q:
+        clauses.append("(a.action ILIKE %s OR a.detail::text ILIKE %s)")
+        params += [_like(q), _like(q)]
+    if days > 0:
+        clauses.append("a.created_at >= now() - make_interval(days => %s)")
+        params.append(days)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    total = db.query(f"SELECT COUNT(*) AS total FROM audit_log a{where}", params, one=True)["total"]
+    joined = "FROM audit_log a LEFT JOIN users u ON u.id = a.user_id"
+    total = db.query(f"SELECT COUNT(*) AS total {joined}{where}", params, one=True)["total"]
     rows = db.query(
         f"""SELECT a.id, a.action, a.detail, a.created_at, u.username
-            FROM audit_log a LEFT JOIN users u ON u.id = a.user_id{where}
+            {joined}{where}
             ORDER BY a.created_at DESC, a.id DESC LIMIT %s OFFSET %s""",
         params + [limit, offset],
     ) if total else []
+    rows = rows or []
     groups = db.query("SELECT DISTINCT split_part(action, '.', 1) AS value FROM audit_log ORDER BY value")
+    users = db.query(
+        """SELECT DISTINCT u.username FROM audit_log a JOIN users u ON u.id = a.user_id
+           ORDER BY u.username""")
     return jsonify({
         "rows": [{"id": r["id"], "action": r["action"], "detail": r["detail"],
-                  "created_at": central_time(r["created_at"]), "username": r["username"]} for r in rows],
+                  "created_at": central_time(r["created_at"]),
+                  "date": r["created_at"].astimezone(CENTRAL).strftime("%Y-%m-%d"),
+                  "username": r["username"]} for r in rows],
         "total": total, "limit": limit, "offset": offset,
         "groups": [g["value"] for g in groups or []],
+        "users": [u["username"] for u in users or []],
+        "shipments": _audit_shipments(rows),
     })
 
 

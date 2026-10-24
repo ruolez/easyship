@@ -19,6 +19,15 @@ WHEN = datetime(2026, 10, 2, 18, 30, tzinfo=timezone.utc)  # 01:30 PM Central
 ROW = {"id": 9, "action": "profit.bypass", "detail": {"order": "#1001", "profit": -7.35},
        "created_at": WHEN, "username": "eugene"}
 GROUPS = [{"value": "label"}, {"value": "profit"}]
+USERS = [{"username": "eugene"}, {"username": "pat"}]
+LABEL_ROW = {"id": 10, "action": "label.buy", "detail": {"group_id": "g1", "boxes": 2, "shipment_ids": [41, 42]},
+             "created_at": WHEN, "username": "pat"}
+SHIPMENTS = [
+    {"id": 41, "shopify_order_name": "#TS1", "backoffice_invoice_number": None, "courier_name": "USPS Ground Advantage",
+     "tracking_number": "9400111", "shipping_cost": 5.12, "status": "fulfilled"},
+    {"id": 42, "shopify_order_name": None, "backoffice_invoice_number": "INV-7", "courier_name": None,
+     "tracking_number": None, "shipping_cost": None, "status": "voided"},
+]
 
 
 class AuditListTest(unittest.TestCase):
@@ -35,6 +44,7 @@ class AuditListTest(unittest.TestCase):
             sess["role"] = "admin"
         self.queries = []
         self.total = 1
+        self.rows = [ROW]
         self._orig = settings_api.db.query
         settings_api.db.query = self._query
 
@@ -45,9 +55,13 @@ class AuditListTest(unittest.TestCase):
         self.queries.append((sql, params))
         if "COUNT(*)" in sql:
             return {"total": self.total}
+        if "DISTINCT u.username" in sql:
+            return USERS
         if "DISTINCT" in sql:
             return GROUPS
-        return [ROW]
+        if "FROM shipments" in sql:
+            return [s for s in SHIPMENTS if s["id"] in params[0]]
+        return self.rows
 
     def _list(self, query=""):
         res = self.client.get(f"/api/audit?{query}")
@@ -57,9 +71,9 @@ class AuditListTest(unittest.TestCase):
         status, body = self._list()
         self.assertEqual((status, body), (200, {
             "rows": [{"id": 9, "action": "profit.bypass", "detail": {"order": "#1001", "profit": -7.35},
-                      "created_at": "10/02/2026 01:30 PM", "username": "eugene"}],
+                      "created_at": "10/02/2026 01:30 PM", "date": "2026-10-02", "username": "eugene"}],
             "total": 1, "limit": settings_api.AUDIT_PAGE_DEFAULT, "offset": 0,
-            "groups": ["label", "profit"]}))
+            "groups": ["label", "profit"], "users": ["eugene", "pat"], "shipments": {}}))
         self.assertIn("ORDER BY a.created_at DESC, a.id DESC LIMIT %s OFFSET %s", self.queries[1][0])
         self.assertEqual(self.queries[1][1], [settings_api.AUDIT_PAGE_DEFAULT, 0])
 
@@ -90,7 +104,28 @@ class AuditListTest(unittest.TestCase):
         self.total = 0
         status, body = self._list()
         self.assertEqual((status, body["rows"], body["total"]), (200, [], 0))
-        self.assertEqual(len(self.queries), 2)
+        self.assertFalse(any("LIMIT %s OFFSET %s" in sql for sql, _ in self.queries))
+
+    def test_user_search_and_period_filters_combine(self):
+        self._list("user=pat&q=50%25_off&days=7")
+        sql, params = self.queries[1]
+        self.assertIn("WHERE u.username = %s AND (a.action ILIKE %s OR a.detail::text ILIKE %s)"
+                      " AND a.created_at >= now() - make_interval(days => %s)", sql)
+        self.assertEqual(params[:5], ["pat", "%50\\%\\_off%", "%50\\%\\_off%", 7, settings_api.AUDIT_PAGE_DEFAULT])
+        self.assertIn("LEFT JOIN users u", self.queries[0][0])
+
+    def test_unknown_period_is_rejected(self):
+        status, body = self._list("days=soon")
+        self.assertEqual((status, body), (400, {"error": "days must be a whole number"}))
+
+    def test_label_rows_bring_their_shipments_order_carrier_and_tracking(self):
+        self.rows = [LABEL_ROW]
+        status, body = self._list()
+        self.assertEqual((status, body["shipments"]), (200, {
+            "41": {"order": "#TS1", "courier": "USPS Ground Advantage", "tracking": "9400111", "cost": 5.12,
+                   "status": "fulfilled"},
+            "42": {"order": "INV-7", "courier": None, "tracking": None, "cost": None, "status": "voided"},
+        }))
 
     def test_non_admins_are_refused(self):
         with self.client.session_transaction() as sess:

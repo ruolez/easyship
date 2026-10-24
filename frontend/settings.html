@@ -8,7 +8,7 @@
 </head>
 <body>
   <header id="appbar"></header>
-  <div class="container narrow">
+  <div class="container settings-page">
     <div class="page-head">
       <div>
         <h1>Settings</h1>
@@ -187,18 +187,19 @@
     <!-- ================= Boxes ================= -->
     <section class="tab-panel" data-panel="boxes">
       <div class="card" id="card-boxes">
-        <h2>Box sizes</h2>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>L × W × H (in)</th><th></th></tr></thead>
-            <tbody id="boxes-body"></tbody>
-          </table>
+        <div class="us-head">
+          <div>
+            <h2>Box sizes</h2>
+            <div class="hint" id="boxes-count">The sizes packers pick from on the Ship page, in inches</div>
+          </div>
         </div>
-        <div class="row mt-16">
+        <div class="bx-grid" id="boxes-body"></div>
+        <div class="bx-add-title">Add a size</div>
+        <div class="row">
           <div class="field fixed" style="min-width:100px"><label>Length</label><input id="box-length" type="number" step="0.1"></div>
           <div class="field fixed" style="min-width:100px"><label>Width</label><input id="box-width" type="number" step="0.1"></div>
           <div class="field fixed" style="min-width:100px"><label>Height</label><input id="box-height" type="number" step="0.1"></div>
-          <div class="fixed"><button class="btn btn-outlined" id="add-box">Add box</button></div>
+          <div class="fixed"><button class="btn btn-primary" id="add-box">Add box</button></div>
         </div>
       </div>
     </section>
@@ -206,25 +207,35 @@
     <!-- ================= Integrations ================= -->
     <section class="tab-panel" data-panel="integrations">
       <div class="card" id="card-stores">
-        <h2>Shopify stores</h2>
+        <div class="us-head">
+          <div>
+            <h2>Shopify stores</h2>
+            <div class="hint" id="stores-count">Orders and fulfillments come from these stores</div>
+          </div>
+          <button class="btn btn-primary btn-small" id="add-store"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>Add store</button>
+        </div>
         <div class="table-wrap">
-          <table>
-            <thead><tr><th>Name</th><th>Domain</th><th>Prefix</th><th>Status</th><th></th></tr></thead>
+          <table class="us-table">
+            <thead><tr><th>Store</th><th>Domain</th><th>Order prefix</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
             <tbody id="stores-body"></tbody>
           </table>
         </div>
-        <button class="btn btn-text mt-16" id="add-store">+ Add store</button>
       </div>
 
       <div class="card" id="card-backoffice">
-        <h2>BackOffice databases</h2>
+        <div class="us-head">
+          <div>
+            <h2>BackOffice databases</h2>
+            <div class="hint" id="dbs-count">Invoices, quotations and items live here</div>
+          </div>
+          <button class="btn btn-primary btn-small" id="add-db"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>Add database</button>
+        </div>
         <div class="table-wrap">
-          <table>
-            <thead><tr><th>Name</th><th>Host</th><th>Database</th><th>Prefix</th><th>Status</th><th></th></tr></thead>
+          <table class="us-table">
+            <thead><tr><th>Database</th><th>Server</th><th>Database name</th><th>Invoice prefix</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
             <tbody id="dbs-body"></tbody>
           </table>
         </div>
-        <button class="btn btn-text mt-16" id="add-db">+ Add database</button>
       </div>
 
       <div class="card" id="card-shipper">
@@ -311,22 +322,31 @@
     <!-- ================= Audit ================= -->
     <section class="tab-panel" data-panel="audit">
       <div class="card" id="card-audit">
-        <h2>Audit log</h2>
-        <p class="hint mb-16">Who did what, newest first: label purchases and voids, profit-check overrides (and refused attempts), settings and user changes.</p>
-        <div class="row mb-16" style="align-items:flex-end">
-          <div class="field fixed" style="min-width:220px">
-            <label>Show</label>
-            <select id="audit-group"><option value="">Everything</option></select>
+        <div class="us-head">
+          <div>
+            <h2>Audit log</h2>
+            <div class="hint">Who did what, newest first. Click an event for its details.</div>
           </div>
-          <div class="fixed hint" id="audit-count" style="padding-bottom:9px"></div>
+          <div class="au-total" id="audit-count"></div>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>When</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
-            <tbody id="audit-body"></tbody>
-          </table>
+        <div class="au-toolbar">
+          <label class="pl-search au-search" title="Order number, tracking number, setting name, username…">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="audit-q" placeholder="Search order #, tracking, setting…" autocomplete="off" aria-label="Search the audit log">
+          </label>
+          <select id="audit-user" class="au-select" aria-label="User"><option value="">Everyone</option></select>
+          <select id="audit-days" class="au-select" aria-label="Period">
+            <option value="">All time</option><option value="1">Last 24 hours</option>
+            <option value="7">Last 7 days</option><option value="30">Last 30 days</option>
+          </select>
+          <button class="link-btn au-reset" id="audit-reset" hidden>Clear</button>
         </div>
-        <button class="btn btn-text mt-16" id="audit-more" style="display:none">Load more</button>
+        <div class="au-groups" id="audit-groups" role="tablist" aria-label="Kind of event"></div>
+        <div class="au-feed" id="audit-feed"></div>
+        <div class="au-foot">
+          <span class="hint" id="audit-shown"></span>
+          <button class="btn btn-outlined btn-small" id="audit-more" hidden>Load more</button>
+        </div>
       </div>
     </section>
 

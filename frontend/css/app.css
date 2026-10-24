@@ -2401,3 +2401,96 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .us-table tbody tr:hover .us-actions .btn { color: var(--primary); }
 .us-actions .us-activate { color: var(--success); }
 .us-off .us-name, .us-off .us-chips, .us-off .us-avatar { opacity: 0.5; }
+
+/* ============================================================
+   Settings › Audit log
+   ============================================================ */
+.container.settings-page { max-width: 1240px; }
+.au-total { font-size: 13px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; padding-top: 2px; }
+.au-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.au-search { flex: 1 1 320px; width: auto; max-width: 460px; }
+.au-select {
+  height: 36px; padding: 0 30px 0 12px; border: 1px solid var(--outline-strong); border-radius: 8px;
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center;
+  font: inherit; font-size: 13.5px; color: var(--on-surface); appearance: none; cursor: pointer;
+}
+.au-select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+.au-reset { font-size: 13px; margin-left: 4px; }
+.au-reset[hidden] { display: none; }
+.au-groups { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--outline); scrollbar-width: thin; }
+.au-group {
+  flex: none; height: 30px; padding: 0 12px; border: 1px solid var(--outline-strong); border-radius: 999px; background: var(--surface);
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); cursor: pointer; white-space: nowrap;
+}
+.au-group:hover { color: var(--on-surface); border-color: var(--primary); }
+.au-group.on { background: var(--primary-light); border-color: var(--primary); color: var(--primary-hover); }
+.au-day {
+  position: sticky; top: 0; z-index: 1; padding: 14px 4px 6px; background: var(--surface);
+  font-size: 12px; font-weight: 700; letter-spacing: 0.3px; color: var(--on-surface);
+}
+.au-day span { margin-left: 6px; font-weight: 500; color: var(--text-secondary); }
+.au-row {
+  display: grid; grid-template-columns: 70px 150px 30px minmax(0, 1fr) 18px; align-items: center; gap: 12px;
+  padding: 9px 10px; border-radius: 8px; cursor: pointer;
+}
+.au-row:hover, .au-row:focus-visible { background: var(--surface-sunken); outline: none; }
+.au-row.open { background: var(--primary-light); }
+.au-time { font-size: 12.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.au-ico {
+  display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px;
+  background: var(--surface-sunken); color: var(--text-secondary);
+}
+.au-ico .ico { width: 15px; height: 15px; }
+.au-ico.g-label, .au-ico.g-shipment, .au-ico.g-manifest { background: var(--primary-light); color: var(--primary); }
+.au-ico.g-profit, .au-ico.g-order_gate { background: var(--warning-light); color: var(--warning); }
+.au-ico.g-picklist { background: #f0fdfa; color: #0f766e; }
+.au-ico.g-user, .au-ico.g-auth { background: #f5f3ff; color: #7c3aed; }
+.au-ico.g-store, .au-ico.g-provider_instance, .au-ico.g-backoffice_db, .au-ico.g-box { background: var(--success-light); color: var(--success); }
+.au-row.err .au-ico { background: var(--error-light); color: var(--error); }
+.au-text { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 13.5px; }
+.au-text strong { flex: none; font-weight: 600; }
+.au-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.au-row.err .au-text strong { color: var(--error); }
+.au-row.warn .au-text strong { color: #92400e; }
+.au-who { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.us-avatar.au-av { width: 22px; height: 22px; font-size: 11px; }
+.au-chev { display: inline-flex; color: var(--text-secondary); transition: transform 0.15s; }
+.au-chev .ico { width: 14px; height: 14px; }
+.au-row.open .au-chev { transform: rotate(90deg); color: var(--primary); }
+.au-detail { margin: 2px 0 8px 286px; padding: 12px 16px; border: 1px solid var(--outline); border-radius: 8px; background: var(--surface); }
+.au-grid { display: grid; grid-template-columns: minmax(110px, max-content) minmax(0, 1fr); gap: 7px 18px; font-size: 13px; }
+.au-k { color: var(--text-secondary); }
+.au-v { min-width: 0; overflow-wrap: anywhere; }
+.au-mono { font-family: var(--mono); font-size: 12px; }
+.au-json { display: block; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; color: var(--on-surface); }
+.au-ships { display: flex; flex-direction: column; gap: 3px; }
+.au-voided { color: var(--error); font-weight: 600; }
+.au-empty { padding: 40px 0; text-align: center; color: var(--text-secondary); }
+.au-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; margin-top: 8px; border-top: 1px solid var(--outline); }
+.au-foot .btn[hidden] { display: none; }
+@media (max-width: 760px) {
+  .au-row { grid-template-columns: 58px 26px minmax(0, 1fr) 16px; gap: 10px; }
+  .au-who { display: none; }
+  .au-text { flex-direction: column; align-items: stretch; gap: 1px; }
+  .au-text strong { flex: initial; }
+  .au-detail { margin-left: 0; }
+}
+
+/* Integrations tables share the Users look. */
+.int-mono { font-family: var(--mono); font-size: 12.5px; color: var(--text-secondary); }
+.int-empty { padding: 28px 12px !important; text-align: center; color: var(--text-secondary); }
+/* Settings forms: fields line up by their labels even when one has a hint
+   below it; a lone button in such a row sits level with the inputs. */
+.settings-page .row:has(> * > label) { align-items: flex-start; }
+.settings-page .row:has(> * > label) > .fixed:not(:has(label)) { margin-top: 22px; }
+
+/* Settings › Boxes */
+.bx-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.bx-tile { display: flex; align-items: center; gap: 10px; padding: 10px 8px 10px 12px; border: 1px solid var(--outline); border-radius: 10px; background: var(--surface); }
+.bx-tile:hover { border-color: var(--outline-strong); box-shadow: var(--shadow-1); }
+.bx-ico { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; border-radius: 8px; background: var(--primary-light); color: var(--primary); }
+.bx-ico .ico { width: 16px; height: 16px; }
+.bx-dims { flex: 1; font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.bx-unit { margin-left: 4px; font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+.bx-empty { grid-column: 1 / -1; padding: 24px; border: 1px dashed var(--outline-strong); border-radius: 10px; text-align: center; color: var(--text-secondary); }
+.bx-add-title { margin: 20px 0 8px; padding-top: 16px; border-top: 1px solid var(--outline); font-size: 13px; font-weight: 650; }

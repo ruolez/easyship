@@ -98,6 +98,16 @@ class ProfitSettingsTest(unittest.TestCase):
         res = self.client.put("/api/settings", json=body)
         return res.status_code, json.loads(res.get_data())
 
+    def test_the_audit_names_only_the_settings_that_changed(self):
+        audits = []
+        settings_api.audit = lambda action, detail=None, **k: audits.append((action, detail))
+        self.stored.update({"printer_host": "10.0.0.5", "printer_port": "9100"})
+        self._put({"printer_host": "10.0.0.9", "printer_port": "9100", "label_timeout_seconds": "",
+                   "profit_bypass_password": PASSWORD})
+        self._put({"printer_host": "10.0.0.9", "profit_bypass_password": settings_api.MASK})
+        self.assertEqual(audits, [("settings.update", {"keys": ["printer_host", "profit_bypass_password"]}),
+                                  ("settings.update", {"keys": []})])
+
     def test_a_threshold_without_a_password_is_refused(self):
         self.assertEqual(self._put({"profit_min_amount": "5"}),
                          (400, {"error": "Set a bypass password before turning on the profit check"}))

@@ -826,13 +826,18 @@ document.getElementById('print_mode').addEventListener('change', updatePrintMode
 /* ---------- Box sizes ---------- */
 async function loadBoxes() {
   const boxes = await api('/api/boxes');
-  const tbody = document.getElementById('boxes-body');
-  tbody.innerHTML = boxes.length
-    ? boxes.map((b) => `<tr>
-        <td class="mono"><strong>${b.length} × ${b.width} × ${b.height}</strong></td>
-        <td><button class="btn btn-danger btn-small" onclick="deleteBox(${b.id})">Delete</button></td>
-      </tr>`).join('')
-    : '<tr><td colspan="2" class="text-secondary">No box sizes yet.</td></tr>';
+  document.getElementById('boxes-count').textContent = boxes.length
+    ? `${boxes.length} size${boxes.length === 1 ? '' : 's'} packers pick from on the Ship page, in inches`
+    : 'The sizes packers pick from on the Ship page, in inches';
+  const icon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>';
+  const trash = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+  document.getElementById('boxes-body').innerHTML = boxes.length
+    ? boxes.map((b) => `<div class="bx-tile">
+        <span class="bx-ico">${icon}</span>
+        <span class="bx-dims">${b.length} × ${b.width} × ${b.height}<span class="bx-unit">in</span></span>
+        <button class="us-icon us-deact" onclick="deleteBox(${b.id})" title="Delete" aria-label="Delete ${b.length} by ${b.width} by ${b.height} box">${trash}</button>
+      </div>`).join('')
+    : '<div class="bx-empty">No box sizes yet. Add the boxes you ship in below.</div>';
 }
 
 document.getElementById('add-box').addEventListener('click', async () => {
@@ -1440,26 +1445,43 @@ document.getElementById('test-browserprint').addEventListener('click', () => {
 });
 
 /* ---------- BackOffice databases ---------- */
+const INT_ICONS = {
+  edit: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/></svg>',
+  trash: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+};
+
+/* Shared row pieces for the Integrations tables (stores, BackOffice databases). */
+function intNameCell(name) {
+  return `<div class="us-user"><span class="us-avatar" style="--av:${usColor(name)}">${esc(name.charAt(0).toUpperCase())}</span><span class="us-name">${esc(name)}</span></div>`;
+}
+function intStatusCell(active) {
+  return `<span class="us-status ${active ? 'on' : ''}">${active ? 'Active' : 'Inactive'}</span>`;
+}
+function intActionsCell(kind, item) {
+  return `<td class="us-actions">
+    <button class="btn btn-text btn-small" data-int="${kind}" data-act="test" data-id="${item.id}">Test</button>
+    <button class="us-icon" data-int="${kind}" data-act="edit" data-id="${item.id}" title="Edit" aria-label="Edit ${plAttr(item.name)}">${INT_ICONS.edit}</button>
+    <button class="us-icon us-deact" data-int="${kind}" data-act="delete" data-id="${item.id}" title="Delete" aria-label="Delete ${plAttr(item.name)}">${INT_ICONS.trash}</button>
+  </td>`;
+}
+function intEmptyRow(cols, text) {
+  return `<tr><td colspan="${cols}" class="int-empty">${text}</td></tr>`;
+}
+
 async function loadDbs() {
   const dbs = await api('/api/backoffice-dbs');
-  const tbody = document.getElementById('dbs-body');
-  if (!dbs.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="text-secondary">No databases configured.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = dbs.map((d) => `<tr>
-    <td><strong>${esc(d.name)}</strong></td>
-    <td class="mono">${esc(d.host)}:${esc(d.port)}</td>
-    <td class="mono">${esc(d.db_name)}</td>
-    <td class="mono">${esc(d.prefix || '')}</td>
-    <td>${d.is_active ? '<span class="chip static ok">active</span>' : '<span class="chip static">inactive</span>'}</td>
-    <td>
-      <button class="btn btn-text btn-small" onclick="testDb(${d.id}, this)">Test</button>
-      <button class="btn btn-text btn-small" onclick="editDb(${d.id})">Edit</button>
-      <button class="btn btn-danger btn-small" onclick="deleteDb(${d.id}, '${esc(d.name)}')">Delete</button>
-    </td>
-  </tr>`).join('');
   window._dbs = dbs;
+  document.getElementById('dbs-count').textContent = dbs.length
+    ? `${dbs.length} database${dbs.length === 1 ? '' : 's'} · invoices, quotations and items live here`
+    : 'Invoices, quotations and items live here';
+  document.getElementById('dbs-body').innerHTML = dbs.length ? dbs.map((d) => `<tr class="${d.is_active ? '' : 'us-off'}">
+    <td>${intNameCell(d.name)}</td>
+    <td class="int-mono">${esc(d.host)}:${esc(d.port)}</td>
+    <td class="int-mono">${esc(d.db_name)}</td>
+    <td>${d.prefix ? `<span class="us-chip">${esc(d.prefix)}</span>` : '<span class="us-none">—</span>'}</td>
+    <td>${intStatusCell(d.is_active)}</td>
+    ${intActionsCell('db', d)}
+  </tr>`).join('') : intEmptyRow(6, 'No BackOffice databases yet. Add one to pull invoices and write tracking back.');
 }
 
 window.testDb = async (id, btn) => {
@@ -1553,24 +1575,30 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 /* ---------- Shopify stores ---------- */
 async function loadStores() {
   const stores = await api('/api/shopify-stores');
-  const tbody = document.getElementById('stores-body');
-  if (!stores.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="text-secondary">No stores configured.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = stores.map((s) => `<tr>
-    <td><strong>${esc(s.name)}</strong></td>
-    <td class="mono">${esc(s.shop_domain)}</td>
-    <td class="mono">${esc(s.prefix || '')}</td>
-    <td>${s.is_active ? '<span class="chip static ok">active</span>' : '<span class="chip static">inactive</span>'}</td>
-    <td>
-      <button class="btn btn-text btn-small" onclick="testStore(${s.id}, this)">Test</button>
-      <button class="btn btn-text btn-small" onclick="editStore(${s.id})">Edit</button>
-      <button class="btn btn-danger btn-small" onclick="deleteStore(${s.id}, '${esc(s.name)}')">Delete</button>
-    </td>
-  </tr>`).join('');
   window._stores = stores;
+  document.getElementById('stores-count').textContent = stores.length
+    ? `${stores.length} store${stores.length === 1 ? '' : 's'} · orders and fulfillments come from these`
+    : 'Orders and fulfillments come from these stores';
+  document.getElementById('stores-body').innerHTML = stores.length ? stores.map((st) => `<tr class="${st.is_active ? '' : 'us-off'}">
+    <td>${intNameCell(st.name)}</td>
+    <td class="int-mono">${esc(st.shop_domain)}</td>
+    <td>${st.prefix ? `<span class="us-chip">${esc(st.prefix)}</span>` : '<span class="us-none">—</span>'}</td>
+    <td>${intStatusCell(st.is_active)}</td>
+    ${intActionsCell('store', st)}
+  </tr>`).join('') : intEmptyRow(5, 'No Shopify stores yet. Add one to pull its orders.');
 }
+
+/* Test / Edit / Delete on both Integrations tables. */
+['stores-body', 'dbs-body'].forEach((id) => document.getElementById(id).addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-int]');
+  if (!btn) return;
+  const store = btn.dataset.int === 'store';
+  const item = (store ? window._stores : window._dbs).find((x) => x.id === Number(btn.dataset.id));
+  if (!item) return;
+  if (btn.dataset.act === 'test') (store ? window.testStore : window.testDb)(item.id, btn);
+  else if (btn.dataset.act === 'edit') (store ? window.editStore : window.editDb)(item.id);
+  else (store ? window.deleteStore : window.deleteDb)(item.id, esc(item.name));
+}));
 
 window.testStore = async (id, btn) => {
   btn.disabled = true;
@@ -1790,72 +1818,268 @@ async function editUserAccess(u) {
   });
 }
 
-/* ---------- Audit log ---------- */
+/* ---------- Audit log ----------
+   A feed grouped by day: each event reads as a sentence (what happened, to
+   which order or setting, by whom); a click opens every detail it recorded. */
 const AUDIT_PAGE = 100;
+// Older settings saves logged every field, not just the changed ones.
+const AUDIT_ALL_KEYS = 25;
+const plural = (n, word) => `${Number(n).toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 const AUDIT_GROUP_LABELS = {
-  profit: 'Profit check', order_gate: 'Order gate', label: 'Labels', shipment: 'Shipments', manifest: 'Manifests',
-  settings: 'Settings', user: 'Users', auth: 'Sign-ins', backoffice: 'BackOffice', shopify: 'Shopify',
-  provider_instance: 'Providers', picklist: 'Pick lists',
+  label: 'Labels', shipment: 'Shipments', manifest: 'Manifests', profit: 'Profit check', order_gate: 'Order gate',
+  picklist: 'Pick lists', settings: 'Settings', user: 'Users', auth: 'Sign-ins', store: 'Stores',
+  provider_instance: 'Shipping accounts', box: 'Boxes', backoffice_db: 'BackOffice', backoffice: 'BackOffice', shopify: 'Shopify',
 };
+const auSvg = (paths) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+const AUDIT_ICONS = {
+  label: auSvg('<path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.42l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>'),
+  shipment: auSvg('<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'),
+  manifest: auSvg('<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/>'),
+  profit: auSvg('<path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'),
+  order_gate: auSvg('<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/>'),
+  picklist: auSvg('<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>'),
+  settings: auSvg('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
+  user: auSvg('<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'),
+  auth: auSvg('<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" x2="3" y1="12" y2="12"/>'),
+  store: auSvg('<path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M2 7h20"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/>'),
+  provider_instance: auSvg('<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>'),
+  box: auSvg('<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>'),
+  backoffice_db: auSvg('<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>'),
+  chevron: auSvg('<path d="m9 18 6-6-6-6"/>'),
+};
+AUDIT_ICONS.backoffice = AUDIT_ICONS.backoffice_db;
+AUDIT_ICONS.shopify = AUDIT_ICONS.store;
+
 let auditOffset = 0;
+let auditRows = [];
+let auditShipments = {};
+let auditTimer;
+const auditOpen = new Set();
+
+const AUDIT_KEY_LABELS = { shipment_ids: 'Shipments', shipment_id: 'Shipment', user_ids: 'Users', group_id: 'Label group' };
+const humanKey = (k) => {
+  if (AUDIT_KEY_LABELS[k]) return AUDIT_KEY_LABELS[k];
+  const words = String(k).replace(/_/g, ' ').replace(/\bid\b/g, 'ID').replace(/\bids\b/g, 'IDs').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+const auList = (items, max = 3) => (items.length > max ? `${items.slice(0, max).join(', ')} +${items.length - max}` : items.join(', '));
+const auUser = (id) => ((window.usersById || {})[id] || {}).username || `user #${id}`;
+const auStore = (id) => ((window._stores || []).find((s) => s.id === id) || {}).name || `store #${id}`;
+
+function auShipments(d) {
+  const ids = (d.shipment_ids || []).concat(d.shipment_id != null ? [d.shipment_id] : []);
+  return ids.map((id) => auditShipments[String(id)]).filter(Boolean);
+}
+
+/* What the event was, in a few words, and the one line that says to what. */
+function auditSummary(r) {
+  const d = r.detail || {};
+  const ships = auShipments(d);
+  const orders = [...new Set(ships.map((s) => s.order).filter(Boolean))];
+  const couriers = [...new Set(ships.map((s) => s.courier).filter(Boolean))];
+  const cost = ships.reduce((n, s) => n + (s.cost || 0), 0);
+  const boxes = d.boxes > 1 ? `${d.boxes} boxes` : '';
+  const S = (title, parts = [], tone = '') => ({ title, summary: parts.filter((p) => p !== '' && p != null).join(' · '), tone });
+  switch (r.action) {
+    case 'label.buy': return S('Bought a label', [auList(orders, 2), auList(couriers, 1), boxes, cost ? money(cost) : '']);
+    case 'label.void': return S(d.undo ? 'Undid a label purchase' : 'Voided a label', [auList(orders, 2), boxes], 'warn');
+    case 'label.print': return S('Printed a label', [auList(orders, 2)]);
+    case 'manifest.create': return S('Created a manifest', [d.provider, d.shipments != null ? plural(d.shipments, 'shipment') : '']);
+    case 'shipment.link_shopify': return S('Linked a shipment to Shopify', [d.order_name, d.store_id ? auStore(d.store_id) : '']);
+    case 'profit.bypass': return S('Overrode the profit check', [d.order, d.profit != null ? `profit ${signedMoney(d.profit)}` : '', d.margin_pct != null ? pct(d.margin_pct) : '', d.courier_name], 'warn');
+    case 'profit.bypass_denied': return S('Profit override refused', [d.order, 'wrong password'], 'err');
+    case 'order_gate.refused': return S('Label purchase blocked', [d.order, d.label], 'err');
+    case 'settings.update': {
+      const keys = d.keys || [];
+      if (keys.length > AUDIT_ALL_KEYS) return S('Saved settings', ['every field (logged before changes were tracked)']);
+      return S('Changed settings', [keys.length ? auList(keys.map(humanKey), 3) : 'nothing changed']);
+    }
+    case 'settings.excluded_services': return S('Changed hidden services', [d.provider, d.count != null ? `${d.count} hidden` : '']);
+    case 'user.create': return S('Added a user', [d.username, d.role === 'admin' ? 'admin' : '']);
+    case 'user.deactivate': return S('Deactivated a user', [auUser(d.id)], 'warn');
+    case 'user.activate': return S('Reactivated a user', [auUser(d.id)]);
+    case 'user.password_change': return S('Changed a password', [auUser(d.id)]);
+    case 'user.providers': return S('Changed shipping accounts', [auUser(d.id), (d.allowed_providers || []).length ? auList(providerNamesToLabels(d.allowed_providers), 3) : 'all accounts']);
+    case 'user.sections': return S('Changed sections', [auUser(d.id), (d.allowed_sections || []).length ? d.allowed_sections.map(humanKey).join(', ') : 'none']);
+    case 'store.create': return S('Added a store', [d.name, d.domain]);
+    case 'store.update': return S('Updated a store', [d.name || auStore(d.id)]);
+    case 'store.delete': return S('Removed a store', [auStore(d.id)], 'warn');
+    case 'provider_instance.create': return S('Added a shipping account', [d.label || d.key]);
+    case 'provider_instance.rename': return S('Renamed a shipping account', [d.label || d.key]);
+    case 'provider_instance.delete': return S('Removed a shipping account', [d.label || d.key], 'warn');
+    case 'provider_instance.users': return S('Changed who can use a shipping account', [d.label || d.key, (d.user_ids || []).length ? auList(d.user_ids.map(auUser), 3) : 'everyone']);
+    case 'box.create': return S('Added a box', [d.name]);
+    case 'box.delete': return S('Removed a box', [d.name || `box #${d.id}`]);
+    case 'backoffice_db.create': return S('Added a BackOffice database', [d.name]);
+    case 'backoffice_db.update': return S('Updated a BackOffice database', [d.name || `#${d.id}`]);
+    case 'backoffice_db.delete': return S('Removed a BackOffice database', [d.name || `#${d.id}`], 'warn');
+    case 'picklist.create': return S(`Created pick list #${d.picklist}`, [d.quotation, d.orders != null ? plural(d.orders, 'order') : '', d.units != null ? plural(d.units, 'unit') : '']);
+    case 'picklist.cancel': return S(`Cancelled pick list #${d.picklist}`, [d.quotation, d.quotation_deleted ? 'quotation deleted' : ''], 'warn');
+    case 'picklist.failed': return S(`Pick list #${d.picklist} failed`, [d.error], 'err');
+    case 'picklist.tags':
+      if (d.picklist) {
+        const failed = (d.failed || []).length;
+        return S(d.mode === 'remove' ? `Removed pick list #${d.picklist}'s tag` : `Tagged pick list #${d.picklist}'s orders`,
+          [d.tag, d.done != null ? plural(d.done, 'order') : '', failed ? `${failed} failed` : ''], failed ? 'warn' : '');
+      }
+      return S(`Changed ${d.kind === 'customer' ? 'customer' : 'order'} tags`, [d.order,
+        ...(d.added || []).map((t) => `+${t}`), ...(d.removed || []).map((t) => `−${t}`)]);
+    case 'auth.login': return S('Signed in');
+    default: {
+      const parts = Object.entries(d).filter(([, v]) => v != null && typeof v !== 'object').slice(0, 3).map(([k, v]) => `${humanKey(k)} ${v}`);
+      return S(humanKey(r.action.replace('.', ' ')), parts);
+    }
+  }
+}
+
+const MONEY_KEYS = new Set(['revenue', 'items_cost', 'label_cost', 'profit', 'shipping_cost', 'cost']);
+
+/* Every field the event recorded, readable: shipments as their orders, lists as chips, amounts as money. */
+function auditDetailHtml(r) {
+  const d = r.detail || {};
+  const value = (k, v) => {
+    if (v == null || v === '') return '<span class="text-secondary">—</span>';
+    if ((k === 'shipment_ids' || k === 'shipment_id') && Object.keys(auditShipments).length) {
+      return `<div class="au-ships">${[].concat(v).map((id) => {
+        const s = auditShipments[String(id)];
+        return s ? `<span class="au-ship"><strong>${esc(s.order || `#${id}`)}</strong>${s.courier ? ` · ${esc(s.courier)}` : ''}${s.tracking ? ` · <span class="au-mono">${esc(s.tracking)}</span>` : ''}${s.cost != null ? ` · ${money(s.cost)}` : ''}${s.status === 'voided' ? ' · <span class="au-voided">voided</span>' : ''}</span>`
+          : `<span class="au-ship">Shipment #${esc(id)}</span>`;
+      }).join('')}</div>`;
+    }
+    if (k === 'keys' && Array.isArray(v) && v.length > AUDIT_ALL_KEYS) return `<span class="text-secondary">All ${v.length} fields — this save was logged before EasyShip tracked which ones changed</span>`;
+    if (k === 'keys' && Array.isArray(v)) return v.length ? `<div class="us-chips">${v.map((x) => `<span class="us-chip">${esc(humanKey(x))}</span>`).join('')}</div>` : '<span class="text-secondary">Nothing changed</span>';
+    if (MONEY_KEYS.has(k) && typeof v === 'number') return k === 'profit' ? signedMoney(v) : money(v);
+    if (k === 'margin_pct' && typeof v === 'number') return pct(v);
+    if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+    if (Array.isArray(v)) return v.length ? `<div class="us-chips">${v.map((x) => `<span class="us-chip">${esc(typeof x === 'object' ? JSON.stringify(x) : x)}</span>`).join('')}</div>` : '<span class="text-secondary">None</span>';
+    if (typeof v === 'object') return `<code class="au-json">${esc(JSON.stringify(v, null, 1))}</code>`;
+    return /^[0-9a-f]{20,}$/i.test(String(v)) ? `<span class="au-mono">${esc(v)}</span>` : esc(v);
+  };
+  const fields = Object.entries(d).map(([k, v]) => `<div class="au-k">${esc(humanKey(k))}</div><div class="au-v">${value(k, v)}</div>`).join('');
+  return `<div class="au-grid">${fields}
+    <div class="au-k">When</div><div class="au-v">${esc(r.created_at)} <span class="text-secondary">(Central)</span></div>
+    <div class="au-k">Event</div><div class="au-v"><span class="au-mono">${esc(r.action)}</span> <span class="text-secondary">#${r.id}</span></div></div>`;
+}
+
+function auditDayLabel(iso) {
+  const day = new Date(`${iso}T12:00:00`);
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const diff = Math.round((today - day) / 86400000);
+  const long = day.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: day.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+  return diff === 0 ? `Today <span>${long}</span>` : diff === 1 ? `Yesterday <span>${long}</span>` : long;
+}
+
+function auditRowHtml(r) {
+  const group = r.action.split('.')[0];
+  const s = auditSummary(r);
+  const open = auditOpen.has(r.id);
+  const time = (r.created_at || '').split(' ').slice(1).join(' ').replace(/^0/, '');
+  const who = r.username
+    ? `<span class="us-avatar au-av" style="--av:${usColor(r.username)}">${esc(r.username.charAt(0).toUpperCase())}</span>${esc(r.username)}`
+    : '<span class="text-secondary">System</span>';
+  return `<div class="au-row${open ? ' open' : ''}${s.tone ? ` ${s.tone}` : ''}" data-audit="${r.id}" role="button" tabindex="0" aria-expanded="${open}">
+      <span class="au-time">${esc(time)}</span>
+      <span class="au-who">${who}</span>
+      <span class="au-ico g-${esc(group)}">${AUDIT_ICONS[group] || AUDIT_ICONS.settings}</span>
+      <span class="au-text"><strong>${esc(s.title)}</strong>${s.summary ? `<span class="au-sum">${esc(s.summary)}</span>` : ''}</span>
+      <span class="au-chev">${AUDIT_ICONS.chevron}</span>
+    </div>
+    ${open ? `<div class="au-detail">${auditDetailHtml(r)}</div>` : ''}`;
+}
+
+function renderAuditFeed() {
+  const feed = document.getElementById('audit-feed');
+  if (!auditRows.length) {
+    feed.innerHTML = `<div class="au-empty">${auditFiltered() ? 'No events match these filters.' : 'Nothing recorded yet.'}</div>`;
+    return;
+  }
+  let day = null;
+  feed.innerHTML = auditRows.map((r) => {
+    const head = r.date !== day ? `<div class="au-day">${auditDayLabel(r.date)}</div>` : '';
+    day = r.date;
+    return head + auditRowHtml(r);
+  }).join('');
+}
+
+const auditGroup = () => (document.querySelector('#audit-groups .on') || {}).dataset?.group || '';
+const auditFiltered = () => auditGroup() || document.getElementById('audit-q').value.trim()
+  || document.getElementById('audit-user').value || document.getElementById('audit-days').value;
 
 async function loadAudit(more = false) {
-  const select = document.getElementById('audit-group');
   auditOffset = more ? auditOffset + AUDIT_PAGE : 0;
+  const params = new URLSearchParams({ limit: AUDIT_PAGE, offset: auditOffset });
+  const filters = { group: auditGroup(), q: document.getElementById('audit-q').value.trim(),
+    user: document.getElementById('audit-user').value, days: document.getElementById('audit-days').value };
+  Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
   let res;
   try {
-    res = await api(`/api/audit?group=${encodeURIComponent(select.value)}&limit=${AUDIT_PAGE}&offset=${auditOffset}`);
+    res = await api(`/api/audit?${params}`);
   } catch (err) {
     snackbar(`Could not load the audit log: ${err.message}`, 'error');
     return;
   }
-  if (select.options.length === 1) {
-    res.groups.forEach((g) => {
-      const opt = document.createElement('option');
-      opt.value = g;
-      opt.textContent = AUDIT_GROUP_LABELS[g] || g;
-      select.appendChild(opt);
-    });
+  if (!document.querySelector('#audit-groups button')) {
+    document.getElementById('audit-groups').innerHTML = [['', 'Everything'], ...res.groups.map((g) => [g, AUDIT_GROUP_LABELS[g] || humanKey(g)])]
+      .map(([g, label]) => `<button class="au-group${g === '' ? ' on' : ''}" data-group="${esc(g)}" role="tab" aria-selected="${g === ''}">${esc(label)}</button>`).join('');
   }
-  const tbody = document.getElementById('audit-body');
-  const html = res.rows.map(auditRowHtml).join('');
-  if (more) tbody.insertAdjacentHTML('beforeend', html);
-  else tbody.innerHTML = html || '<tr><td colspan="4" class="text-secondary">Nothing recorded yet</td></tr>';
-  const shown = Math.min(auditOffset + res.rows.length, res.total);
-  document.getElementById('audit-count').textContent = res.total ? `${shown} of ${res.total}` : '';
-  document.getElementById('audit-more').style.display = shown < res.total ? '' : 'none';
+  const userSel = document.getElementById('audit-user');
+  if (userSel.options.length === 1) {
+    res.users.forEach((u) => userSel.insertAdjacentHTML('beforeend', `<option value="${plAttr(u)}">${esc(u)}</option>`));
+  }
+  auditShipments = more ? { ...auditShipments, ...res.shipments } : res.shipments;
+  auditRows = more ? auditRows.concat(res.rows) : res.rows;
+  if (!more) auditOpen.clear();
+  renderAuditFeed();
+  document.getElementById('audit-count').textContent = res.total ? `${res.total.toLocaleString()} event${res.total === 1 ? '' : 's'}` : '';
+  document.getElementById('audit-shown').textContent = res.total ? `Showing ${auditRows.length.toLocaleString()} of ${res.total.toLocaleString()}` : '';
+  document.getElementById('audit-more').hidden = auditRows.length >= res.total;
+  document.getElementById('audit-reset').hidden = !auditFiltered();
 }
 
-function auditRowHtml(r) {
-  const tone = r.action === 'profit.bypass' ? ' warn'
-    : ['profit.bypass_denied', 'order_gate.refused', 'label.void'].includes(r.action) ? ' err' : '';
-  return `<tr>
-    <td style="white-space:nowrap">${esc(r.created_at)}</td>
-    <td>${esc(r.username || '—')}</td>
-    <td><span class="chip static${tone}">${esc(r.action)}</span></td>
-    <td class="wrap">${auditDetailHtml(r.action, r.detail || {})}</td>
-  </tr>`;
-}
-
-/* Profit overrides get a readable breakdown; everything else lists its
-   detail fields as key: value. */
-function auditDetailHtml(action, d) {
-  if (action === 'profit.bypass') {
-    const margin = d.margin_pct != null ? ` (${pct(d.margin_pct)})` : '';
-    const service = [d.courier_name, d.provider].filter(Boolean).join(' · ');
-    return `<strong>${esc(d.order || '')}</strong>${service ? ` · ${esc(service)}` : ''} · profit <strong>${signedMoney(d.profit)}</strong>${margin}
-      <div class="text-secondary">Revenue ${money(d.revenue)} − items ${money(d.items_cost)} − label ${money(d.label_cost)}${(d.reasons || []).length ? ' — ' + d.reasons.map(esc).join('; ') : ''}</div>`;
-  }
-  if (action === 'order_gate.refused') {
-    return `<strong>${esc(d.order || '')}</strong> · ${esc(d.label || '')} <span class="text-secondary">(${d.live ? 'Shopify live' : 'rate-time snapshot'})</span>
-      <div class="text-secondary">${(d.reasons || []).map(esc).join('; ')}</div>`;
-  }
-  return Object.entries(d).map(([k, v]) =>
-    `<span class="audit-kv"><span class="text-secondary">${esc(k)}:</span> ${esc(v != null && typeof v === 'object' ? JSON.stringify(v) : v)}</span>`).join(' ');
-}
-
-document.getElementById('audit-group').addEventListener('change', () => loadAudit());
+document.getElementById('audit-groups').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-group]');
+  if (!btn) return;
+  document.querySelectorAll('#audit-groups .au-group').forEach((b) => {
+    b.classList.toggle('on', b === btn);
+    b.setAttribute('aria-selected', b === btn);
+  });
+  loadAudit();
+});
+document.getElementById('audit-q').addEventListener('input', () => {
+  clearTimeout(auditTimer);
+  auditTimer = setTimeout(() => loadAudit(), 300);
+});
+['audit-user', 'audit-days'].forEach((id) => document.getElementById(id).addEventListener('change', () => loadAudit()));
+document.getElementById('audit-reset').addEventListener('click', () => {
+  document.getElementById('audit-q').value = '';
+  document.getElementById('audit-user').value = '';
+  document.getElementById('audit-days').value = '';
+  document.querySelectorAll('#audit-groups .au-group').forEach((b, i) => b.classList.toggle('on', i === 0));
+  loadAudit();
+});
 document.getElementById('audit-more').addEventListener('click', () => loadAudit(true));
+function toggleAuditRow(row) {
+  const id = Number(row.dataset.audit);
+  if (auditOpen.has(id)) auditOpen.delete(id);
+  else auditOpen.add(id);
+  const r = auditRows.find((x) => x.id === id);
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains('au-detail')) next.remove();
+  row.outerHTML = auditRowHtml(r);
+}
+document.getElementById('audit-feed').addEventListener('click', (e) => {
+  const row = e.target.closest('[data-audit]');
+  if (row && !window.getSelection().toString()) toggleAuditRow(row);
+});
+document.getElementById('audit-feed').addEventListener('keydown', (e) => {
+  const row = e.target.closest('[data-audit]');
+  if (!row || (e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault();
+  const id = row.dataset.audit;
+  toggleAuditRow(row);
+  document.querySelector(`[data-audit="${id}"]`).focus();
+});
 
 document.getElementById('add-user').addEventListener('click', async () => {
   await loadAllProviders();
