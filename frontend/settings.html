@@ -30,99 +30,117 @@
 
     <!-- ================= Providers ================= -->
     <section class="tab-panel" data-panel="providers">
-      <div class="card" id="card-add-instance">
-        <h2>Add integration</h2>
-        <div class="row">
-          <div class="field fixed" style="min-width:240px">
-            <label>Platform</label>
-            <select id="new-instance-platform"></select>
+      <div class="card" id="card-accounts">
+        <div class="us-head">
+          <div>
+            <h2>Shipping accounts</h2>
+            <div class="hint" id="pv-count">Each account shows in “Shipping with” and can be given to chosen packers</div>
           </div>
-          <div class="field">
-            <label>Name</label>
-            <input id="new-instance-label" placeholder="e.g. Endicia, or ShipStation – East" maxlength="60" autocomplete="off">
-          </div>
-          <div class="fixed"><button class="btn btn-outlined" id="add-instance">Add</button></div>
+          <button class="btn btn-primary btn-small" id="pv-add">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>Add account</button>
         </div>
-        <span class="hint">Several accounts of the same platform can coexist — each one gets its own name in the “Shipping with” selector and can be assigned per user. New integrations start disabled; configure them below, then enable and save.</span>
-      </div>
-      <div class="card" id="card-provider-picker">
-        <h2>Configure integration</h2>
-        <div class="row">
-          <div class="field fixed" style="min-width:300px">
-            <label>Show settings for</label>
-            <select id="provider-config-select"></select>
-          </div>
-        </div>
+        <select id="provider-config-select" class="pr-native" aria-hidden="true" tabindex="-1"></select>
+        <div class="pv-tiles" id="pv-tiles" role="radiogroup" aria-label="Shipping account"></div>
       </div>
       <!-- One card per configured provider instance, rendered from
-           GET /api/providers; the picker above shows only the selected card. -->
+           GET /api/providers; the tiles above show only the selected card. -->
       <div id="providers-container"></div>
     </section>
 
     <!-- ================= Shipping ================= -->
     <section class="tab-panel" data-panel="shipping">
       <div class="card" id="card-origin">
-        <h2>Origin address (ship from)</h2>
-        <p class="hint mb-16" id="origin-overrides-note"></p>
-        <div class="row">
-          <div class="field"><label>Company</label><input id="origin_company"></div>
-          <div class="field"><label>Contact name</label><input id="origin_contact"></div>
+        <div class="us-head">
+          <div>
+            <h2>Ship-from address</h2>
+            <div class="hint" id="origin-overrides-note"></div>
+          </div>
         </div>
-        <div class="row mt-16">
-          <div class="field"><label>Address 1</label><input id="origin_address1"></div>
-          <div class="field"><label>Address 2</label><input id="origin_address2"></div>
-        </div>
-        <div class="row mt-16">
-          <div class="field"><label>City</label><input id="origin_city"></div>
-          <div class="field fixed" style="min-width:90px"><label>State</label><input id="origin_state" maxlength="2" style="text-transform:uppercase"></div>
-          <div class="field fixed" style="min-width:120px"><label>ZIP</label><input id="origin_zip"></div>
-        </div>
-        <div class="row mt-16">
-          <div class="field"><label>Phone</label><input id="origin_phone"></div>
-          <div class="field"><label>Email</label><input id="origin_email" type="email"></div>
+        <div class="sh-origin">
+          <div class="sh-form">
+            <div class="field"><label for="origin_company">Company</label><input id="origin_company"></div>
+            <div class="field"><label for="origin_contact">Contact name</label><input id="origin_contact"></div>
+            <div class="field sh-wide"><label for="origin_address1">Address 1</label><input id="origin_address1"></div>
+            <div class="field sh-wide"><label for="origin_address2">Address 2</label><input id="origin_address2" placeholder="Suite, unit (optional)"></div>
+            <div class="sh-city sh-wide">
+              <div class="field"><label for="origin_city">City</label><input id="origin_city"></div>
+              <div class="field"><label for="origin_state">State</label><input id="origin_state" maxlength="2" style="text-transform:uppercase"></div>
+              <div class="field"><label for="origin_zip">ZIP</label><input id="origin_zip"></div>
+            </div>
+            <div class="field"><label for="origin_phone">Phone</label><input id="origin_phone"></div>
+            <div class="field"><label for="origin_email">Email</label><input id="origin_email" type="email"></div>
+          </div>
+          <aside class="sh-preview">
+            <div class="sh-preview-title">On the label</div>
+            <div class="sh-address" id="origin-preview"></div>
+          </aside>
         </div>
       </div>
 
       <div class="card" id="card-origin-accounts">
-        <h2>Per-account ship-from</h2>
-        <p class="hint mb-16">A shipping account can ship from its own details. Blank fields use the global origin above (shown greyed). Filling any street-address field takes the whole street address from this account.</p>
-        <div class="row">
-          <div class="field fixed" style="min-width:300px">
-            <label>Shipping account</label>
-            <select id="origin-account-select"></select>
+        <div class="us-head">
+          <div>
+            <h2>Ship-from per account</h2>
+            <div class="hint">An account can ship from its own details. Blank fields use the address above (shown greyed). Filling any street-address field takes the whole street address from the account.</div>
           </div>
         </div>
+        <select id="origin-account-select" class="pr-native" aria-hidden="true" tabindex="-1"></select>
+        <div class="sh-accounts" id="sh-accounts" role="radiogroup" aria-label="Shipping account"></div>
         <!-- One block per provider instance, rendered by renderProviders(). -->
         <div id="origin-accounts-container"></div>
       </div>
 
       <div class="card" id="card-tag-rules">
-        <h2>Shopify order tag rules</h2>
-        <p class="hint mb-16">When an order carries one of these tags, the Ship page pre-selects the courier service and/or sets the signature requirement sent to the carrier. Packers can still change either before buying. Service names match across providers (e.g. “UPS Ground” matches “UPS® Ground”).</p>
+        <div class="us-head">
+          <div>
+            <h2>Order tag rules</h2>
+            <div class="hint">When a Shopify order carries one of these tags, the Ship page picks the service and signature for the packer. They can still change both before buying.</div>
+          </div>
+          <button class="btn btn-outlined btn-small" id="add-tag-rule">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>Add rule</button>
+        </div>
         <input type="hidden" id="order_tag_rules">
         <div id="tag-rules-list"></div>
-        <button class="btn btn-text" id="add-tag-rule">+ Add rule</button>
         <datalist id="service-names"></datalist>
       </div>
 
       <div class="card" id="card-profit">
-        <h2>Profit check</h2>
-        <p class="hint mb-16">Before a label is bought, the order's profit (items after discounts + shipping paid − product costs − the label) is checked against these minimums. If either fails, the purchase is blocked until the bypass password is entered; every override is recorded in the audit log. Leave both blank to turn the check off. Costs come from Shopify's inventory unit cost and BackOffice's invoice line cost — an item without a cost counts at 90% of its selling price (an assumed 10% margin, so one uncosted product does not block an order).</p>
-        <div class="row">
-          <div class="field fixed" style="min-width:200px">
-            <label>Minimum profit ($)</label>
-            <input id="profit_min_amount" type="number" min="0" step="0.01" placeholder="e.g. 5.00">
+        <div class="us-head">
+          <div>
+            <h2>Profit check</h2>
+            <div class="hint">Stops a label from being bought when the order would make too little</div>
           </div>
-          <div class="field fixed" style="min-width:200px">
-            <label>Minimum margin (%)</label>
-            <input id="profit_min_margin_pct" type="number" min="0" max="100" step="0.1" placeholder="e.g. 20">
+          <span class="us-status" id="profit-state">Off</span>
+        </div>
+        <div class="pr-grid">
+          <div class="field">
+            <label for="profit_min_amount">Minimum profit</label>
+            <div class="pr-unit pr-lead"><span>$</span><input id="profit_min_amount" type="number" min="0" step="0.01" placeholder="e.g. 5.00"></div>
+            <span class="hint">Per order, after the label</span>
           </div>
-          <div class="field fixed" style="min-width:260px">
-            <label>Bypass password</label>
-            <input id="profit_bypass_password" type="password" autocomplete="new-password">
+          <div class="field">
+            <label for="profit_min_margin_pct">Minimum margin</label>
+            <div class="pr-unit"><input id="profit_min_margin_pct" type="number" min="0" max="100" step="0.1" placeholder="e.g. 20"><span>%</span></div>
+            <span class="hint">Profit as a share of what the customer paid</span>
+          </div>
+          <div class="field">
+            <label for="profit_bypass_password">Bypass password</label>
+            <div class="ac-pass">
+              <input id="profit_bypass_password" type="password" autocomplete="new-password">
+              <button type="button" class="ac-eye" data-eye="profit_bypass_password" aria-label="Show password" title="Show password">
+                <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></button>
+            </div>
             <span class="hint">Lets a packer buy a label that fails the check</span>
           </div>
         </div>
+        <div class="pr-note pf-note" id="profit-note">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          <span id="profit-summary"></span>
+        </div>
+        <details class="pf-how">
+          <summary>How profit is worked out</summary>
+          <p>Profit = items after discounts + shipping the customer paid − product costs − the label. Costs come from Shopify’s inventory unit cost and BackOffice’s invoice line cost. An item without a cost counts at 90% of its selling price (an assumed 10% margin), so one uncosted product does not block an order. Every override is recorded in the audit log.</p>
+        </details>
       </div>
 
     </section>

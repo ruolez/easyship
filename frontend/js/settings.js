@@ -111,18 +111,21 @@ function renderTagRules() {
   const rules = readTagRules();
   const list = document.getElementById('tag-rules-list');
   if (!rules.length) {
-    list.innerHTML = '<p class="text-secondary mb-16">No rules yet — orders ship with the packer’s own choices.</p>';
+    list.innerHTML = '<div class="pv-empty">No rules yet. Orders ship with the packer’s own choices.</div>';
     return;
   }
-  list.innerHTML = rules.map((r, i) => `
-    <div class="row tag-rule" data-idx="${i}">
-      <div class="field fixed" style="min-width:180px"><label>Order tag</label><input class="tr-tag" value="${esc(r.tag || '')}" placeholder="adult-signature"></div>
-      <div class="field"><label>Preferred service (optional)</label><input class="tr-service" list="service-names" value="${esc(r.service || '')}" placeholder="Any — packer chooses"></div>
-      <div class="field fixed" style="min-width:220px"><label>Signature</label>
-        <select class="tr-signature">${SIGNATURE_OPTIONS.map(([v, l]) => `<option value="${v}" ${r.signature === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      </div>
-      <div class="fixed" style="align-self:flex-end"><button class="btn btn-danger btn-small tr-remove" title="Remove rule">Remove</button></div>
-    </div>`).join('');
+  list.innerHTML = `
+    <div class="tr-table">
+      <div class="tr-row tr-headrow" aria-hidden="true"><span>Order tag</span><span>Preferred service</span><span>Signature</span><span></span></div>
+      ${rules.map((r, i) => `
+      <div class="tr-row tag-rule" data-idx="${i}">
+        <div class="field"><input class="tr-tag" value="${esc(r.tag || '')}" placeholder="adult-signature" aria-label="Order tag"></div>
+        <div class="field"><input class="tr-service" list="service-names" value="${esc(r.service || '')}" placeholder="Any — packer chooses" aria-label="Preferred service"></div>
+        <div class="field"><select class="tr-signature" aria-label="Signature">${SIGNATURE_OPTIONS.map(([v, l]) => `<option value="${v}" ${r.signature === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <button class="us-icon us-deact tr-remove" title="Remove rule" aria-label="Remove rule">${INT_ICONS.trash}</button>
+      </div>`).join('')}
+    </div>
+    <p class="hint mt-16">Service names match across providers: “UPS Ground” matches “UPS® Ground”.</p>`;
 }
 
 function syncTagRulesFromDom() {
@@ -892,7 +895,7 @@ async function renderProviders() {
   try {
     [list, meta] = await Promise.all([api('/api/providers'), api('/api/provider-instances')]);
   } catch (err) {
-    container.innerHTML = `<div class="card"><p class="text-secondary">Could not load providers: ${esc(err.message)}</p></div>`;
+    container.innerHTML = `<div class="card"><div class="pv-empty err">Could not load shipping accounts: ${esc(err.message)}</div></div>`;
     return;
   }
   instanceByKey = Object.fromEntries((meta.instances || []).map((i) => [i.key, i]));
@@ -908,9 +911,7 @@ async function renderProviders() {
       (p.origin_fields || []).forEach((f) => SETTING_IDS.push(f.key));
     }
   });
-  container.innerHTML = list.length
-    ? list.map(providerCardHtml).join('')
-    : '<div class="card"><p class="text-secondary">No shipping integrations yet — add one above.</p></div>';
+  container.innerHTML = list.map(providerCardHtml).join('');
   renderOriginAccounts(list);
   for (const p of list) {
     wireProviderCard(p);
@@ -927,45 +928,163 @@ function instanceOptionText(p) {
   return p.label === p.platform_label ? p.label : `${p.label} — ${p.platform_label}`;
 }
 
-/* Show one instance's config card at a time, chosen from the picker dropdown.
-   Keeps the current choice across re-renders; `preferred` selects a given key. */
+const PLATFORM_MARKS = {
+  easyship: ['ES', '#0891b2'], easypost: ['EP', '#2563eb'], shippo: ['SH', '#16a34a'],
+  shipstation: ['SS', '#d97706'], endicia: ['EN', '#9333ea'],
+};
+
+function platformMark(p, cls = '') {
+  const [mark, color] = PLATFORM_MARKS[p.platform] || [p.platform_label.slice(0, 2).toUpperCase(), usColor(p.platform_label)];
+  return `<span class="us-avatar pv-av${cls}" style="--av:${color}" aria-hidden="true">${esc(mark)}</span>`;
+}
+
+function accountTileHtml(p) {
+  return `
+    <button type="button" class="pv-tile" data-pick="${esc(p.name)}" role="radio" aria-checked="false">
+      ${platformMark(p)}
+      <span class="pv-tile-text"><strong>${esc(p.label)}</strong><span>${esc(p.platform_label)}</span></span>
+      <span class="pv-tile-meta" id="pv-meta-${esc(p.name)}"></span>
+    </button>`;
+}
+
+/* One account's cards at a time, chosen from the tiles (which drive the hidden
+   picker). Keeps the current choice across re-renders; `preferred` selects a given key. */
 function wireProviderPicker(list, preferred) {
   const picker = document.getElementById('provider-config-select');
-  if (!picker) return;
+  const tiles = document.getElementById('pv-tiles');
   const previous = preferred || picker.value;
   picker.innerHTML = list.map((p) => `<option value="${esc(p.name)}">${esc(instanceOptionText(p))}</option>`).join('');
+  tiles.innerHTML = list.length ? list.map(accountTileHtml).join('')
+    : '<div class="pv-empty">No shipping accounts yet. Add one to start buying labels.</div>';
+  document.getElementById('pv-count').textContent = list.length
+    ? `${plural(list.length, 'account')} · each shows in “Shipping with” and can be given to chosen packers`
+    : 'Connect a shipping platform to buy labels';
+  syncAccountTiles();
+  if (!list.length) return;
   const showOnly = (name) => {
     list.forEach((p) => {
       document.querySelectorAll(`[data-provider="${p.name}"], [data-services="${p.name}"]`)
         .forEach((el) => { el.style.display = p.name === name ? '' : 'none'; });
     });
+    tiles.querySelectorAll('[data-pick]').forEach((t) => {
+      t.classList.toggle('on', t.dataset.pick === name);
+      t.setAttribute('aria-checked', String(t.dataset.pick === name));
+    });
   };
-  if (!list.length) return;
   picker.value = list.some((p) => p.name === previous) ? previous : list[0].name;
   showOnly(picker.value);
   picker.onchange = () => showOnly(picker.value);
+  tiles.onclick = (e) => {
+    const tile = e.target.closest('[data-pick]');
+    if (!tile) return;
+    picker.value = tile.dataset.pick;
+    picker.onchange();
+  };
 }
 
+/* What a tile and card show, read from the inputs so an unsaved change
+   already shows; Save / Discard settle it. */
+function accountState(p) {
+  const el = (key) => document.getElementById(key);
+  const hasModes = !!(p.modes && p.modes.length);
+  const testField = p.fields.find((f) => f.key.endsWith('_test_labels'));
+  const mode = hasModes ? el(p.mode_key)?.value : '';
+  return {
+    enabled: !!el(p.enabled_key)?.checked,
+    mode,
+    test: hasModes ? mode === 'sandbox' : !!testField && el(testField.key)?.value === 'true',
+    ownOrigin: !!(p.origin_override_key && el(p.origin_override_key)?.checked),
+  };
+}
+
+function syncAccountTiles() {
+  renderedProviders.forEach((p) => {
+    const s = accountState(p);
+    const meta = document.getElementById(`pv-meta-${p.name}`);
+    if (meta) {
+      meta.innerHTML = `<span class="us-status${s.enabled ? ' on' : ''}">${s.enabled ? 'On' : 'Off'}</span>`
+        + (s.test ? '<span class="pv-chip warn">Test mode</span>' : '')
+        + (s.ownOrigin ? '<span class="pv-chip">Own ship-from</span>' : '');
+    }
+    const card = document.querySelector(`[data-provider="${p.name}"]`);
+    if (!card) return;
+    card.querySelectorAll('[data-set-mode]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.setMode === s.mode);
+      b.setAttribute('aria-checked', String(b.dataset.setMode === s.mode));
+    });
+    card.querySelectorAll('.field[data-mode]').forEach((f) => f.classList.toggle('in-use', f.dataset.mode === s.mode));
+  });
+}
+
+const providersContainer = document.getElementById('providers-container');
+providersContainer.addEventListener('change', syncAccountTiles);
+providersContainer.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-set-mode]');
+  if (!btn) return;
+  const select = document.getElementById(btn.dataset.modeSelect);
+  if (select.value === btn.dataset.setMode) return;
+  select.value = btn.dataset.setMode;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+});
+
+let addPlatforms = [];
+
 function wireAddInstance(platforms) {
-  const select = document.getElementById('new-instance-platform');
-  const label = document.getElementById('new-instance-label');
-  const button = document.getElementById('add-instance');
-  if (!select || !button) return;
-  select.innerHTML = platforms.map((p) => `<option value="${esc(p.name)}">${esc(p.label)}</option>`).join('');
-  button.onclick = async () => {
-    if (!settingsClean()) return;
+  addPlatforms = platforms;
+  document.getElementById('pv-add').onclick = openAddInstance;
+}
+
+function uniqueLabel(base) {
+  const taken = new Set(renderedProviders.map((p) => p.label.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  let n = 2;
+  while (taken.has(`${base} ${n}`.toLowerCase())) n += 1;
+  return `${base} ${n}`;
+}
+
+function openAddInstance() {
+  if (!settingsClean() || !addPlatforms.length) return;
+  openModal(`
+    <h3>Add a shipping account</h3>
+    <p class="text-secondary mb-16">It starts switched off. Enter its credentials, switch it on, then save.</p>
+    <div class="pv-platforms mb-16" role="radiogroup" aria-label="Platform">${addPlatforms.map((p, i) => `
+      <label class="pv-platform"><input type="radio" name="m-platform" value="${esc(p.name)}"${i ? '' : ' checked'}>
+        ${platformMark({ platform: p.name, platform_label: p.label })}<span>${esc(p.label)}</span></label>`).join('')}
+    </div>
+    <div class="field mb-16"><label for="m-instance-new">Name</label>
+      <input id="m-instance-new" maxlength="60" autocomplete="off" placeholder="e.g. ShipStation – East">
+      <span class="hint">Shown in “Shipping with”. Each account needs its own name.</span></div>
+    <div class="actions">
+      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="m-instance-add">Add account</button>
+    </div>`);
+  const name = document.getElementById('m-instance-new');
+  const platform = () => document.querySelector('[name="m-platform"]:checked').value;
+  let typed = false;
+  const suggest = () => {
+    if (!typed) name.value = uniqueLabel(addPlatforms.find((p) => p.name === platform()).label);
+  };
+  suggest();
+  name.addEventListener('input', () => { typed = !!name.value.trim(); });
+  document.querySelectorAll('[name="m-platform"]').forEach((r) => r.addEventListener('change', suggest));
+  name.focus();
+  name.select();
+  const button = document.getElementById('m-instance-add');
+  const add = async () => {
+    if (button.disabled) return;
+    button.disabled = true;
     try {
-      const row = await api('/api/provider-instances', {
-        method: 'POST',
-        body: { platform: select.value, label: label.value },
-      });
-      label.value = '';
-      snackbar(`${row.label} added — enter its credentials, then enable it and save`, 'success');
+      const row = await api('/api/provider-instances', { method: 'POST', body: { platform: platform(), label: name.value } });
+      closeModal();
+      snackbar(`${row.label} added — enter its credentials, then switch it on and save`, 'success');
       await refreshProviders(row.key);
     } catch (err) {
+      button.disabled = false;
       snackbar(err.message, 'error');
     }
   };
+  button.addEventListener('click', add);
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
 }
 
 /* Instance changes re-render the cards, which would discard unsaved edits. */
@@ -996,42 +1115,62 @@ function originSuffix(p, f) {
 
 function originFieldsHtml(p) {
   const byKey = Object.fromEntries((p.origin_fields || []).map((f) => [originSuffix(p, f), f]));
-  const input = (name, extra = '') => {
+  const input = (name, cls = '') => {
     const f = byKey[name];
-    return f ? `<div class="field${extra ? ' fixed' : ''}"${extra ? ` style="${extra}"` : ''}><label>${esc(f.label)}</label><input id="${esc(f.key)}"${name === 'state' ? ' maxlength="2" style="text-transform:uppercase"' : ''}${name === 'email' ? ' type="email"' : ''}></div>` : '';
+    return f ? `<div class="field${cls}"><label for="${esc(f.key)}">${esc(f.label)}</label><input id="${esc(f.key)}"${name === 'state' ? ' maxlength="2" style="text-transform:uppercase"' : ''}${name === 'email' ? ' type="email"' : ''}></div>` : '';
   };
   return `
-    <div id="origin-fields-${esc(p.name)}" style="display:none">
-      <div class="row mt-16">${input('company')}${input('contact')}</div>
-      <div class="row mt-16">${input('address1')}${input('address2')}</div>
-      <div class="row mt-16">${input('city')}${input('state', 'min-width:90px')}${input('zip', 'min-width:120px')}</div>
-      <div class="row mt-16">${input('phone')}${input('email')}</div>
+    <div class="sh-origin mt-16" id="origin-fields-${esc(p.name)}" style="display:none">
+      <div class="sh-form">
+        ${input('company')}${input('contact')}${input('address1', ' sh-wide')}${input('address2', ' sh-wide')}
+        <div class="sh-city sh-wide">${input('city')}${input('state')}${input('zip')}</div>
+        ${input('phone')}${input('email')}
+      </div>
+      <aside class="sh-preview">
+        <div class="sh-preview-title">On ${esc(p.label)} labels</div>
+        <div class="sh-address" id="origin-preview-${esc(p.name)}"></div>
+      </aside>
     </div>`;
 }
 
-/* Shipping tab: one ship-from block per instance, one shown at a time. */
+/* Shipping tab: one ship-from block per instance, one shown at a time,
+   chosen from the account buttons (which drive the hidden picker). */
 function renderOriginAccounts(list) {
   const container = document.getElementById('origin-accounts-container');
   const picker = document.getElementById('origin-account-select');
+  const chooser = document.getElementById('sh-accounts');
   const withOrigin = list.filter((p) => p.origin_override_key);
   container.innerHTML = withOrigin.length ? withOrigin.map((p) => `
     <div data-origin-account="${esc(p.name)}">
-      <div class="row mt-16">
-        <label class="svc-selectall"><input type="checkbox" id="${esc(p.origin_override_key)}" data-origin-toggle="${esc(p.name)}"> Use a different ship-from for this account</label>
-      </div>
+      <label class="sw"><input type="checkbox" role="switch" id="${esc(p.origin_override_key)}" data-origin-toggle="${esc(p.name)}"><span>Use a different ship-from for ${esc(p.label)}</span></label>
       ${originFieldsHtml(p)}
     </div>`).join('')
-    : '<p class="text-secondary mt-16">No shipping integrations yet — add one on the Providers tab.</p>';
+    : '<div class="pv-empty">No shipping accounts yet. Add one on the Providers tab.</div>';
+  chooser.innerHTML = withOrigin.length > 1 ? withOrigin.map((p) => `
+    <button type="button" class="sh-account" data-origin-pick="${esc(p.name)}" role="radio" aria-checked="false">
+      ${platformMark(p)}
+      <span class="sh-account-text"><strong>${esc(p.label)}</strong><span data-origin-status="${esc(p.name)}">Main address</span></span>
+    </button>`).join('') : '';
   const previous = picker.value;
   picker.innerHTML = withOrigin.map((p) => `<option value="${esc(p.name)}">${esc(instanceOptionText(p))}</option>`).join('');
-  picker.dataset.labels = JSON.stringify(Object.fromEntries(withOrigin.map((p) => [p.name, instanceOptionText(p)])));
+  picker.dataset.labels = JSON.stringify(Object.fromEntries(withOrigin.map((p) => [p.name, p.label])));
   if (withOrigin.length) picker.value = withOrigin.some((p) => p.name === previous) ? previous : withOrigin[0].name;
   picker.onchange = () => {
     container.querySelectorAll('[data-origin-account]').forEach((el) => {
       el.style.display = el.dataset.originAccount === picker.value ? '' : 'none';
     });
+    chooser.querySelectorAll('[data-origin-pick]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.originPick === picker.value);
+      b.setAttribute('aria-checked', String(b.dataset.originPick === picker.value));
+    });
   };
   picker.onchange();
+  chooser.onclick = (e) => {
+    const btn = e.target.closest('[data-origin-pick]');
+    if (!btn) return;
+    picker.value = btn.dataset.originPick;
+    picker.onchange();
+  };
   container.oninput = syncOriginPlaceholders;
   container.onchange = (e) => { if (e.target.dataset.originToggle) syncOriginToggles(); };
 }
@@ -1057,10 +1196,49 @@ function syncOriginPlaceholders() {
       if (el) el.placeholder = f.address && ownAddress ? '' : (globalEl?.value || '').trim();
     });
   });
+  syncOriginPreviews();
 }
 
-/* Origin-override fields only show while the override box is ticked; the
-   global card, the account picker and each Providers card say which
+const ORIGIN_PARTS = ['company', 'contact', 'address1', 'address2', 'city', 'state', 'zip', 'phone', 'email'];
+
+function readOrigin(prefix) {
+  return Object.fromEntries(ORIGIN_PARTS.map((k) => [k, (document.getElementById(`${prefix}${k}`)?.value || '').trim()]));
+}
+
+/* The ship-from an account's labels get, merged the way the server does it
+   (providers/base.py merged_origin). */
+function accountOrigin(p) {
+  const merged = readOrigin('origin_');
+  if (!document.getElementById(p.origin_override_key)?.checked) return merged;
+  const own = readOrigin(`${p.name}_origin_`);
+  const address = (p.origin_fields || []).filter((f) => f.address).map((f) => originSuffix(p, f));
+  const ownAddress = address.some((k) => own[k]);
+  ORIGIN_PARTS.forEach((k) => {
+    if (own[k] || (ownAddress && address.includes(k))) merged[k] = own[k];
+  });
+  return merged;
+}
+
+function originPreviewHtml(o) {
+  const place = [o.city, [o.state.toUpperCase(), o.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const lines = [o.company, o.contact, o.address1, o.address2, place].filter(Boolean);
+  if (!lines.length) return '<span class="sh-blank">Fill in the address to see how it reads</span>';
+  const missing = [!o.address1 && 'street', !o.city && 'city', !o.state && 'state', !o.zip && 'ZIP'].filter(Boolean);
+  return lines.map((l) => `<div>${esc(l)}</div>`).join('')
+    + (o.phone ? `<div class="sh-phone">${esc(o.phone)}</div>` : '')
+    + (missing.length ? `<div class="sh-missing">Missing ${missing.join(', ')}</div>` : '');
+}
+
+function syncOriginPreviews() {
+  document.getElementById('origin-preview').innerHTML = originPreviewHtml(readOrigin('origin_'));
+  renderedProviders.forEach((p) => {
+    const el = document.getElementById(`origin-preview-${p.name}`);
+    if (el) el.innerHTML = originPreviewHtml(accountOrigin(p));
+  });
+}
+
+/* Origin-override fields only show while the override switch is on; the
+   global card, the account buttons, each Providers card and tile say which
    accounts ship from their own details. */
 function syncOriginToggles() {
   const picker = document.getElementById('origin-account-select');
@@ -1070,16 +1248,20 @@ function syncOriginToggles() {
     const name = box.dataset.originToggle;
     const fields = document.getElementById(`origin-fields-${name}`);
     if (fields) fields.style.display = box.checked ? '' : 'none';
-    const option = [...picker.options].find((o) => o.value === name);
-    if (option) option.textContent = `${labels[name] || name}${box.checked ? ' · own ship-from' : ''}`;
+    const status = document.querySelector(`[data-origin-status="${name}"]`);
+    if (status) {
+      status.textContent = box.checked ? 'Own ship-from' : 'Main address';
+      status.closest('.sh-account').classList.toggle('own', box.checked);
+    }
     const summary = document.getElementById(`origin-summary-${name}`);
-    if (summary) summary.textContent = box.checked ? 'Ship from: own details for this account' : 'Ship from: global origin';
+    if (summary) summary.textContent = box.checked ? 'Its own ship-from details' : 'The main ship-from address';
     if (box.checked) own.push(labels[name] || name);
   });
   document.getElementById('origin-overrides-note').textContent = own.length
     ? `Used by every shipping account except ${own.join(', ')}, which ${own.length === 1 ? 'has its' : 'have their'} own ship-from below (blank fields there still fall back to this address).`
-    : 'Used by every shipping account. To ship from different details for one account, use Per-account ship-from below.';
+    : 'Used by every shipping account. To ship one account from different details, use Ship-from per account below.';
   syncOriginPlaceholders();
+  syncAccountTiles();
 }
 
 document.getElementById('card-origin').addEventListener('input', syncOriginPlaceholders);
@@ -1092,75 +1274,113 @@ function syncDeleteButtons() {
     const enabled = document.getElementById(`${btn.dataset.delete}_enabled`);
     const locked = !!(enabled && enabled.checked);
     btn.disabled = locked;
-    btn.title = locked ? 'Disable this integration and save before deleting it'
-      : 'Remove this integration and its credentials';
+    btn.title = locked ? 'Switch this account off and save before deleting it'
+      : 'Delete this account and its credentials';
   });
 }
 
 function fieldHtml(f) {
   const hint = f.hint ? `<span class="hint">${esc(f.hint)}</span>` : '';
+  const label = `<label for="${esc(f.key)}">${esc(f.label)}${f.mode ? '<span class="pv-inuse">In use</span>' : ''}</label>`;
   if (f.type === 'secret') {
-    return `<div class="field"><label>${esc(f.label)}</label>
+    return `<div class="field"${f.mode ? ` data-mode="${esc(f.mode)}"` : ''}>${label}
       <input type="password" id="${esc(f.key)}" autocomplete="off">${hint}</div>`;
   }
   if (f.type === 'select') {
     // Inline options render immediately; otherwise loadFieldOptions fills from options_endpoint.
     const opts = (f.options || [])
       .map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
-    return `<div class="field fixed" style="min-width:260px"><label>${esc(f.label)}</label>
-      <select id="${esc(f.key)}">${opts}</select>${hint}</div>`;
+    return `<div class="field">${label}<select id="${esc(f.key)}">${opts}</select>${hint}</div>`;
   }
-  return `<div class="field"><label>${esc(f.label)}</label><input id="${esc(f.key)}">${hint}</div>`;
+  return `<div class="field">${label}<input id="${esc(f.key)}">${hint}</div>`;
 }
 
+const MODE_TEXT = {
+  sandbox: ['Sandbox', 'Test labels, nothing is charged'],
+  production: ['Production', 'Live labels, each one costs money'],
+};
+
+const PV_ICONS = {
+  plug: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
+  reload: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>',
+  search: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+};
+
 function providerCardHtml(p) {
-  const modeField = p.modes && p.modes.length ? `
-    <div class="field fixed" style="min-width:220px">
-      <label>Mode</label>
-      <select id="${esc(p.mode_key)}">
-        ${p.modes.map((m) => `<option value="${esc(m.value)}">${esc(m.label)}</option>`).join('')}
-      </select>
+  const modes = p.modes && p.modes.length ? `
+    <select id="${esc(p.mode_key)}" class="pr-native" aria-hidden="true" tabindex="-1">
+      ${p.modes.map((m) => `<option value="${esc(m.value)}">${esc(m.label)}</option>`).join('')}
+    </select>
+    <div class="pv-modes" role="radiogroup" aria-label="Mode">${p.modes.map((m) => {
+      const [title, note] = MODE_TEXT[m.value] || [m.label, ''];
+      return `
+      <button type="button" class="pv-mode" data-set-mode="${esc(m.value)}" data-mode-select="${esc(p.mode_key)}" role="radio" aria-checked="false">
+        <span class="pr-radio" aria-hidden="true"></span>
+        <span class="pr-mode-text"><strong>${esc(title)}</strong>${note ? `<span>${esc(note)}</span>` : ''}</span>
+      </button>`;
+    }).join('')}
     </div>` : '';
-  const testBtn = p.test_endpoint ? `
-    <div class="fixed"><button class="btn btn-outlined" data-test="${esc(p.name)}">Test connection</button></div>
-    <div class="fixed" id="test-result-${esc(p.name)}"></div>` : '';
-  const services = p.supports && p.supports.service_exclusions ? `
-    <div class="card" data-services="${esc(p.name)}">
-      <h2>${esc(p.label)} shipping services
-        <button class="btn btn-outlined btn-small" data-reload-services="${esc(p.name)}" style="margin-left:auto">Reload</button>
-      </h2>
-      <p class="hint mb-16">Checked services are hidden from the rate list on the shipping page. Fetched live from your ${esc(p.label)} account (current mode).</p>
-      <div id="services-list-${esc(p.name)}"><p class="text-secondary">Loading services…</p></div>
-      <div class="row mt-16">
-        <div class="fixed"><button class="btn btn-primary" data-save-services="${esc(p.name)}">Save exclusions</button></div>
-        <div class="fixed" id="services-status-${esc(p.name)}"></div>
-      </div>
+  const test = p.test_endpoint ? `
+    <div class="pr-inline mt-16">
+      <button class="btn btn-outlined btn-small pv-btn" data-test="${esc(p.name)}">${PV_ICONS.plug}Test connection</button>
+      <span class="pr-result" id="test-result-${esc(p.name)}"></span>
     </div>` : '';
   const origin = p.origin_override_key ? `
-    <div class="row mt-16" style="align-items:center">
-      <div class="fixed"><span class="hint" id="origin-summary-${esc(p.name)}">Ship from: global origin</span></div>
-      <div class="fixed"><button class="btn btn-text btn-small" data-origin-edit="${esc(p.name)}">Change</button></div>
+    <div class="pr-panel-row pv-row">
+      <div>
+        <div class="pr-panel-title">Ship from</div>
+        <span class="hint" id="origin-summary-${esc(p.name)}">The main ship-from address</span>
+      </div>
+      <button class="btn btn-outlined btn-small" data-origin-edit="${esc(p.name)}">Change</button>
+    </div>` : '';
+  const services = p.supports && p.supports.service_exclusions ? `
+    <div class="card" data-services="${esc(p.name)}">
+      <div class="us-head">
+        <div>
+          <h2>Rate list</h2>
+          <div class="hint">Tick a service to hide it from the rates packers see for ${esc(p.label)}. Loaded live from the account’s current mode.</div>
+        </div>
+        <button class="btn btn-outlined btn-small pv-btn" data-reload-services="${esc(p.name)}">${PV_ICONS.reload}Reload</button>
+      </div>
+      <div class="pv-svc-tools" id="services-tools-${esc(p.name)}" hidden>
+        <label class="pv-search">${PV_ICONS.search}<input type="search" data-svc-search="${esc(p.name)}" placeholder="Find a service" aria-label="Find a service" autocomplete="off"></label>
+        <span class="hint" id="services-count-${esc(p.name)}"></span>
+      </div>
+      <div id="services-list-${esc(p.name)}"><p class="hint">Loading services…</p></div>
+      <div class="pv-svc-foot" id="services-foot-${esc(p.name)}" hidden>
+        <button class="btn btn-primary" data-save-services="${esc(p.name)}">Save rate list</button>
+        <span class="hint" id="services-status-${esc(p.name)}"></span>
+      </div>
     </div>` : '';
   const deleteAttrs = p.enabled
-    ? ' disabled title="Disable this integration and save before deleting it"'
-    : ' title="Remove this integration and its credentials"';
+    ? ' disabled title="Switch this account off and save before deleting it"'
+    : ' title="Delete this account and its credentials"';
   return `
     <div class="card" data-provider="${esc(p.name)}">
-      <h2>${esc(p.label)} <span class="text-secondary" style="font-weight:400">· ${esc(p.platform_label)}</span>
-        <label class="svc-selectall" style="margin-left:auto"><input type="checkbox" id="${esc(p.enabled_key)}"> Enabled</label>
-      </h2>
-      <div class="row mb-16">
-        ${modeField}${testBtn}
+      <div class="pv-head">
+        ${platformMark(p, ' pv-av-lg')}
+        <div class="pv-title">
+          <div class="pv-name">${esc(p.label)}</div>
+          <div class="hint">${esc(p.platform_label)} account</div>
+        </div>
+        <div class="pv-head-actions">
+          <button class="us-icon" data-rename="${esc(p.name)}" title="Rename" aria-label="Rename ${plAttr(p.label)}">${INT_ICONS.edit}</button>
+          <button class="us-icon us-deact" data-delete="${esc(p.name)}" aria-label="Delete ${plAttr(p.label)}"${deleteAttrs}>${INT_ICONS.trash}</button>
+          <label class="sw"><input type="checkbox" role="switch" id="${esc(p.enabled_key)}"><span>Enabled</span></label>
+        </div>
       </div>
-      <div class="row">${p.fields.map(fieldHtml).join('')}</div>
-      ${origin}
-      <div class="mt-16" data-inst-users="${esc(p.name)}">
-        <h4 class="mb-16">Assigned users</h4>
-        <div id="inst-users-${esc(p.name)}"><p class="text-secondary">Loading users…</p></div>
-      </div>
-      <div class="row mt-16">
-        <div class="fixed"><button class="btn btn-text btn-small" data-rename="${esc(p.name)}">Rename</button></div>
-        <div class="fixed"><button class="btn btn-danger btn-small" data-delete="${esc(p.name)}"${deleteAttrs}>Delete</button></div>
+      <div class="pr-panel">
+        <div class="pr-panel-row">
+          <div class="pr-panel-title">Connection</div>
+          ${modes}
+          <div class="pr-grid">${p.fields.map(fieldHtml).join('')}</div>
+          ${test}
+        </div>
+        ${origin}
+        <div class="pr-panel-row" data-inst-users="${esc(p.name)}">
+          <div class="pr-panel-title">Who can ship with it</div>
+          <div id="inst-users-${esc(p.name)}"><p class="hint">Loading users…</p></div>
+        </div>
       </div>
     </div>
     ${services}`;
@@ -1190,8 +1410,12 @@ function wireProviderCard(p) {
       .addEventListener('click', () => loadServices(p));
     document.querySelector(`[data-save-services="${p.name}"]`)
       .addEventListener('click', () => saveServices(p));
-    document.getElementById(`services-list-${p.name}`)
-      .addEventListener('change', onServiceToggle);
+    document.getElementById(`services-list-${p.name}`).addEventListener('change', (e) => {
+      onServiceToggle(e);
+      syncServiceCount(p);
+    });
+    document.querySelector(`[data-svc-search="${p.name}"]`)
+      .addEventListener('input', (e) => filterServices(p, e.target.value));
   }
 }
 
@@ -1199,21 +1423,24 @@ function wireProviderCard(p) {
 function instanceUsersHtml(key, users) {
   const admins = users.filter((u) => u.role === 'admin' && u.is_active).map((u) => u.username);
   const packers = users.filter((u) => u.role !== 'admin' && u.is_active);
-  const adminLine = admins.length
-    ? `<p class="hint mb-16">Admins always have access: ${esc(admins.join(', '))}</p>` : '';
+  const adminLine = admins.length ? `
+    <div class="pv-admins"><span class="hint">Admins always can:</span>${admins.map((n) => `<span class="us-chip">${esc(n)}</span>`).join('')}</div>` : '';
   if (allProviders.length <= 1) {
-    return `${adminLine}<p class="text-secondary">This is the only shipping account, so every user can ship with it.</p>`;
+    return '<p class="hint">This is the only shipping account, so every user ships with it.</p>';
   }
-  if (!packers.length) return `${adminLine}<p class="text-secondary">No packer accounts yet — add users on the Users tab.</p>`;
-  return `${adminLine}
-    <div class="svc-checklist">${packers.map((u) => `
-      <label class="svc-item"><input type="checkbox" class="inst-user" value="${u.id}"
-        ${!u.allowed_providers || u.allowed_providers.includes(key) ? 'checked' : ''}> ${esc(u.username)}</label>`).join('')}
+  if (!packers.length) return `<p class="hint">No packer accounts yet. Add them on the Users tab.</p>${adminLine}`;
+  return `
+    <div class="pv-users">${packers.map((u) => `
+      <label class="pv-user"><input type="checkbox" class="inst-user" value="${u.id}"
+        ${!u.allowed_providers || u.allowed_providers.includes(key) ? 'checked' : ''}>
+        <span class="us-avatar" style="--av:${usColor(u.username)}" aria-hidden="true">${esc(u.username.charAt(0).toUpperCase())}</span>
+        <span>${esc(u.username)}</span></label>`).join('')}
     </div>
-    <div class="row mt-16">
-      <div class="fixed"><button class="btn btn-outlined btn-small" data-save-inst-users="${esc(key)}">Save assignments</button></div>
-    </div>
-    <span class="hint">Unchecked users keep their other accounts. A user must keep at least one account — deactivate them to remove all access.</span>`;
+    ${adminLine}
+    <div class="pr-inline mt-16">
+      <button class="btn btn-outlined btn-small" data-save-inst-users="${esc(key)}">Save who can ship</button>
+      <span class="hint">A packer keeps at least one account. To remove all access, deactivate them on the Users tab.</span>
+    </div>`;
 }
 
 function renderInstanceUserBlocks(users) {
@@ -1242,7 +1469,7 @@ function renameInstance(p) {
   const inst = instanceByKey[p.name];
   if (!inst || !settingsClean()) return;
   openModal(`
-    <h3>Rename integration</h3>
+    <h3>Rename account</h3>
     <div class="field mb-16"><label>Name</label><input id="m-instance-label" value="${esc(inst.label)}" maxlength="60" autocomplete="off"></div>
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
@@ -1256,7 +1483,7 @@ function renameInstance(p) {
         body: { label: document.getElementById('m-instance-label').value },
       });
       closeModal();
-      snackbar('Integration renamed', 'success');
+      snackbar('Account renamed', 'success');
       await refreshProviders(p.name);
     } catch (err) {
       snackbar(err.message, 'error');
@@ -1269,7 +1496,7 @@ function deleteInstance(p) {
   if (!inst || !settingsClean()) return;
   openModal(`
     <h3>Delete ${esc(inst.label)}?</h3>
-    <p class="text-secondary mb-16">Its credentials, service exclusions and ship-from override are removed and it disappears from the “Shipping with” selector and from users’ allowed integrations. Parcels already shipped through it keep their history, but their labels can no longer be voided or re-bought here.</p>
+    <p class="text-secondary mb-16">Its credentials, service exclusions and ship-from override are removed and it disappears from the “Shipping with” selector and from users’ allowed accounts. Parcels already shipped through it keep their history, but their labels can no longer be voided or re-bought here.</p>
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
       <button class="btn btn-danger" id="m-instance-delete">Delete</button>
@@ -1301,18 +1528,26 @@ async function loadFieldOptions(f) {
 /* ---------- Shipping services (rate exclusions), per provider ---------- */
 async function loadServices(p) {
   const list = document.getElementById(`services-list-${p.name}`);
-  list.innerHTML = '<p class="text-secondary">Loading services…</p>';
+  const tools = document.getElementById(`services-tools-${p.name}`);
+  list.innerHTML = '<p class="hint">Loading services…</p>';
+  tools.hidden = true;
+  document.getElementById(`services-foot-${p.name}`).hidden = true;
   try {
     const res = await api(p.services_endpoint);
-    renderServices(list, res.services || [], new Set(res.excluded || []));
+    renderServices(p, list, res.services || [], new Set(res.excluded || []));
   } catch (err) {
-    list.innerHTML = `<p class="text-secondary">Could not load services: ${esc(err.message)}</p>`;
+    list.innerHTML = `<div class="pv-empty err">Could not load services: ${esc(err.message)}</div>`;
   }
+  syncServiceCount(p);
 }
 
-function renderServices(list, services, excluded) {
+function renderServices(p, list, services, excluded) {
+  const search = document.querySelector(`[data-svc-search="${p.name}"]`);
+  search.value = '';
+  document.getElementById(`services-tools-${p.name}`).hidden = !services.length;
+  document.getElementById(`services-foot-${p.name}`).hidden = !services.length;
   if (!services.length) {
-    list.innerHTML = '<p class="text-secondary">No services returned. Check the token and mode above.</p>';
+    list.innerHTML = '<div class="pv-empty">No services came back. Check the credentials and mode above, save, then Reload.</div>';
     return;
   }
   const groups = new Map();
@@ -1322,56 +1557,93 @@ function renderServices(list, services, excluded) {
     groups.get(key).push(s);
   });
   list.innerHTML = [...groups.entries()].map(([carrier, items]) => `
-    <div class="svc-group">
+    <div class="svc-group" data-carrier="${plAttr(carrier.toLowerCase())}">
       <div class="svc-group-head">
         <h4>${esc(carrier)}</h4>
-        <label class="svc-selectall"><input type="checkbox" class="svc-group-toggle"> Exclude all</label>
+        <span class="svc-count"></span>
+        <label class="svc-selectall"><input type="checkbox" class="svc-group-toggle"> Hide all</label>
       </div>
       <div class="svc-grid">
         ${items.map((s) => `
-          <label class="svc-item">
+          <label class="svc-item" data-name="${plAttr(s.name.toLowerCase())}">
             <input type="checkbox" class="svc-exclude" value="${esc(s.id)}" ${excluded.has(s.id) ? 'checked' : ''}>
             <span>${esc(s.name)}</span>
           </label>`).join('')}
       </div>
-    </div>`).join('');
+    </div>`).join('') + '<div class="pv-empty pv-nomatch" hidden></div>';
   list.querySelectorAll('.svc-group').forEach(syncGroupToggle);
+  list.dataset.saved = hiddenServiceIds(list);
+}
+
+const hiddenServiceIds = (list) => [...list.querySelectorAll('.svc-exclude:checked')].map((el) => el.value).sort().join('\n');
+
+/* "3 of 40 hidden", and whether the ticks differ from what was loaded or saved. */
+function syncServiceCount(p) {
+  const list = document.getElementById(`services-list-${p.name}`);
+  const total = list.querySelectorAll('.svc-exclude').length;
+  const hidden = list.querySelectorAll('.svc-exclude:checked').length;
+  document.getElementById(`services-count-${p.name}`).textContent = total ? `${hidden} of ${total} hidden` : '';
+  const changed = total > 0 && hiddenServiceIds(list) !== list.dataset.saved;
+  const status = document.getElementById(`services-status-${p.name}`);
+  status.textContent = changed ? 'Unsaved changes' : '';
+  status.classList.toggle('pv-unsaved', changed);
+}
+
+function filterServices(p, query) {
+  const list = document.getElementById(`services-list-${p.name}`);
+  const q = query.trim().toLowerCase();
+  let shown = 0;
+  list.querySelectorAll('.svc-group').forEach((group) => {
+    const carrierMatch = group.dataset.carrier.includes(q);
+    let any = false;
+    group.querySelectorAll('.svc-item').forEach((item) => {
+      item.hidden = !!q && !carrierMatch && !item.dataset.name.includes(q);
+      if (!item.hidden) { any = true; shown += 1; }
+    });
+    group.hidden = !any;
+  });
+  const none = list.querySelector('.pv-nomatch');
+  none.hidden = shown > 0;
+  none.textContent = `No service matches “${query.trim()}”.`;
 }
 
 function svcGroupBoxes(group) {
   return [...group.querySelectorAll('.svc-exclude')];
 }
 
-// Reflect the carrier's "Exclude all" checkbox from its services: checked when
-// all are excluded, indeterminate when some are.
+// Reflect the carrier's "Hide all" checkbox from its services: checked when
+// all are hidden, indeterminate when some are.
 function syncGroupToggle(group) {
   const boxes = svcGroupBoxes(group);
   const checked = boxes.filter((b) => b.checked).length;
   const toggle = group.querySelector('.svc-group-toggle');
   toggle.checked = boxes.length > 0 && checked === boxes.length;
   toggle.indeterminate = checked > 0 && checked < boxes.length;
+  group.querySelector('.svc-count').textContent = checked ? `${checked} of ${boxes.length} hidden` : '';
 }
 
+// "Hide all" acts on the services the search leaves visible.
 function onServiceToggle(e) {
   const group = e.target.closest('.svc-group');
   if (!group) return;
   if (e.target.classList.contains('svc-group-toggle')) {
-    svcGroupBoxes(group).forEach((b) => { b.checked = e.target.checked; });
-  } else if (e.target.classList.contains('svc-exclude')) {
-    syncGroupToggle(group);
+    svcGroupBoxes(group).filter((b) => !b.closest('.svc-item').hidden)
+      .forEach((b) => { b.checked = e.target.checked; });
   }
+  syncGroupToggle(group);
 }
 
 async function saveServices(p) {
   const listEl = document.getElementById(`services-list-${p.name}`);
   const excluded = [...listEl.querySelectorAll('.svc-exclude:checked')].map((el) => el.value);
-  document.getElementById(`services-status-${p.name}`).textContent = '';
   try {
     await api(p.excluded_endpoint, { method: 'POST', body: { excluded } });
+    listEl.dataset.saved = hiddenServiceIds(listEl);
     snackbar(`Saved — ${excluded.length} service${excluded.length === 1 ? '' : 's'} hidden`, 'success');
   } catch (err) {
     snackbar(err.message, 'error');
   }
+  syncServiceCount(p);
 }
 
 async function loadSettings() {
@@ -1386,8 +1658,33 @@ async function loadSettings() {
   });
   syncOriginToggles();
   syncDeleteButtons();
+  syncProfitSummary();
   renderPlRules();
 }
+
+/* ---------- Profit check summary ---------- */
+function syncProfitSummary() {
+  const amount = document.getElementById('profit_min_amount').value.trim();
+  const pct = document.getElementById('profit_min_margin_pct').value.trim();
+  const password = document.getElementById('profit_bypass_password').value;
+  const on = !!(amount || pct);
+  const state = document.getElementById('profit-state');
+  state.textContent = on ? 'On' : 'Off';
+  state.classList.toggle('on', on);
+  const limits = [
+    amount && `less than $${Number(amount).toFixed(2)} profit`,
+    pct && `less than ${Number(pct)}% margin`,
+  ].filter(Boolean).join(' or ');
+  document.getElementById('profit-note').classList.toggle('warn', on && !password);
+  let text = 'The check is off. Set a minimum profit, a minimum margin or both to turn it on.';
+  if (on && !password) text = `Set a bypass password too. Without one, an order that makes ${limits} could never ship, so these settings won’t save.`;
+  else if (on) text = `A label is blocked when the order makes ${limits}. A packer can still buy it with the bypass password.`;
+  document.getElementById('profit-summary').textContent = text;
+}
+
+['profit_min_amount', 'profit_min_margin_pct', 'profit_bypass_password'].forEach((id) => {
+  document.getElementById(id).addEventListener('input', syncProfitSummary);
+});
 
 document.getElementById('save-settings').addEventListener('click', async () => {
   const body = {};
