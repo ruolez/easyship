@@ -152,20 +152,51 @@ document.getElementById('add-tag-rule').addEventListener('click', () => {
 
 /* ---------- Pick list rules ----------
    Stored as JSON in the hidden #picklist_rules input, like the tag rules, so
-   they ride along with Save / Discard. The server assigns each rule its id. */
+   they ride along with Save / Discard. The server assigns each rule its id and
+   drops rules without a name or a complete condition, so the editor says so
+   before that happens. Each card reads as a sentence and shows the chip the
+   rule becomes on the Pick lists page. */
 const PL_FIELDS = {
-  order_tag: 'Order tag', customer_tag: 'Customer tag', ship_state: 'Ship-to state', store: 'Store',
-  shipping_method: 'Shipping method', order_total: 'Order total ($)',
+  order_tag: { label: 'Order tag', group: 'Tags', kind: 'text', placeholder: 'e.g. wholesale',
+    hint: 'Matches part of a tag, any case', ops: [['contains', 'contains'], ['not_contains', 'doesn’t contain']] },
+  customer_tag: { label: 'Customer tag', group: 'Tags', kind: 'text', placeholder: 'e.g. vip',
+    hint: 'Matches part of a tag, any case', ops: [['contains', 'contains'], ['not_contains', 'doesn’t contain']] },
+  order_total: { label: 'Order total', group: 'Order', kind: 'money', placeholder: '100',
+    hint: '“At least 100” includes $100.00', ops: [['at_least', 'is at least'], ['under', 'is under']] },
+  shipping_method: { label: 'Shipping method', group: 'Order', kind: 'text', placeholder: 'e.g. Economy',
+    hint: 'Matches part of the name', ops: [['contains', 'contains'], ['not_contains', 'doesn’t contain']] },
+  store: { label: 'Store', group: 'Order', kind: 'stores', hint: 'Pick one or more',
+    ops: [['in', 'is one of'], ['not_in', 'is not one of']] },
+  ship_state: { label: 'Ship-to state', group: 'Address', kind: 'states', placeholder: 'TX, CA',
+    hint: 'Two-letter codes, comma-separated', ops: [['in', 'is one of'], ['not_in', 'is not one of']] },
+  address_match: { label: 'Billing address', group: 'Address', kind: 'none',
+    hint: 'Hide these to leave orders whose addresses differ', ops: [['match', 'is the same as ship-to']] },
 };
-const PL_OPS = {
-  order_tag: [['contains', 'contains'], ['not_contains', 'doesn’t contain']],
-  customer_tag: [['contains', 'contains'], ['not_contains', 'doesn’t contain']],
-  ship_state: [['in', 'is one of'], ['not_in', 'is not one of']],
-  store: [['in', 'is'], ['not_in', 'is not']],
-  shipping_method: [['contains', 'contains'], ['not_contains', 'doesn’t contain']],
-  order_total: [['at_least', 'is at least'], ['under', 'is under']],
+const PL_TEMPLATES = [
+  { title: 'Hide wholesale orders', text: 'Order or customer tag contains “wholesale”',
+    rule: { name: 'Wholesale', action: 'hide', match: 'any', conditions: [
+      { field: 'order_tag', op: 'contains', value: 'wholesale' }, { field: 'customer_tag', op: 'contains', value: 'wholesale' }] } },
+  { title: 'Big orders', text: 'Order total is at least $300',
+    rule: { name: 'Big orders', action: 'keep', match: 'all', conditions: [{ field: 'order_total', op: 'at_least', value: 300 }] } },
+  { title: 'Same billing & ship-to', text: 'Switch it on to leave only orders whose addresses differ',
+    rule: { name: 'Same address', action: 'hide', match: 'all', conditions: [{ field: 'address_match', op: 'match', value: 'yes' }] } },
+];
+const plSvg = (paths) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+const PL_ICONS = {
+  chevron: plSvg('<path d="m9 18 6-6-6-6"/>'),
+  up: plSvg('<path d="m18 15-6-6-6 6"/>'),
+  down: plSvg('<path d="m6 9 6 6 6-6"/>'),
+  copy: plSvg('<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
+  trash: plSvg('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
+  x: plSvg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+  plus: plSvg('<path d="M12 5v14"/><path d="M5 12h14"/>'),
+  minus: plSvg('<path d="M5 12h14"/>'),
+  warn: plSvg('<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>'),
 };
 let plStores = [];
+const plOpen = new Set(); // keys of the rule cards shown expanded
+let plNewKey = 0;
+const plKey = (r) => r.id || r._key;
 
 /* BackOffice databases and stores for the Pick lists tab; filled before the
    saved values are applied so the selects can show them. */
@@ -192,25 +223,125 @@ function writePlRules(rules) {
   setDirty(true);
 }
 
-function plValueHtml(c) {
-  if (c.field === 'store') {
-    const current = String((c.value || [])[0] || '');
-    return `<select class="pl-value">${plStores.map((s) => `<option value="${s.id}" ${String(s.id) === current ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
-  }
-  if (c.field === 'order_total') {
-    return `<input class="pl-value" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(c.value ?? '')}" placeholder="e.g. 100">`;
-  }
-  const value = Array.isArray(c.value) ? c.value.join(', ') : (c.value || '');
-  const placeholder = { ship_state: 'TX, CA', shipping_method: 'e.g. Economy or Next Day' }[c.field] || 'tag';
-  return `<input class="pl-value" value="${esc(value)}" placeholder="${placeholder}">`;
+const plAttr = (v) => esc(v).replace(/"/g, '&quot;');
+const plStoreName = (id) => (plStores.find((s) => String(s.id) === String(id)) || {}).name || `Store #${id} (removed)`;
+
+/* A condition the server will keep: the same checks as picklist_rules._parse_condition. */
+function plConditionComplete(c) {
+  const v = c.value;
+  if (c.field === 'address_match') return true;
+  if (c.field === 'order_total') return v !== '' && v != null && Number(v) >= 0 && !Number.isNaN(Number(v));
+  if (Array.isArray(v)) return v.some((x) => String(x).trim());
+  return String(v ?? '').trim() !== '';
 }
 
-function plConditionHtml(c, j) {
-  return `<div class="row pl-cond" data-cidx="${j}">
-    <div class="field fixed" style="min-width:150px"><select class="pl-field">${Object.entries(PL_FIELDS).map(([v, l]) => `<option value="${v}" ${c.field === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <div class="field fixed" style="min-width:140px"><select class="pl-op">${PL_OPS[c.field].map(([v, l]) => `<option value="${v}" ${c.op === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <div class="field">${plValueHtml(c)}</div>
-    <div class="fixed"><button class="btn btn-text btn-small pl-cond-remove" title="Remove condition">✕</button></div>
+function plConditionText(c) {
+  const def = PL_FIELDS[c.field];
+  if (!def) return '';
+  const op = (def.ops.find(([v]) => v === c.op) || def.ops[0])[1];
+  let value = '';
+  if (def.kind === 'money') value = money(c.value);
+  else if (def.kind === 'stores') value = (c.value || []).map(plStoreName).join(', ');
+  else if (def.kind === 'states') value = (Array.isArray(c.value) ? c.value : String(c.value || '').split(',')).map((s) => s.trim().toUpperCase()).filter(Boolean).join(', ');
+  else if (def.kind === 'text') value = `“${String(c.value).trim()}”`;
+  return `${def.label.toLowerCase()} ${op}${value ? ` ${value}` : ''}`;
+}
+
+/* "Hides orders where order tag contains “wholesale” or customer tag …" */
+function plRuleSummary(r) {
+  const done = (r.conditions || []).filter(plConditionComplete);
+  if (!done.length) return '';
+  const verb = r.action === 'hide' ? 'Hides orders where' : 'Shows orders where';
+  return `${verb} ${done.map((c) => esc(plConditionText(c))).join(` <b>${r.match === 'any' ? 'or' : 'and'}</b> `)}`;
+}
+
+function plRuleProblems(r) {
+  const problems = [];
+  if (!String(r.name || '').trim()) problems.push('Give the rule a name — rules without one aren’t saved.');
+  const conds = r.conditions || [];
+  const done = conds.filter(plConditionComplete);
+  if (!done.length) problems.push('Add a condition with a value — a rule without one isn’t saved.');
+  else if (done.length < conds.length) problems.push('Conditions left without a value are dropped when you save.');
+  return problems;
+}
+
+function plValueHtml(c) {
+  const def = PL_FIELDS[c.field];
+  if (def.kind === 'none') return '';
+  if (def.kind === 'stores') {
+    const picked = (c.value || []).map(String);
+    const known = plStores.map((s) => ({ id: String(s.id), name: s.name }));
+    const gone = picked.filter((id) => !known.some((s) => s.id === id)).map((id) => ({ id, name: plStoreName(id) }));
+    const all = [...known, ...gone];
+    return all.length
+      ? `<div class="plr-pills pl-value" role="group" aria-label="Stores">${all.map((s) => `<button type="button" class="plr-pill${picked.includes(s.id) ? ' on' : ''}" data-store="${plAttr(s.id)}" aria-pressed="${picked.includes(s.id)}">${esc(s.name)}</button>`).join('')}</div>`
+      : '<span class="text-secondary">No Shopify stores yet</span>';
+  }
+  if (def.kind === 'money') {
+    return `<label class="plr-money"><span>$</span><input class="pl-value" type="number" min="0" step="0.01" inputmode="decimal" value="${plAttr(c.value ?? '')}" placeholder="${def.placeholder}"></label>`;
+  }
+  const value = Array.isArray(c.value) ? c.value.join(', ') : (c.value ?? '');
+  return `<input class="pl-value${def.kind === 'states' ? ' plr-states' : ''}" value="${plAttr(value)}" placeholder="${def.placeholder}" spellcheck="false">`;
+}
+
+function plFieldOptions(current) {
+  const groups = {};
+  Object.entries(PL_FIELDS).forEach(([v, d]) => { (groups[d.group] = groups[d.group] || []).push([v, d.label]); });
+  return Object.entries(groups).map(([g, items]) => `<optgroup label="${g}">${items.map(([v, l]) =>
+    `<option value="${v}" ${current === v ? 'selected' : ''}>${l}</option>`).join('')}</optgroup>`).join('');
+}
+
+function plConditionHtml(c, j, match) {
+  const def = PL_FIELDS[c.field];
+  const join = j ? `<div class="plr-join"><span>${match === 'any' ? 'or' : 'and'}</span></div>` : '';
+  return `${join}<div class="plr-cond${plConditionComplete(c) ? '' : ' incomplete'}" data-cidx="${j}">
+    <select class="pl-field" aria-label="Field">${plFieldOptions(c.field)}</select>
+    <select class="pl-op" aria-label="Comparison" ${def.ops.length === 1 ? 'disabled' : ''}>${def.ops.map(([v, l]) => `<option value="${v}" ${c.op === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+    <div class="plr-value">${plValueHtml(c)}<span class="plr-hint">${def.hint}</span></div>
+    <button type="button" class="plr-icon pl-cond-remove" title="Remove condition" aria-label="Remove condition">${PL_ICONS.x}</button>
+  </div>`;
+}
+
+function plChipPreview(r) {
+  const hide = r.action === 'hide';
+  return `<span class="chip pl-rule-chip ${hide ? 'mode-hide' : 'mode-add'} plr-preview" title="How the chip looks on the Pick lists page when switched on">${hide ? PL_ICONS.minus : PL_ICONS.plus}<span class="plr-preview-name">${esc(String(r.name || '').trim() || 'Unnamed')}</span></span>`;
+}
+
+function plSeg(cls, current, options) {
+  return `<div class="plr-seg ${cls}" role="radiogroup">${options.map(([v, label]) =>
+    `<button type="button" role="radio" data-v="${v}" class="${current === v ? 'on' : ''}" aria-checked="${current === v}">${label}</button>`).join('')}</div>`;
+}
+
+function plRuleHtml(r, i, total) {
+  const open = plOpen.has(plKey(r));
+  const action = r.action === 'hide' ? 'hide' : 'keep';
+  const match = r.match === 'any' ? 'any' : 'all';
+  const problems = plRuleProblems(r);
+  const summary = plRuleSummary(r);
+  return `<div class="plr plr-${action}${open ? ' open' : ''}${problems.length ? ' has-problems' : ''}" data-idx="${i}" data-key="${plAttr(plKey(r))}">
+    <div class="plr-head">
+      <button type="button" class="plr-icon plr-toggle" aria-expanded="${open}" title="${open ? 'Collapse' : 'Edit this rule'}">${PL_ICONS.chevron}</button>
+      <div class="plr-titles">
+        <input class="plr-name" value="${plAttr(r.name || '')}" placeholder="Name this rule" maxlength="40" aria-label="Rule name">
+        <div class="plr-summary">${summary || '<span class="plr-summary-empty">No complete conditions yet</span>'}</div>
+      </div>
+      ${plChipPreview(r)}
+      <div class="plr-tools">
+        <button type="button" class="plr-icon pl-up" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${PL_ICONS.up}</button>
+        <button type="button" class="plr-icon pl-down" title="Move down" aria-label="Move down" ${i === total - 1 ? 'disabled' : ''}>${PL_ICONS.down}</button>
+        <button type="button" class="plr-icon pl-dup" title="Duplicate" aria-label="Duplicate rule">${PL_ICONS.copy}</button>
+        <button type="button" class="plr-icon danger pl-remove" title="Delete rule" aria-label="Delete rule">${PL_ICONS.trash}</button>
+      </div>
+    </div>
+    <div class="plr-problems">${problems.map((p) => `<div>${PL_ICONS.warn}<span>${p}</span></div>`).join('')}</div>
+    <div class="plr-body">
+      <div class="plr-setting"><span class="plr-label">When switched on</span>
+        ${plSeg('pl-action', action, [['keep', `${PL_ICONS.plus} Show matching orders`], ['hide', `${PL_ICONS.minus} Hide matching orders`]])}</div>
+      <div class="plr-setting"><span class="plr-label">An order matches when</span>
+        ${plSeg('pl-match', match, [['all', 'all conditions are true'], ['any', 'any condition is true']])}</div>
+      <div class="plr-conds">${(r.conditions || []).map((c, j) => plConditionHtml(c, j, match)).join('')}</div>
+      <button type="button" class="btn btn-text btn-small pl-cond-add">${PL_ICONS.plus} Add condition</button>
+    </div>
   </div>`;
 }
 
@@ -218,87 +349,161 @@ function renderPlRules() {
   const list = document.getElementById('pl-rules-list');
   if (!list) return;
   const rules = readPlRules();
+  document.getElementById('add-pl-rule').style.display = rules.length ? '' : 'none';
   if (!rules.length) {
-    list.innerHTML = '<p class="text-secondary mb-16">No rules yet — the Pick lists page still has its quick filters.</p>';
+    list.innerHTML = `<div class="plr-empty">
+      <div class="plr-empty-title">No rules yet</div>
+      <p class="hint">The Pick lists page still has its quick filters. Start from an example or a blank rule:</p>
+      <div class="plr-templates">${PL_TEMPLATES.map((t, i) => `<button type="button" class="plr-template" data-template="${i}">
+        <strong>${esc(t.title)}</strong><span>${esc(t.text)}</span></button>`).join('')}
+        <button type="button" class="plr-template blank" data-template="blank"><strong>${PL_ICONS.plus} Blank rule</strong><span>Build it from scratch</span></button></div>
+    </div>`;
     return;
   }
-  list.innerHTML = rules.map((r, i) => `
-    <div class="pl-rule" data-idx="${i}" data-id="${esc(r.id || '')}">
-      <div class="row mb-16">
-        <div class="field"><label>Name</label><input class="pl-name" value="${esc(r.name || '')}" placeholder="e.g. Wholesale" maxlength="40"></div>
-        <div class="field fixed" style="min-width:220px"><label>When switched on</label>
-          <select class="pl-action">
-            <option value="hide" ${r.action !== 'keep' ? 'selected' : ''}>Hide matching orders</option>
-            <option value="keep" ${r.action === 'keep' ? 'selected' : ''}>Show only matching orders</option>
-          </select></div>
-        <div class="field fixed" style="min-width:170px"><label>Orders match when</label>
-          <select class="pl-match">
-            <option value="all" ${r.match !== 'any' ? 'selected' : ''}>all conditions hold</option>
-            <option value="any" ${r.match === 'any' ? 'selected' : ''}>any condition holds</option>
-          </select></div>
-        <div class="fixed"><button class="btn btn-danger btn-small pl-remove">Remove</button></div>
-      </div>
-      ${(r.conditions || []).map((c, j) => (c.field === 'address_match' ? '' : plConditionHtml(c, j))).join('')}
-      <label class="pl-flag"><input type="checkbox" class="pl-addr" ${(r.conditions || []).some((c) => c.field === 'address_match') ? 'checked' : ''}>
-        Billing address matches the ship-to address</label>
-      <button class="btn btn-text btn-small pl-cond-add">+ Add condition</button>
-    </div>`).join('');
+  list.innerHTML = rules.map((r, i) => plRuleHtml(r, i, rules.length)).join('');
 }
 
-function syncPlRulesFromDom() {
-  const rules = [...document.querySelectorAll('#pl-rules-list .pl-rule')].map((el) => ({
-    id: el.dataset.id || undefined,
-    name: el.querySelector('.pl-name').value,
-    action: el.querySelector('.pl-action').value,
-    match: el.querySelector('.pl-match').value,
-    conditions: [...el.querySelectorAll('.pl-cond')].map((c) => {
+/* The editor's current state → the rules (without re-rendering). */
+function plRulesFromDom() {
+  const before = readPlRules();
+  return [...document.querySelectorAll('#pl-rules-list .plr')].map((el, i) => ({
+    ...(before[i] && before[i].id ? { id: before[i].id } : { _key: el.dataset.key }),
+    name: el.querySelector('.plr-name').value,
+    action: el.querySelector('.pl-action .on').dataset.v,
+    match: el.querySelector('.pl-match .on').dataset.v,
+    conditions: [...el.querySelectorAll('.plr-cond')].map((c) => {
       const field = c.querySelector('.pl-field').value;
-      const raw = c.querySelector('.pl-value').value;
-      return {
-        field,
-        op: c.querySelector('.pl-op').value,
-        value: field === 'store' ? [raw] : field === 'ship_state' ? raw.split(',').map((v) => v.trim()) : raw,
-      };
-    }).concat(el.querySelector('.pl-addr').checked ? [{ field: 'address_match', op: 'match', value: 'yes' }] : []),
+      const op = c.querySelector('.pl-op').value;
+      const valueEl = c.querySelector('.pl-value');
+      let value = '';
+      if (field === 'address_match') value = 'yes';
+      else if (field === 'store') value = valueEl ? [...valueEl.querySelectorAll('.plr-pill.on')].map((p) => p.dataset.store) : [];
+      else if (field === 'ship_state') value = valueEl.value.split(',').map((v) => v.trim().toUpperCase()).filter(Boolean);
+      else value = valueEl.value;
+      return { field, op, value };
+    }),
   }));
+}
+
+/* Summary, chip preview and warnings follow every keystroke; the inputs stay put. */
+function syncPlRules() {
+  const rules = plRulesFromDom();
   writePlRules(rules);
+  document.querySelectorAll('#pl-rules-list .plr').forEach((el, i) => {
+    const r = rules[i];
+    const problems = plRuleProblems(r);
+    el.querySelector('.plr-summary').innerHTML = plRuleSummary(r) || '<span class="plr-summary-empty">No complete conditions yet</span>';
+    el.querySelector('.plr-preview').outerHTML = plChipPreview(r);
+    el.querySelector('.plr-problems').innerHTML = problems.map((p) => `<div>${PL_ICONS.warn}<span>${p}</span></div>`).join('');
+    el.classList.toggle('has-problems', problems.length > 0);
+    el.classList.toggle('plr-hide', r.action === 'hide');
+    el.classList.toggle('plr-keep', r.action !== 'hide');
+    el.querySelectorAll('.plr-join span').forEach((s) => { s.textContent = r.match === 'any' ? 'or' : 'and'; });
+    el.querySelectorAll('.plr-cond').forEach((c, j) => c.classList.toggle('incomplete', !plConditionComplete(r.conditions[j])));
+  });
 }
 
 function defaultPlCondition(field = 'order_tag') {
-  return { field, op: PL_OPS[field][0][0], value: field === 'store' && plStores.length ? [String(plStores[0].id)] : '' };
+  const def = PL_FIELDS[field];
+  let value = '';
+  if (field === 'address_match') value = 'yes';
+  else if (field === 'store') value = plStores.length ? [String(plStores[0].id)] : [];
+  return { field, op: def.ops[0][0], value };
+}
+
+function addPlRule(rule) {
+  const key = `new${++plNewKey}`;
+  writePlRules([...plRulesFromDom(), { ...JSON.parse(JSON.stringify(rule)), _key: key }]);
+  plOpen.add(key);
+  renderPlRules();
+  const card = document.querySelector(`#pl-rules-list .plr[data-key="${key}"]`);
+  if (card) {
+    card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const name = card.querySelector('.plr-name');
+    name.focus();
+    name.select();
+  }
 }
 
 const plList = document.getElementById('pl-rules-list');
-plList.addEventListener('input', syncPlRulesFromDom);
+plList.addEventListener('input', (e) => {
+  if (e.target.classList.contains('plr-states')) {
+    const at = e.target.selectionStart;
+    e.target.value = e.target.value.toUpperCase();
+    e.target.setSelectionRange(at, at);
+  }
+  syncPlRules();
+});
 plList.addEventListener('change', (e) => {
-  if (e.target.classList.contains('pl-field')) {
-    // A new field brings its own operators and value widget.
-    const cond = e.target.closest('.pl-cond');
-    const rules = readPlRules();
-    rules[cond.closest('.pl-rule').dataset.idx].conditions[cond.dataset.cidx] = defaultPlCondition(e.target.value);
-    writePlRules(rules);
-    renderPlRules();
+  if (!e.target.classList.contains('pl-field')) {
+    syncPlRules();
     return;
   }
-  syncPlRulesFromDom();
+  // A new field brings its own comparisons and value input.
+  const rules = plRulesFromDom();
+  const cond = e.target.closest('.plr-cond');
+  rules[cond.closest('.plr').dataset.idx].conditions[cond.dataset.cidx] = defaultPlCondition(e.target.value);
+  writePlRules(rules);
+  renderPlRules();
+  const fresh = plList.querySelector(`.plr[data-idx="${cond.closest('.plr').dataset.idx}"] .plr-cond[data-cidx="${cond.dataset.cidx}"] .pl-value`);
+  if (fresh && fresh.focus) fresh.focus();
 });
 plList.addEventListener('click', (e) => {
-  const ruleEl = e.target.closest('.pl-rule');
-  if (!ruleEl || !e.target.closest('button')) return;
-  const rules = readPlRules();
-  const rule = rules[ruleEl.dataset.idx];
-  if (e.target.closest('.pl-remove')) rules.splice(ruleEl.dataset.idx, 1);
-  else if (e.target.closest('.pl-cond-add')) rule.conditions.push(defaultPlCondition());
-  else if (e.target.closest('.pl-cond-remove')) rule.conditions.splice(e.target.closest('.pl-cond').dataset.cidx, 1);
+  const template = e.target.closest('[data-template]');
+  if (template) {
+    const t = template.dataset.template;
+    addPlRule(t === 'blank' ? { name: '', action: 'keep', match: 'all', conditions: [defaultPlCondition()] } : PL_TEMPLATES[t].rule);
+    return;
+  }
+  const ruleEl = e.target.closest('.plr');
+  if (!ruleEl) return;
+  const seg = e.target.closest('.plr-seg button');
+  if (seg) {
+    seg.parentElement.querySelectorAll('button').forEach((b) => {
+      b.classList.toggle('on', b === seg);
+      b.setAttribute('aria-checked', String(b === seg));
+    });
+    syncPlRules();
+    return;
+  }
+  const pill = e.target.closest('.plr-pill');
+  if (pill) {
+    pill.classList.toggle('on');
+    pill.setAttribute('aria-pressed', String(pill.classList.contains('on')));
+    syncPlRules();
+    return;
+  }
+  const idx = Number(ruleEl.dataset.idx);
+  const key = ruleEl.dataset.key;
+  const head = e.target.closest('.plr-head');
+  if (e.target.closest('.plr-toggle') || (head && !e.target.closest('input, button, .plr-preview'))) {
+    if (plOpen.has(key)) plOpen.delete(key);
+    else plOpen.add(key);
+    ruleEl.classList.toggle('open', plOpen.has(key));
+    ruleEl.querySelector('.plr-toggle').setAttribute('aria-expanded', String(plOpen.has(key)));
+    return;
+  }
+  const button = e.target.closest('button');
+  if (!button) return;
+  const rules = plRulesFromDom();
+  if (button.classList.contains('pl-remove')) rules.splice(idx, 1);
+  else if (button.classList.contains('pl-dup')) {
+    const copyKey = `new${++plNewKey}`;
+    const { id, _key, ...rest } = rules[idx];
+    rules.splice(idx + 1, 0, { ...rest, name: `${rest.name} (copy)`.slice(0, 40), _key: copyKey });
+    plOpen.add(copyKey);
+  } else if (button.classList.contains('pl-up') && idx > 0) [rules[idx - 1], rules[idx]] = [rules[idx], rules[idx - 1]];
+  else if (button.classList.contains('pl-down') && idx < rules.length - 1) [rules[idx + 1], rules[idx]] = [rules[idx], rules[idx + 1]];
+  else if (button.classList.contains('pl-cond-add')) {
+    rules[idx].conditions.push(defaultPlCondition());
+    plOpen.add(key);
+  } else if (button.classList.contains('pl-cond-remove')) rules[idx].conditions.splice(button.closest('.plr-cond').dataset.cidx, 1);
   else return;
   writePlRules(rules);
   renderPlRules();
 });
 document.getElementById('add-pl-rule').addEventListener('click', () => {
-  writePlRules([...readPlRules(), { name: '', action: 'hide', match: 'all', conditions: [defaultPlCondition()] }]);
-  renderPlRules();
-  const names = document.querySelectorAll('#pl-rules-list .pl-name');
-  if (names.length) names[names.length - 1].focus();
+  addPlRule({ name: '', action: 'keep', match: 'all', conditions: [defaultPlCondition()] });
 });
 
 /* Service-name suggestions for the rule editor: every courier service the

@@ -260,10 +260,16 @@
 
       <div class="card" id="card-picklist-rules">
         <h2>Pick list rules</h2>
-        <p class="hint mb-16">Named filters people switch on as chips on the Pick lists page. A rule either hides the orders it matches or keeps only those. A tag condition matches any part of a tag, without case (“wholesale” matches “Wholesale-Tier2”); an order total is in dollars — “is at least 100” includes $100.00, “is under 100” doesn’t, so two conditions make a range; states are two-letter codes, comma-separated; a shipping method matches any part of its name (“Economy” matches “Economy Shipping (5-8 days)”). Tick “Billing address matches the ship-to address” to test that too — with “Hide matching orders” it leaves only the orders whose addresses differ.</p>
+        <p class="hint mb-8">Saved filters that appear as chips on the Pick lists page, for anyone to switch on.</p>
+        <div class="plr-legend mb-16">
+          <span class="chip pl-rule-chip mode-add"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>Show rule</span>
+          <span class="hint">brings matching orders into view (click again on the Pick lists page to narrow to them)</span>
+          <span class="chip pl-rule-chip mode-hide"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>Hide rule</span>
+          <span class="hint">takes matching orders out</span>
+        </div>
         <input type="hidden" id="picklist_rules">
         <div id="pl-rules-list"></div>
-        <button class="btn btn-text" id="add-pl-rule">+ Add rule</button>
+        <button class="btn btn-outlined plr-add" id="add-pl-rule">+ Add rule</button>
       </div>
     </section>
 
