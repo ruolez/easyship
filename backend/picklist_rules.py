@@ -2,11 +2,12 @@
 
 A rule either hides the orders it matches or keeps only them; the page
 toggles rules on and off. Conditions look at order tags, customer tags, the
-ship-to state, the store, the shipping method and whether the billing address
-matches the ship-to address. Pure functions over plain data, like
+ship-to state, the store, the shipping method, the order total and whether the
+billing address matches the ship-to address. Pure functions over plain data, like
 `tag_rules`; `load_rules` is the only DB touchpoint.
 """
 import json
+import math
 import re
 import uuid
 
@@ -18,13 +19,18 @@ MATCHES = ("all", "any")
 # field -> the operators it accepts; tag and text fields hold one value, list fields many.
 TAG_FIELDS = {"order_tag": "tags", "customer_tag": "customer_tags"}
 TEXT_FIELDS = {"shipping_method": "shipping_method"}
+# Dollar amounts compared against the order's number.
+MONEY_FIELDS = {"order_total": "total"}
 # Yes/no facts about the order: the condition holds when the fact is true.
 FLAG_FIELDS = {"address_match": "billing_matches_shipping"}
 LIST_FIELDS = ("ship_state", "store")
-OPS = {"order_tag": ("has", "not_has"), "customer_tag": ("has", "not_has"),
+OPS = {"order_tag": ("contains", "not_contains"), "customer_tag": ("contains", "not_contains"),
        "ship_state": ("in", "not_in"), "store": ("in", "not_in"),
        "shipping_method": ("contains", "not_contains"),
+       "order_total": ("at_least", "under"),
        "address_match": ("match",)}
+# Tag operators saved before they were renamed.
+LEGACY_TAG_OPS = {"has": "contains", "not_has": "not_contains"}
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
@@ -36,13 +42,27 @@ def _list_value(raw, field):
     return [v for v in dict.fromkeys(values) if v]
 
 
+def _money(raw):
+    """A non-negative dollar amount ("$1,250.50", 99, "0") → float, else None."""
+    try:
+        amount = float(str(raw).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return round(amount, 2) if math.isfinite(amount) and amount >= 0 else None
+
+
 def _parse_condition(item):
     if not isinstance(item, dict):
         return None
     field = str(item.get("field") or "")
     op = str(item.get("op") or "")
+    if field in TAG_FIELDS:
+        op = LEGACY_TAG_OPS.get(op, op)
     if op not in OPS.get(field, ()):
         return None
+    if field in MONEY_FIELDS:
+        value = _money(item.get("value"))
+        return None if value is None else {"field": field, "op": op, "value": value}
     if field in FLAG_FIELDS:
         value = "yes"
     elif field in TAG_FIELDS or field in TEXT_FIELDS:
@@ -94,9 +114,14 @@ def load_rules():
 def _condition_matches(cond, order):
     field, op, value = cond["field"], cond["op"], cond["value"]
     if field in TAG_FIELDS:
-        tags = {str(t).strip().lower() for t in order.get(TAG_FIELDS[field]) or []}
-        hit = value.lower() in tags
-        return hit if op == "has" else not hit
+        needle = value.lower()
+        hit = any(needle in str(t).lower() for t in order.get(TAG_FIELDS[field]) or [])
+        return hit if op == "contains" else not hit
+    if field in MONEY_FIELDS:
+        total = _money(order.get(MONEY_FIELDS[field]))
+        if total is None:
+            return False
+        return total >= value if op == "at_least" else total < value
     if field in FLAG_FIELDS:
         return order.get(FLAG_FIELDS[field]) is True
     if field in TEXT_FIELDS:

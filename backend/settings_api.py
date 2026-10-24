@@ -106,6 +106,8 @@ def get_settings():
         value = db.get_setting(key)
         if key in secret_keys:
             out[key] = MASK if value else ""
+        elif key == picklist_rules.RULES_KEY and value:
+            out[key] = json.dumps(picklist_rules.parse_rules(value))
         else:
             out[key] = value or ""
     for d in providers.descriptors():

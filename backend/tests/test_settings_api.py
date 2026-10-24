@@ -138,5 +138,26 @@ class ProfitSettingsTest(unittest.TestCase):
         self.assertTrue(enabled())
 
 
+class PicklistRulesSettingsTest(unittest.TestCase):
+    """Rules saved before an operator was renamed come back in today's form,
+    so the editor shows them as they still match."""
+
+    setUp = ProfitSettingsTest.setUp
+    tearDown = ProfitSettingsTest.tearDown
+
+    def test_saved_tag_rules_are_read_back_with_contains(self):
+        legacy = [{"id": "w", "name": "Wholesale", "action": "hide", "match": "all",
+                   "conditions": [{"field": "order_tag", "op": "has", "value": "wholesale"},
+                                  {"field": "customer_tag", "op": "not_has", "value": "vip"}]}]
+        self.stored["picklist_rules"] = json.dumps(legacy)
+        out = json.loads(self.client.get("/api/settings").get_data())["picklist_rules"]
+        self.assertEqual(json.loads(out), [{**legacy[0], "conditions": [
+            {"field": "order_tag", "op": "contains", "value": "wholesale"},
+            {"field": "customer_tag", "op": "not_contains", "value": "vip"}]}])
+
+    def test_no_saved_rules_reads_back_empty(self):
+        self.assertEqual(json.loads(self.client.get("/api/settings").get_data())["picklist_rules"], "")
+
+
 if __name__ == "__main__":
     unittest.main()
