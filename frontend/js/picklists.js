@@ -27,7 +27,7 @@ let reviewOnly = false;
 const excluded = new Set(recall(EXCLUDED_KEY, []));
 const checked = new Set();
 let lastChecked = null; // anchor for Shift+click ranges
-let cursorKey = null; // the row J / K / X / E work on
+let cursorKey = null; // the row ↑ / ↓ / Space / E work on
 let lastMove = null; // what Undo puts back
 // The table shows either the orders going on the pick list or the ones
 // excluded from it; both views work the same way.
@@ -88,7 +88,7 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 });
 
 /* ---------- Keyboard ----------
-   In the list: J / K move, X selects, Enter opens, E excludes (or restores),
+   In the list: ↑ / ↓ move, Space ticks, Enter opens, E excludes (or restores),
    ⌘Z / Ctrl+Z undoes, / finds. In the order window: ← → and E. */
 document.addEventListener('keydown', (e) => {
   const modalOpen = document.getElementById('modal-backdrop').classList.contains('show');
@@ -96,7 +96,7 @@ document.addEventListener('keydown', (e) => {
     closePop();
     return;
   }
-  if (e.target instanceof Element && e.target.closest('input, select, textarea')) return; // typing, not a shortcut
+  if (e.target instanceof Element && e.target.closest('input:not(#pl-orders [type=checkbox]), select, textarea')) return; // typing, not a shortcut
   const listing = !modalOpen && document.getElementById('tab-new').style.display !== 'none';
   const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && lastMove && document.getElementById('tab-new').style.display !== 'none') {
@@ -111,18 +111,18 @@ document.addEventListener('keydown', (e) => {
       document.getElementById('qf-search').focus();
       return;
     }
-    if (key === 'j' || key === 'k') {
+    if (key === 'arrowdown' || key === 'arrowup') {
       e.preventDefault();
-      moveCursor(key === 'j' ? 1 : -1);
+      moveCursor(key === 'arrowdown' ? 1 : -1);
       return;
     }
-    // Enter on a focused button or link presses it, not the keyboard row.
-    const pressing = key === 'enter' && e.target instanceof Element && e.target.closest('button, a');
-    if (cursorKey && !pressing && (key === 'x' || key === 'enter' || key === 'o' || (key === 'e' && !e.repeat))) {
+    // Enter or Space on a focused button or link presses it, not the keyboard row.
+    const pressing = (key === 'enter' || key === ' ') && e.target instanceof Element && e.target.closest('button, a, input');
+    if (cursorKey && !pressing && (key === ' ' || key === 'enter' || key === 'o' || (key === 'e' && !e.repeat))) {
       const row = document.querySelector(`#pl-orders [data-check="${CSS.escape(cursorKey)}"]`);
       if (!row) return;
       e.preventDefault();
-      if (key === 'x') toggleChecked(cursorKey, !checked.has(cursorKey), e.shiftKey);
+      if (key === ' ') toggleChecked(cursorKey, !checked.has(cursorKey), e.shiftKey);
       else if (key === 'e') moveRows([cursorKey]);
       else showOrder(cursorKey);
       return;

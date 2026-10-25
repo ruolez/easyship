@@ -1777,7 +1777,7 @@ body.pl-page .card { margin-bottom: 12px; }
 .pl-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); cursor: pointer; vertical-align: middle; }
 .pl-table tbody tr { cursor: pointer; }
 .pl-table tbody tr.selected, .pl-table tbody tr.selected:hover { background: var(--primary-light); box-shadow: inset 3px 0 0 var(--primary); }
-/* The keyboard row (J / K). */
+/* The keyboard row (↑ / ↓). */
 .pl-table tbody tr.cursor td { box-shadow: inset 0 1px 0 var(--primary), inset 0 -1px 0 var(--primary); }
 .pl-table tbody tr.cursor td:first-child { box-shadow: inset 3px 0 0 var(--primary), inset 0 1px 0 var(--primary), inset 0 -1px 0 var(--primary); }
 .pl-bulk { display: flex; align-items: center; gap: 10px; margin-right: auto; flex-wrap: wrap; }
