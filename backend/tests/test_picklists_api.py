@@ -15,6 +15,7 @@ from flask import Flask  # noqa: E402
 
 import auth  # noqa: E402
 import backoffice  # noqa: E402
+import picklist_cache  # noqa: E402
 import picklists  # noqa: E402
 import picklists_api  # noqa: E402
 import shipping_estimate  # noqa: E402
@@ -24,6 +25,7 @@ STORE = 1
 DB_ID = 4
 SETTINGS = {"picklist_backoffice_db_id": str(DB_ID), "picklist_quote_status": "2",
             "picklist_title_prefix": "PL", "picklist_number_tag": "19"}
+SYNCED_AT = datetime(2026, 10, 26, 15, 0, tzinfo=timezone.utc)
 REP = {"id": 7, "name": "Maria Lopez"}
 ITEM = {"ProductID": 1010, "ProductSKU": "AP", "ProductDescription": "APPLE", "ProductUPC": "111"}
 
@@ -72,7 +74,11 @@ class PicklistsApiTest(unittest.TestCase):
             (picklists_api.db, "get_setting", lambda key, default=None: SETTINGS.get(key, default)),
             (picklists_api.db, "query", self.fake_query),
             (picklists_api.db, "execute", lambda *a, **k: None),
-            (picklists_api, "list_picklist_orders", self.fake_list),
+            (picklist_cache, "sync_store", self.fake_sync),
+            (picklist_cache, "cached_orders", lambda store_ids: [
+                (sid, n) for sid in store_ids for n in self.cache.get(sid, [])]),
+            (picklist_cache, "synced_at", lambda store_ids: {
+                sid: self.synced[sid] for sid in store_ids if sid in self.synced}),
             (picklists_api, "get_picklist_orders", lambda sid, gids: [n for n in self.shopify[sid] if n["id"] in gids]),
             (picklists, "active_order_keys", lambda store_ids: set(self.reserved)),
             (picklists, "reserve", self.fake_reserve),
@@ -82,6 +88,7 @@ class PicklistsApiTest(unittest.TestCase):
             (picklists, "get_picklist", lambda pid: self.picklist),
             (backoffice, "list_sales_reps", lambda db_id: [REP]),
             (backoffice, "find_items_by_upc", lambda db_id, upcs: {u: ITEM for u in upcs if u == "111"}),
+            (backoffice, "known_upcs", lambda db_id, upcs: {u for u in upcs if u == "111"}),
             (backoffice, "create_quotation", self.fake_create_quotation),
             (backoffice, "delete_quotation", self.fake_delete_quotation),
             (picklists_api, "get_order_fraud", lambda sid, gid: self.fraud_node),
@@ -93,6 +100,8 @@ class PicklistsApiTest(unittest.TestCase):
             (shipping_estimate, "estimate_shipping", lambda sid, state, weight: {
                 "cost": 7.5, "samples": 3, "tolerance_lb": 0.1, "state": state, "weight_lb": weight}),
         ]
+        self.fetch = self.fake_list
+        self.cache, self.synced, self.syncs = {}, {}, []
         self.fraud_node = FRAUD_NODE
         self.tag_error = None
         self.tag_fail = {}  # order gid -> Shopify error for that order
@@ -120,6 +129,14 @@ class PicklistsApiTest(unittest.TestCase):
         if "FROM shopify_stores" in sql:
             return [{"id": STORE, "name": "Main"}, {"id": 2, "name": "Wholesale"}]
         return [] if not one else None
+
+    def fake_sync(self, store_id, full=False):
+        """Reads the store like a whole read would: replaces its cache, or
+        raises and leaves the last read in place."""
+        self.syncs.append((store_id, full))
+        self.cache[store_id] = self.fetch(store_id)
+        self.synced[store_id] = SYNCED_AT
+        return "full"
 
     def fake_list(self, store_id):
         if store_id == 2:
@@ -200,7 +217,7 @@ class PicklistsApiTest(unittest.TestCase):
             del SETTINGS["picklist_rules"]
         self.assertEqual(
             ([(o["name"], o["rule_ids"]) for o in res["orders"]], res["errors"], res["rules"]),
-            ([("#1", ["tx"])], [{"store_id": 2, "store_name": "Wholesale", "error": "Shopify down"}],
+            ([("#1", ["tx"])], [{"store_id": 2, "store_name": "Wholesale", "error": "Shopify down", "synced_at": None}],
              [{"id": "tx", "name": "Texas", "action": "keep"}]))
 
     def test_stores_load_at_the_same_time(self):
@@ -210,7 +227,7 @@ class PicklistsApiTest(unittest.TestCase):
             both_running.wait()  # breaks (and errors) unless the other store runs concurrently
             return [node(f"g{store_id}0", f"#{store_id}0")]
 
-        picklists_api.list_picklist_orders = slow_list
+        self.fetch = slow_list
         self.shopify[3] = []
         res = self.client.get("/api/picklists/orders?store_ids=1,3").get_json()
         self.assertEqual((sorted(o["name"] for o in res["orders"]), res["errors"]), (["#10", "#30"], []))
@@ -221,10 +238,41 @@ class PicklistsApiTest(unittest.TestCase):
                 raise KeyError("orders")
             return self.shopify[store_id]
 
-        picklists_api.list_picklist_orders = broken
+        self.fetch = broken
         res = self.client.get("/api/picklists/orders?store_ids=1,2")
         self.assertEqual((res.status_code, [e["error"] for e in res.get_json()["errors"]]),
                          (200, ["Unexpected error: 'orders'"]))
+
+    def test_a_store_shopify_cannot_answer_for_keeps_its_last_read_orders(self):
+        self.cache[2] = [node("w1", "#W1")]
+        self.synced[2] = SYNCED_AT
+        res = self.client.get("/api/picklists/orders?store_ids=1,2").get_json()
+        self.assertEqual(
+            ([o["name"] for o in res["orders"]], res["errors"], res["synced"]),
+            (["#1", "#2", "#W1"],
+             [{"store_id": 2, "store_name": "Wholesale", "error": "Shopify down", "synced_at": SYNCED_AT.isoformat()}],
+             {"1": SYNCED_AT.isoformat(), "2": SYNCED_AT.isoformat()}))
+
+    def test_sync_none_answers_from_the_last_read_without_asking_shopify(self):
+        self.cache[STORE] = [node("g9", "#9")]
+        res = self.client.get("/api/picklists/orders?store_ids=1,3&sync=none").get_json()
+        self.assertEqual(([o["name"] for o in res["orders"]], res["synced"], self.syncs),
+                         (["#9"], {"1": None, "3": None}, []))
+
+    def test_sync_full_and_auto_reach_every_store(self):
+        self.shopify[3] = []
+        self.client.get("/api/picklists/orders?store_ids=1,3&sync=full")
+        self.client.get("/api/picklists/orders?store_ids=1,3")
+        self.assertEqual(sorted(self.syncs), [(1, False), (1, True), (3, False), (3, True)])
+
+    def test_unknown_sync_mode_is_refused(self):
+        self.assertEqual(self.client.get("/api/picklists/orders?store_ids=1&sync=later").status_code, 400)
+
+    def test_orders_tagged_as_being_worked_on_are_not_eligible(self):
+        self.shopify[STORE] = [node("g1", "#1"), node("g6", "#6", tags=["Checked"]),
+                               node("g7", "#7", tags=["picklist 10202026191"])]
+        res = self.client.get("/api/picklists/orders?store_ids=1").get_json()
+        self.assertEqual([o["name"] for o in res["orders"]], ["#1"])
 
     def test_orders_carry_what_would_leave_them_out_and_the_hidden_tags(self):
         self.shopify[STORE].append(node("g4", "#4", barcode=""))
@@ -244,7 +292,7 @@ class PicklistsApiTest(unittest.TestCase):
         def down(db_id, upcs):
             raise backoffice.BackofficeError("BackOffice is offline")
 
-        backoffice.find_items_by_upc = down
+        backoffice.known_upcs = down
         self.shopify[STORE].append(node("g4", "#4", barcode=""))
         res = self.client.get("/api/picklists/orders?store_ids=1").get_json()
         self.assertEqual(
@@ -305,6 +353,23 @@ class PicklistsApiTest(unittest.TestCase):
             ("activate", 42, 555, "10222026191", "HOUSE ACCOUNT"),
             ("change_tags", STORE, "g1", ["picklist 10222026191"], []),
         ]))
+
+    def test_order_put_on_hold_after_the_preview_is_left_off_the_created_list(self):
+        self.shopify[STORE] = [node("g1", "#1"), node("g5", "#5")]
+        preview = self.client.post("/api/picklists/preview", json=self.body(["g1", "g5"])).get_json()
+        self.shopify[STORE][1]["fulfillmentOrders"] = {"nodes": [{"status": "ON_HOLD"}]}
+        res = self.client.post("/api/picklists", json=self.body(["g1", "g5"], customer_id=3, sales_rep_id=7))
+        data = res.get_json()
+        self.assertEqual(
+            (preview["totals"]["orders"], res.status_code, data["totals"]["orders"],
+             [(e["name"], e["reasons"]) for e in data["excluded"]], self.calls[0]),
+            (2, 200, 1, [("#5", ["On hold in Shopify"])], ("reserve", ["#1"], [("111", 1)])))
+
+    def test_create_refuses_when_every_order_went_on_hold(self):
+        self.shopify[STORE][0]["fulfillmentOrders"] = {"nodes": [{"status": "ON_HOLD"}]}
+        res = self.client.post("/api/picklists", json=self.body(["g1"], customer_id=3, sales_rep_id=7))
+        self.assertEqual((res.status_code, [(e["name"], e["reasons"]) for e in res.get_json()["excluded"]], self.calls),
+                         (409, [("#1", ["On hold in Shopify"])], []))
 
     def test_create_refuses_orders_taken_in_the_meantime(self):
         self.reserved = set()

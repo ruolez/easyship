@@ -1,7 +1,7 @@
 import sys
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 sys.modules.setdefault("db", types.SimpleNamespace(
     get_setting=lambda *a, **k: None, set_setting=lambda *a, **k: None,
@@ -64,6 +64,33 @@ class FromShopifyOrderTest(unittest.TestCase):
     def test_po_box_destination_is_flagged(self):
         address = {"address1": "PO Box 638", "city": "Winsted", "provinceCode": "MN", "zip": "55395"}
         self.assertEqual(order(shippingAddress=address)["po_box"], True)
+
+
+class PickableQtyTest(unittest.TestCase):
+    def test_cancelled_and_refunded_units_are_never_picked(self):
+        cases = [
+            ("nothing changed", {"quantity": 3, "currentQuantity": 3, "refundableQuantity": 3, "unfulfilledQuantity": 3}, 3),
+            ("one removed by an order edit", {"quantity": 3, "currentQuantity": 2, "refundableQuantity": 2, "unfulfilledQuantity": 3}, 2),
+            ("one refunded, still counted as unfulfilled",
+             {"quantity": 3, "currentQuantity": 3, "refundableQuantity": 2, "unfulfilledQuantity": 3}, 2),
+            ("all refunded", {"quantity": 2, "currentQuantity": 2, "refundableQuantity": 0, "unfulfilledQuantity": 2}, 0),
+            ("one already shipped", {"quantity": 3, "currentQuantity": 3, "refundableQuantity": 3, "unfulfilledQuantity": 2}, 2),
+            ("read before the quantities were asked for", {"quantity": 3, "unfulfilledQuantity": 3}, 3),
+            ("no quantities at all", {}, 0),
+        ]
+        for name, li, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(picklists.pickable_qty(li), expected)
+
+    def test_fully_refunded_lines_drop_off_the_order(self):
+        refunded = {**line("Gone", "222", qty=2), "currentQuantity": 2, "refundableQuantity": 0}
+        partly = {**line("Half", "333", qty=4), "currentQuantity": 4, "refundableQuantity": 1}
+        o = order(lines=[line("Kept", "111"), refunded, partly])
+        self.assertEqual(([(li["barcode"], li["qty"]) for li in o["lines"]], o["units"]), ([("111", 1), ("333", 1)], 2))
+
+    def test_order_with_every_line_refunded_has_nothing_to_pick(self):
+        o = order(lines=[{**line(), "currentQuantity": 1, "refundableQuantity": 0}])
+        self.assertEqual(picklists.ineligible_reason(o, set()), "Nothing to pick")
 
 
 class OrderProductsTest(unittest.TestCase):
@@ -167,6 +194,17 @@ class IneligibleReasonTest(unittest.TestCase):
         self.assertEqual([picklists.ineligible_reason(o, reserved) for o, reserved, _ in cases],
                          [expected for _, _, expected in cases])
 
+    def test_orders_someone_is_already_working_on_are_left_out(self):
+        cases = [
+            (["Checked"], "Tagged “Checked” — already being worked on"),
+            ([" CHECKED "], "Tagged “CHECKED” — already being worked on"),
+            (["wholesale", "picklist 10222026191"], "Tagged “picklist 10222026191” — already being worked on"),
+            (["PickList-old"], "Tagged “PickList-old” — already being worked on"),
+            (["checked out", "my picklist", "unchecked"], None),
+        ]
+        self.assertEqual([picklists.ineligible_reason(order(tags=tags), set()) for tags, _ in cases],
+                         [expected for _, expected in cases])
+
     def test_same_order_id_in_another_store_is_not_reserved(self):
         self.assertEqual(picklists.ineligible_reason(order(), {(STORE + 1, GID)}), None)
 
@@ -223,11 +261,41 @@ class GroupLinesTest(unittest.TestCase):
 
 
 class PicklistSearchTest(unittest.TestCase):
-    def test_search_starts_at_the_cutoff_day(self):
+    def test_search_covers_one_window_in_utc(self):
         self.assertEqual(
-            shopify_client.picklist_search(datetime(2026, 9, 22, 18, 30)),
-            "created_at:>=2026-09-22 status:open fulfillment_status:unfulfilled "
-            "(financial_status:paid OR financial_status:partially_refunded)")
+            shopify_client.picklist_search(datetime(2026, 9, 22, tzinfo=timezone.utc),
+                                           datetime(2026, 9, 27, 4, 30, tzinfo=timezone(timedelta(hours=-5)))),
+            "created_at:>='2026-09-22T00:00:00Z' created_at:<'2026-09-27T09:30:00Z' status:open "
+            "fulfillment_status:unfulfilled (financial_status:paid OR financial_status:partially_refunded)")
+
+    def test_search_without_an_end_is_open_ended(self):
+        self.assertTrue(shopify_client.picklist_search(datetime(2026, 9, 22, tzinfo=timezone.utc)).startswith(
+            "created_at:>='2026-09-22T00:00:00Z' status:open"))
+
+    def test_window_starts_at_midnight_utc_the_cutoff_day(self):
+        now = datetime(2026, 10, 26, 18, 30, tzinfo=timezone.utc)
+        self.assertEqual(shopify_client.picklist_since(now),
+                         datetime(2026, 10, 26, tzinfo=timezone.utc) - timedelta(days=shopify_client.PICKLIST_DAYS))
+
+
+class PicklistWindowsTest(unittest.TestCase):
+    SINCE = datetime(2026, 9, 26, tzinfo=timezone.utc)
+    UNTIL = datetime(2026, 10, 26, tzinfo=timezone.utc)
+
+    def test_windows_split_evenly_and_the_last_has_no_end(self):
+        self.assertEqual(shopify_client.picklist_windows(self.SINCE, self.UNTIL, 3), [
+            (self.SINCE, self.SINCE + timedelta(days=10)),
+            (self.SINCE + timedelta(days=10), self.SINCE + timedelta(days=20)),
+            (self.SINCE + timedelta(days=20), None),
+        ])
+
+    def test_windows_leave_no_gap_between_them(self):
+        for count in range(1, 9):
+            windows = shopify_client.picklist_windows(self.SINCE, self.UNTIL, count)
+            with self.subTest(count=count):
+                self.assertEqual(
+                    (windows[0][0], [w[1] for w in windows[:-1]], windows[-1][1]),
+                    (self.SINCE, [w[0] for w in windows[1:]], None))
 
 
 class NumberPrefixTest(unittest.TestCase):

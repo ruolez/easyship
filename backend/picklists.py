@@ -2,7 +2,8 @@
 become one BackOffice quotation the warehouse picks from.
 
 An order is eligible while it is fully paid, not on hold, completely
-unfulfilled and not on another live pick list. The pure functions shape and
+unfulfilled, not on another live pick list and not tagged as being worked on
+("checked", "picklist …"). The pure functions shape and
 judge orders; the DB helpers reserve orders so no order lands on two lists.
 """
 import re
@@ -44,17 +45,26 @@ def addresses_match(billing, shipping):
     return _address_key(billing) == _address_key(shipping)
 
 
+def pickable_qty(line_item):
+    """Units of a line item still to pick: never more than Shopify's unfulfilled,
+    current (removed units taken off) or refundable (refunded units taken off)
+    quantity, so cancelled and refunded units are never picked."""
+    counts = [line_item.get(k) for k in ("unfulfilledQuantity", "currentQuantity", "refundableQuantity")]
+    counts = [c for c in counts if c is not None]
+    return max(0, min(counts)) if counts else 0
+
+
 def from_shopify_order(node, store_id):
     """A raw GraphQL order node → what the page and the builder need. Only
-    lines that still need shipping count: fulfilled, removed and non-shipping
-    items (tips, gift cards) are left out."""
+    lines that still need shipping count: fulfilled, cancelled, refunded and
+    non-shipping items (tips, gift cards) are left out."""
     gate = order_gate.from_shopify_order(node)
     addr = node.get("shippingAddress") or {}
     customer = node.get("customer") or {}
     risk = node.get("risk") or {}
     lines = []
     for li in (node.get("lineItems") or {}).get("nodes") or []:
-        qty = li.get("unfulfilledQuantity") or 0
+        qty = pickable_qty(li)
         if qty <= 0 or li.get("requiresShipping") is False:
             continue
         lines.append({
@@ -124,7 +134,7 @@ def order_products(node):
             "sku": li.get("sku") or "",
             "barcode": ((li.get("variant") or {}).get("barcode") or "").strip(),
             "qty": qty,
-            "to_ship": li.get("unfulfilledQuantity") or 0,
+            "to_ship": pickable_qty(li),
             "ships": li.get("requiresShipping") is not False,
             "price": price,
             "price_original": original if (_float(original) or 0) > (paid or 0) else None,
@@ -140,7 +150,7 @@ def order_weight_lb(node):
     same figure the Ship page starts from."""
     total = 0.0
     for li in (node.get("lineItems") or {}).get("nodes") or []:
-        qty = li.get("unfulfilledQuantity") or 0
+        qty = pickable_qty(li)
         if qty <= 0 or li.get("requiresShipping") is False:
             continue
         weight = ((((li.get("variant") or {}).get("inventoryItem") or {}).get("measurement")) or {}).get("weight") or {}
@@ -178,6 +188,20 @@ def order_profitability(economics, estimate, thresholds):
     }
 
 
+CHECKED_TAG = "checked"
+PICKLIST_TAG_PREFIX = "picklist"
+
+
+def worked_on_tag(tags):
+    """The first tag saying someone is already on the order — "checked" or one
+    starting with "picklist", any case — or None."""
+    for tag in tags or []:
+        t = tag.strip().lower()
+        if t == CHECKED_TAG or t.startswith(PICKLIST_TAG_PREFIX):
+            return tag.strip()
+    return None
+
+
 def ineligible_reason(order, reserved_keys):
     """Why an order cannot go on a new pick list, or None when it can."""
     if (order["store_id"], order["id"]) in reserved_keys:
@@ -192,6 +216,9 @@ def ineligible_reason(order, reserved_keys):
         return "Already fulfilled or partially fulfilled"
     if not order["lines"]:
         return "Nothing to pick"
+    tag = worked_on_tag(order["tags"])
+    if tag:
+        return f"Tagged “{tag}” — already being worked on"
     return None
 
 

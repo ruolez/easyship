@@ -2167,6 +2167,9 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .gen-qnum { font-family: var(--mono); font-size: 20px; font-weight: 700; letter-spacing: 0.5px; user-select: all; }
 .gen-done-row .btn .ico { width: 14px; height: 14px; }
 .gen-done-stats { font-size: 13.5px; font-weight: 550; }
+.gen-changed { width: 100%; margin-top: 8px; text-align: left; }
+.gen-changed ul { margin: 4px 0 0; padding-left: 18px; font-weight: 400; }
+#gen-error .gen-changed { margin-top: 8px; }
 @media (max-width: 900px) {
   .gen-grid { grid-template-columns: 1fr; }
   .gen-lines { max-height: 320px; }

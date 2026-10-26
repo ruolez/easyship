@@ -202,36 +202,77 @@ function renderStores(counts) {
 /* ---------- Orders ---------- */
 let loadSeq = 0;
 let backofficeError = null;
+let shownStores = null; // the store selection the table shows orders for
 
-async function loadOrders() {
+/* The orders read last time show at once while Shopify is asked for what
+   changed; Refresh (full) reads every order again and keeps the table
+   meanwhile. */
+async function loadOrders({ full = false } = {}) {
   const seq = ++loadSeq;
   const tbody = document.getElementById('pl-orders');
-  document.getElementById('pl-errors').innerHTML = '';
   const refresh = document.getElementById('pl-refresh');
   if (!selectedStores.size) {
+    document.getElementById('pl-errors').innerHTML = '';
     orders = [];
+    shownStores = null;
     render('Pick at least one store.');
     return;
   }
-  document.getElementById('pl-empty').style.display = 'none';
-  tbody.innerHTML = '<tr><td colspan="12"><span class="spinner"></span> Loading eligible orders…</td></tr>';
+  const ids = [...selectedStores].join(',');
+  const url = (sync) => `/api/picklists/orders?store_ids=${ids}&sync=${sync}`;
   refresh.classList.add('loading');
+  if (shownStores !== ids) {
+    document.getElementById('pl-errors').innerHTML = '';
+    document.getElementById('pl-empty').style.display = 'none';
+    tbody.innerHTML = '<tr><td colspan="12"><span class="spinner"></span> Loading eligible orders…</td></tr>';
+  }
+  let synced = false;
+  if (!full) {
+    api(url('none')).then((res) => {
+      if (seq !== loadSeq || synced || !Object.values(res.synced).every(Boolean)) return;
+      showOrders(res, ids, true);
+    }).catch(() => {});
+  }
   let res;
   try {
-    res = await api(`/api/picklists/orders?store_ids=${[...selectedStores].join(',')}`);
+    res = await api(url(full ? 'full' : 'auto'));
   } catch (err) {
     if (seq !== loadSeq) return;
     refresh.classList.remove('loading');
+    if (shownStores === ids) {
+      setUpdated(false);
+      showLoadErrors([{ error: err.message }]);
+      return;
+    }
     orders = [];
     showLoadErrors([{ error: err.message }]);
     render('Orders could not be loaded.');
     return;
   }
+  synced = true;
   if (seq !== loadSeq) return; // a newer store selection is loading
   refresh.classList.remove('loading');
+  showOrders(res, ids, false);
+}
+
+let lastSynced = null;
+
+/* "Updated" is when the stalest chosen store was last read from Shopify. */
+function setUpdated(refreshing, res) {
   const updated = document.getElementById('pl-updated');
-  updated.textContent = `Last ${res.days} days · Updated ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
-  updated.title = `Paid, unfulfilled orders created in the last ${res.days} days`;
+  if (res) {
+    const times = Object.values(res.synced).filter(Boolean).map((t) => new Date(t));
+    lastSynced = { days: res.days, at: times.length ? new Date(Math.min(...times)) : null };
+  }
+  if (!lastSynced) return;
+  const at = lastSynced.at ? ` · Updated ${lastSynced.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : '';
+  updated.textContent = `Last ${lastSynced.days} days${at}${refreshing ? ' · Checking Shopify…' : ''}`;
+  updated.title = `Paid, unfulfilled orders created in the last ${lastSynced.days} days`;
+}
+
+function showOrders(res, ids, refreshing) {
+  shownStores = ids;
+  setUpdated(refreshing, res);
   orders = res.orders;
   const counts = new Map();
   orders.forEach((o) => counts.set(o.store_id, (counts.get(o.store_id) || 0) + 1));
@@ -242,7 +283,8 @@ async function loadOrders() {
   backofficeError = res.backoffice_error || null;
   const savedPreset = recall(PRESET_KEY, null);
   activePreset = presets.some((p) => p.id === savedPreset) ? savedPreset : null;
-  forgetGoneExclusions(res.errors);
+  // Only a fresh read says an order is gone; the last read can miss new ones.
+  if (!refreshing) forgetGoneExclusions(res.errors);
   ruleModes = restoreRuleModes(recall(RULES_KEY, {}));
   showLoadErrors(res.errors);
   render();
@@ -262,18 +304,27 @@ function forgetGoneExclusions(errors) {
 }
 
 /* A store Shopify could not answer for (after its retries) is called out by
-   name; the orders of the other stores stay usable. */
+   name; its orders as last read and those of the other stores stay usable. */
+function loadErrorNote(e) {
+  if (!e.store_id) return '';
+  if (e.synced_at) {
+    const at = new Date(e.synced_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return ` Its orders as of ${at} are shown.`;
+  }
+  return orders.length ? ' Orders from the other stores are shown.' : '';
+}
+
 function showLoadErrors(errors) {
   const el = document.getElementById('pl-errors');
   el.innerHTML = errors.map((e) => `
     <div class="rule-banner err">
       <span><strong>${e.store_id ? `Couldn’t load orders from ${esc(e.store_name || storeName(e.store_id))}` : 'Couldn’t load orders'}</strong>
-        — ${esc(e.error)}${e.store_id && orders.length ? ' Orders from the other stores are shown.' : ''}</span>
+        — ${esc(e.error)}${loadErrorNote(e)}</span>
       <button class="btn btn-outlined btn-small pl-retry">Retry</button>
     </div>`).join('')
     + (backofficeError && orders.length ? `<div class="rule-banner warn"><span><strong>Barcodes weren’t checked against BackOffice</strong>
       — ${esc(backofficeError)}. Products BackOffice doesn’t know only show up at Generate.</span></div>` : '');
-  el.querySelectorAll('.pl-retry').forEach((b) => b.addEventListener('click', loadOrders));
+  el.querySelectorAll('.pl-retry').forEach((b) => b.addEventListener('click', () => loadOrders()));
   if (errors.length) {
     const names = errors.map((e) => (e.store_id ? e.store_name || storeName(e.store_id) : null)).filter(Boolean);
     snackbar(names.length ? `Couldn’t load orders from ${names.join(', ')}` : 'Couldn’t load orders', 'error');
@@ -1018,7 +1069,7 @@ searchBox.addEventListener('keydown', (e) => {
     moveCursor(1);
   }
 });
-document.getElementById('pl-refresh').addEventListener('click', loadOrders);
+document.getElementById('pl-refresh').addEventListener('click', () => loadOrders({ full: true }));
 
 /* ---------- Order window ----------
    Walks the orders as listed (filters and exclusions applied): Previous /
@@ -1780,13 +1831,14 @@ async function openGenerate() {
       remember(CUSTOMER_KEY, customer);
       remember(REP_KEY, repId);
       loadOrders();
-      showCreated(res, customer.name, repName);
+      showCreated(res, customer.name, repName, changedSince(left, res.excluded));
     } catch (err) {
       busy = false;
       createBtn.textContent = 'Create pick list';
       sync();
       const names = err.data && err.data.orders ? ` (${err.data.orders.join(', ')})` : '';
-      errBox.innerHTML = `<div class="error-note">${esc(err.message + names)}</div>`;
+      const changed = err.data && err.data.excluded ? changedSince(left, err.data.excluded) : [];
+      errBox.innerHTML = `<div class="error-note">${esc(err.message + names)}</div>${changedHtml(changed)}`;
       errBox.scrollIntoView({ block: 'nearest' });
       if (err.status === 409) loadOrders();
     }
@@ -1806,7 +1858,21 @@ function copyText(text) {
   return ok ? Promise.resolve() : Promise.reject(new Error('Copy failed'));
 }
 
-function showCreated(res, customerName, repName) {
+/* The orders Create left out that the preview still had on the list: Shopify
+   changed them (put on hold, tagged, refunded…) while the list was being made. */
+function changedSince(previewLeft, createLeft) {
+  const before = new Set(previewLeft.map((e) => `${e.store_id}|${e.id}`));
+  return createLeft.filter((e) => !before.has(`${e.store_id}|${e.id}`));
+}
+
+function changedHtml(changed) {
+  if (!changed.length) return '';
+  return `<div class="rule-banner warn gen-changed"><span><strong>${changed.length === 1 ? 'An order changed' : `${changed.length} orders changed`}
+    in Shopify while the pick list was being made and ${changed.length === 1 ? 'was' : 'were'} left off</strong>
+    <ul>${changed.map((e) => `<li>${esc(e.name)}${e.store_id ? ` · ${esc(storeName(e.store_id))}` : ''} — ${e.reasons.map(esc).join('; ')}</li>`).join('')}</ul></span></div>`;
+}
+
+function showCreated(res, customerName, repName, changed) {
   const t = res.totals;
   openModal(`
     <div class="gen-done">
@@ -1819,7 +1885,8 @@ function showCreated(res, customerName, repName) {
           <button class="btn btn-outlined btn-small" id="gen-copy">${ICONS.copy} Copy</button></div>
       </div>
       <div class="gen-done-stats">${plural(t.orders, 'order')} · ${plural(t.units, 'unit')} · ${plural(t.lines, 'product')}</div>
-      ${res.excluded.length ? `<div class="hint">Left out: ${res.excluded.map((e) => esc(e.name)).join(', ')}</div>` : ''}
+      ${changedHtml(changed)}
+      ${res.excluded.length > changed.length ? `<div class="hint">Left out: ${res.excluded.filter((e) => !changed.includes(e)).map((e) => esc(e.name)).join(', ')}</div>` : ''}
       ${taggingHtml(res.tagging, res.id)}
     </div>
     <div class="om-foot"><span class="om-spacer"></span>

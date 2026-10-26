@@ -1,4 +1,6 @@
+import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -19,7 +21,15 @@ class ShopifyUnavailable(ShopifyError):
 
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = (1.0, 3.0)
+# Throttling is Shopify pacing us, not an outage: wait as long as its
+# throttle status says the bucket needs, many times over if need be.
+THROTTLE_RETRIES = 20
+THROTTLE_WAIT_BOUNDS = (0.2, 10.0)
 _sleep = time.sleep
+
+
+class ShopifyCostExceeded(ShopifyError):
+    """The query asks for more than Shopify's single-query cost limit."""
 
 
 def _store(store_id):
@@ -29,13 +39,27 @@ def _store(store_id):
     return store
 
 
+def throttle_wait(extensions):
+    """Seconds until the store's bucket holds the query's requested cost, from
+    the cost block Shopify sends with a THROTTLED error."""
+    cost = (extensions or {}).get("cost") or {}
+    status = cost.get("throttleStatus") or {}
+    rate, available, requested = status.get("restoreRate"), status.get("currentlyAvailable"), cost.get("requestedQueryCost")
+    if not rate or available is None or requested is None:
+        return RETRY_BACKOFF_SECONDS[0]
+    low, high = THROTTLE_WAIT_BOUNDS
+    return min(high, max(low, (requested - available) / rate + random.uniform(0, 0.25)))
+
+
 def _graphql(store_id, query, variables=None):
-    store = _store(store_id)
+    return _graphql_for(_store(store_id), query, variables)
+
+
+def _graphql_for(store, query, variables=None):
+    """_graphql for a store row already read, so worker threads need no DB."""
     url = f"https://{store['shop_domain']}/admin/api/{config.SHOPIFY_API_VERSION}/graphql.json"
-    last_transient = None
-    for attempt in range(RETRY_ATTEMPTS):
-        if attempt:
-            _sleep(RETRY_BACKOFF_SECONDS[min(attempt - 1, len(RETRY_BACKOFF_SECONDS) - 1)])
+    failures, throttles, last_transient = 0, 0, None
+    while True:
         try:
             resp = requests.post(
                 url,
@@ -45,21 +69,30 @@ def _graphql(store_id, query, variables=None):
             )
         except requests.RequestException as e:
             last_transient = f"Shopify request failed: {e}"
-            continue
-        if resp.status_code == 429 or resp.status_code >= 500:
-            last_transient = f"Shopify returned {resp.status_code}: {resp.text[:300]}"
-            continue
-        if resp.status_code != 200:
-            raise ShopifyError(f"Shopify returned {resp.status_code}: {resp.text[:300]}")
-        data = resp.json()
-        errors = data.get("errors")
-        if errors:
-            if any((e.get("extensions") or {}).get("code") == "THROTTLED" for e in errors):
-                last_transient = f"Shopify throttled the request: {errors}"
+        else:
+            if resp.status_code == 429 or resp.status_code >= 500:
+                last_transient = f"Shopify returned {resp.status_code}: {resp.text[:300]}"
+            elif resp.status_code != 200:
+                raise ShopifyError(f"Shopify returned {resp.status_code}: {resp.text[:300]}")
+            else:
+                data = resp.json()
+                errors = data.get("errors")
+                if not errors:
+                    return data["data"]
+                codes = {(e.get("extensions") or {}).get("code") for e in errors}
+                if "THROTTLED" not in codes:
+                    if "MAX_COST_EXCEEDED" in codes:
+                        raise ShopifyCostExceeded(f"Shopify GraphQL error: {errors}")
+                    raise ShopifyError(f"Shopify GraphQL error: {errors}")
+                throttles += 1
+                if throttles > THROTTLE_RETRIES:
+                    raise ShopifyUnavailable(f"Shopify kept throttling the request: {errors}")
+                _sleep(throttle_wait(data.get("extensions")))
                 continue
-            raise ShopifyError(f"Shopify GraphQL error: {errors}")
-        return data["data"]
-    raise ShopifyUnavailable(f"Shopify unavailable after {RETRY_ATTEMPTS} attempts — {last_transient}")
+        failures += 1
+        if failures >= RETRY_ATTEMPTS:
+            raise ShopifyUnavailable(f"Shopify unavailable after {RETRY_ATTEMPTS} attempts — {last_transient}")
+        _sleep(RETRY_BACKOFF_SECONDS[min(failures - 1, len(RETRY_BACKOFF_SECONDS) - 1)])
 
 
 ORDERS_QUERY = """
@@ -357,13 +390,17 @@ def get_order_gate(store_id, order_gid):
 
 
 # ---------- Pick lists ----------
-# Only what eligibility, the rules and grouping by barcode need; orders come
-# 10 at a time so the 50 line items each stay under the query cost limit.
+# Only what eligibility, the rules and grouping by barcode need. Shopify sizes
+# a query's cost by its `first:` arguments, so few line items per order let a
+# page carry 20 orders under the 1000-point limit; the rare longer order has
+# its remaining lines fetched afterwards.
 PICKLIST_LINE_FRAGMENT = """
 fragment PicklistLine on LineItem {
   title
   sku
   quantity
+  currentQuantity
+  refundableQuantity
   unfulfilledQuantity
   requiresShipping
   variant { barcode }
@@ -375,7 +412,9 @@ fragment PicklistOrder on Order {
   id
   name
   createdAt
+  updatedAt
   cancelledAt
+  closed
   displayFinancialStatus
   displayFulfillmentStatus
   tags
@@ -386,16 +425,17 @@ fragment PicklistOrder on Order {
   billingAddress { address1 address2 city provinceCode zip countryCodeV2 }
   fulfillmentOrders(first: 5) { nodes { status } }
   risk { recommendation assessments { riskLevel } }
-  lineItems(first: 50) {
+  lineItems(first: 15) {
     pageInfo { hasNextPage endCursor }
     nodes { ...PicklistLine }
   }
 }
 """ + PICKLIST_LINE_FRAGMENT
+PICKLIST_LINES_PER_ORDER = 15  # the lineItems(first:) above
 
 PICKLIST_ORDERS_QUERY = """
-query picklistOrders($query: String!, $after: String) {
-  orders(first: 10, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
+query picklistOrders($query: String!, $first: Int!, $sortKey: OrderSortKeys!, $after: String) {
+  orders(first: $first, after: $after, query: $query, sortKey: $sortKey, reverse: true) {
     pageInfo { hasNextPage endCursor }
     nodes { ...PicklistOrder }
   }
@@ -407,6 +447,20 @@ query picklistOrdersById($ids: [ID!]!) {
   nodes(ids: $ids) { ...PicklistOrder }
 }
 """ + PICKLIST_ORDER_FRAGMENT
+
+PICKLIST_LINES_BY_ID_QUERY = """
+query picklistLinesById($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on Order {
+      id
+      lineItems(first: 100) {
+        pageInfo { hasNextPage endCursor }
+        nodes { ...PicklistLine }
+      }
+    }
+  }
+}
+""" + PICKLIST_LINE_FRAGMENT
 
 PICKLIST_ORDER_LINES_QUERY = """
 query picklistOrderLines($id: ID!, $after: String) {
@@ -422,55 +476,142 @@ query picklistOrderLines($id: ID!, $after: String) {
 # Only recent orders are candidates; older unfulfilled ones are left to the Orders page.
 PICKLIST_DAYS = 30
 PICKLIST_MAX_PAGES = 100
+PICKLIST_PAGE = 20
+# A store's days are read as this many date windows at once; Shopify's
+# throttle (much higher on Plus) decides how many actually run side by side.
+PICKLIST_WINDOWS = 6
 PICKLIST_IDS_CHUNK = 10
+PICKLIST_LINES_CHUNK = 4
 
 
-def _complete_line_items(store_id, node):
-    """Fetch the rest of an order's line items when the first page was not all."""
-    page = node.get("lineItems") or {}
-    nodes = list(page.get("nodes") or [])
-    info = page.get("pageInfo") or {}
-    while info.get("hasNextPage"):
-        data = _graphql(store_id, PICKLIST_ORDER_LINES_QUERY, {"id": node["id"], "after": info["endCursor"]})
-        more = ((data.get("order") or {}).get("lineItems")) or {}
-        nodes.extend(more.get("nodes") or [])
-        info = more.get("pageInfo") or {}
-    node["lineItems"] = {"nodes": nodes}
-    return node
+def _complete_line_items(store, nodes):
+    """Fetch the rest of the line items of the orders whose first page was not
+    all: a few orders per request, then page on for any still longer."""
+    partial = [n for n in nodes if ((n.get("lineItems") or {}).get("pageInfo") or {}).get("hasNextPage")]
+    for i in range(0, len(partial), PICKLIST_LINES_CHUNK):
+        chunk = partial[i:i + PICKLIST_LINES_CHUNK]
+        data = _graphql_for(store, PICKLIST_LINES_BY_ID_QUERY, {"ids": [n["id"] for n in chunk]})
+        fetched = {m["id"]: m["lineItems"] for m in data.get("nodes") or [] if m}
+        for n in chunk:
+            n["lineItems"] = fetched.get(n["id"], n["lineItems"])
+    for node in nodes:
+        page = node.get("lineItems") or {}
+        lines = list(page.get("nodes") or [])
+        info = page.get("pageInfo") or {}
+        while info.get("hasNextPage"):
+            data = _graphql_for(store, PICKLIST_ORDER_LINES_QUERY, {"id": node["id"], "after": info["endCursor"]})
+            more = ((data.get("order") or {}).get("lineItems")) or {}
+            lines.extend(more.get("nodes") or [])
+            info = more.get("pageInfo") or {}
+        node["lineItems"] = {"nodes": lines}
+    return nodes
 
 
-def picklist_search(since):
-    """Shopify's search narrows the list; picklists.ineligible_reason has the
-    final say."""
-    return (f"created_at:>={since:%Y-%m-%d} status:open fulfillment_status:unfulfilled "
-            "(financial_status:paid OR financial_status:partially_refunded)")
-
-
-def list_picklist_orders(store_id):
-    """The store's open, unfulfilled, paid orders of the last PICKLIST_DAYS
-    days, as raw nodes with all their line items. Every page goes through
-    _graphql's retries."""
-    search = picklist_search(datetime.now(timezone.utc) - timedelta(days=PICKLIST_DAYS))
-    orders, after = [], None
+def _order_pages(store, search, sort_key):
+    """Every order the search finds, newest first. A page Shopify prices over
+    its single-query limit is asked for again at half the size."""
+    orders, after, first = [], None, PICKLIST_PAGE
     for _ in range(PICKLIST_MAX_PAGES):
-        data = _graphql(store_id, PICKLIST_ORDERS_QUERY, {"query": search, "after": after})
+        try:
+            data = _graphql_for(store, PICKLIST_ORDERS_QUERY,
+                                {"query": search, "first": first, "sortKey": sort_key, "after": after})
+        except ShopifyCostExceeded:
+            if first == 1:
+                raise
+            first //= 2
+            continue
         page = data["orders"]
-        orders.extend(_complete_line_items(store_id, n) for n in page["nodes"])
+        orders.extend(page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:
             break
         after = page["pageInfo"]["endCursor"]
     return orders
 
 
+def _search_time(when):
+    return f"'{when.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%SZ}'"
+
+
+def picklist_since(now):
+    """The first moment of the pick-list window: midnight UTC PICKLIST_DAYS ago."""
+    return (now - timedelta(days=PICKLIST_DAYS)).astimezone(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+
+
+def picklist_windows(since, until, count):
+    """[since, until) cut into `count` equal (start, end) windows, oldest first.
+    The last one has no end, so orders placed while it loads still count."""
+    step = (until - since) / count
+    return [(since + step * i, since + step * (i + 1) if i < count - 1 else None) for i in range(count)]
+
+
+def picklist_search(since, until=None):
+    """Shopify's search narrows the list; picklists.ineligible_reason has the
+    final say."""
+    created = f"created_at:>={_search_time(since)}" + (f" created_at:<{_search_time(until)}" if until else "")
+    return (f"{created} status:open fulfillment_status:unfulfilled "
+            "(financial_status:paid OR financial_status:partially_refunded)")
+
+
+def list_picklist_orders(store_id, now=None):
+    """The store's open, unfulfilled, paid orders of the last PICKLIST_DAYS
+    days, as raw nodes with all their line items. The days are read as
+    windows side by side; every page goes through _graphql's retries."""
+    store = _store(store_id)
+    now = now or datetime.now(timezone.utc)
+    windows = picklist_windows(picklist_since(now), now, PICKLIST_WINDOWS)
+    with ThreadPoolExecutor(max_workers=len(windows)) as pool:
+        pages = list(pool.map(lambda w: _order_pages(store, picklist_search(*w), "CREATED_AT"), windows))
+    orders = {}
+    for nodes in pages:
+        for node in nodes:
+            orders.setdefault(node["id"], node)
+    return _complete_line_items(store, list(orders.values()))
+
+
+def list_changed_picklist_orders(store_id, changed_since, now=None):
+    """Every order of the last PICKLIST_DAYS days changed since changed_since,
+    whatever its status now, so orders that were fulfilled, cancelled or closed
+    in the meantime show up too."""
+    store = _store(store_id)
+    now = now or datetime.now(timezone.utc)
+    search = f"updated_at:>={_search_time(changed_since)} created_at:>={_search_time(picklist_since(now))}"
+    return _complete_line_items(store, _order_pages(store, search, "UPDATED_AT"))
+
+
 def get_picklist_orders(store_id, order_gids):
     """The given orders read live (for the pick list's final check); ids that
     no longer resolve to an order are simply missing from the result."""
+    store = _store(store_id)
     orders = []
     for i in range(0, len(order_gids), PICKLIST_IDS_CHUNK):
-        data = _graphql(store_id, PICKLIST_ORDERS_BY_ID_QUERY, {"ids": order_gids[i:i + PICKLIST_IDS_CHUNK]})
-        orders.extend(_complete_line_items(store_id, n) for n in data.get("nodes") or [] if n)
-    return orders
+        data = _graphql_for(store, PICKLIST_ORDERS_BY_ID_QUERY, {"ids": order_gids[i:i + PICKLIST_IDS_CHUNK]})
+        orders.extend(n for n in data.get("nodes") or [] if n)
+    return _complete_line_items(store, orders)
 
+
+ORDER_WINDOW_LINE_FRAGMENT = """
+fragment OrderWindowLine on LineItem {
+  title
+  variantTitle
+  sku
+  quantity
+  currentQuantity
+  refundableQuantity
+  unfulfilledQuantity
+  requiresShipping
+  originalUnitPriceSet { shopMoney { amount } }
+  discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
+  image { url(transform: { maxWidth: 96, maxHeight: 96 }) altText }
+  variant {
+    barcode
+    inventoryItem {
+      unitCost { amount }
+      measurement { weight { unit value } }
+    }
+  }
+}
+"""
 
 ORDER_FRAUD_QUERY = """
 query orderFraud($id: ID!) {
@@ -501,26 +642,8 @@ query orderFraud($id: ID!) {
     billingAddress { firstName lastName address1 address2 city provinceCode countryCodeV2 zip phone }
     shippingAddress { firstName lastName address1 address2 city provinceCode countryCodeV2 zip phone }
     lineItems(first: 100) {
-      pageInfo { hasNextPage }
-      nodes {
-        title
-        variantTitle
-        sku
-        quantity
-        currentQuantity
-        unfulfilledQuantity
-        requiresShipping
-        originalUnitPriceSet { shopMoney { amount } }
-        discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
-        image { url(transform: { maxWidth: 96, maxHeight: 96 }) altText }
-        variant {
-          barcode
-          inventoryItem {
-            unitCost { amount }
-            measurement { weight { unit value } }
-          }
-        }
-      }
+      pageInfo { hasNextPage endCursor }
+      nodes { ...OrderWindowLine }
     }
     transactions(first: 20) {
       kind
@@ -539,7 +662,18 @@ query orderFraud($id: ID!) {
     }
   }
 }
-"""
+""" + ORDER_WINDOW_LINE_FRAGMENT
+
+ORDER_WINDOW_LINES_QUERY = """
+query orderWindowLines($id: ID!, $after: String) {
+  order(id: $id) {
+    lineItems(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...OrderWindowLine }
+    }
+  }
+}
+""" + ORDER_WINDOW_LINE_FRAGMENT
 
 
 def get_order_fraud(store_id, order_gid):
@@ -548,6 +682,14 @@ def get_order_fraud(store_id, order_gid):
     order = data.get("order")
     if not order:
         raise ShopifyError("Order not found")
+    page = order.get("lineItems") or {}
+    lines, info = list(page.get("nodes") or []), page.get("pageInfo") or {}
+    while info.get("hasNextPage"):
+        more = ((_graphql(store_id, ORDER_WINDOW_LINES_QUERY, {"id": order_gid, "after": info["endCursor"]})
+                 .get("order") or {}).get("lineItems")) or {}
+        lines.extend(more.get("nodes") or [])
+        info = more.get("pageInfo") or {}
+    order["lineItems"] = {"nodes": lines}
     return order
 
 

@@ -12,6 +12,8 @@ sys.modules.setdefault("config", types.SimpleNamespace(
 
 import shopify_client  # noqa: E402
 
+random_uniform = shopify_client.random.uniform
+
 STORE = {"id": 1, "shop_domain": "x.myshopify.com", "access_token": "t"}
 QUERY = "query q { shop { name } }"
 OK_BODY = {"data": {"shop": {"name": "x"}}}
@@ -38,6 +40,13 @@ def status(code):
 def throttled():
     return FakeResponse(200, {"errors": [{"message": "Throttled",
                                           "extensions": {"code": "THROTTLED"}}]})
+
+
+def throttled_with(requested, available, rate):
+    return FakeResponse(200, {
+        "errors": [{"message": "Throttled", "extensions": {"code": "THROTTLED"}}],
+        "extensions": {"cost": {"requestedQueryCost": requested, "actualQueryCost": None, "throttleStatus": {
+            "maximumAvailable": 2000.0, "currentlyAvailable": available, "restoreRate": rate}}}})
 
 
 def rejected():
@@ -92,6 +101,42 @@ class GraphqlRetryTest(unittest.TestCase):
             shopify_client._graphql(1, QUERY)
         self.assertNotIsInstance(ctx.exception, shopify_client.ShopifyUnavailable)
         self.assertEqual((len(calls), self.sleeps), (1, []))
+
+    def test_throttling_waits_for_the_bucket_and_does_not_count_as_a_failure(self):
+        shopify_client.random.uniform = lambda a, b: 0
+        try:
+            calls = self.run_with([throttled_with(900, 400, 100), throttled_with(900, 850, 100),
+                                   status(503), status(503), ok()])
+            self.assertEqual(shopify_client._graphql(1, QUERY), OK_BODY["data"])
+        finally:
+            shopify_client.random.uniform = random_uniform
+        self.assertEqual((len(calls), self.sleeps), (5, [5.0, 0.5, 1.0, 3.0]))
+
+    def test_throttle_wait_is_the_refill_time_within_bounds(self):
+        def cost(requested, available, rate):
+            return {"cost": {"requestedQueryCost": requested,
+                             "throttleStatus": {"currentlyAvailable": available, "restoreRate": rate}}}
+
+        shopify_client.random.uniform = lambda a, b: 0
+        try:
+            waits = [shopify_client.throttle_wait(e) for e in
+                     (cost(300, 100, 100), cost(1000, 0, 50), cost(500, 499, 1000), None)]
+        finally:
+            shopify_client.random.uniform = random_uniform
+        low, high = shopify_client.THROTTLE_WAIT_BOUNDS
+        self.assertEqual(waits, [2.0, high, low, shopify_client.RETRY_BACKOFF_SECONDS[0]])
+
+    def test_endless_throttling_gives_up_as_unavailable(self):
+        self.run_with([throttled()] * (shopify_client.THROTTLE_RETRIES + 1))
+        with self.assertRaises(shopify_client.ShopifyUnavailable) as ctx:
+            shopify_client._graphql(1, QUERY)
+        self.assertIn("kept throttling", str(ctx.exception))
+
+    def test_query_over_the_cost_limit_is_its_own_error(self):
+        self.run_with([FakeResponse(200, {"errors": [{"message": "Query cost is 1200",
+                                                      "extensions": {"code": "MAX_COST_EXCEEDED"}}]})])
+        with self.assertRaises(shopify_client.ShopifyCostExceeded):
+            shopify_client._graphql(1, QUERY)
 
     def test_graphql_rejection_is_not_retried(self):
         calls = self.run_with([rejected()])

@@ -9,13 +9,14 @@ from flask import Blueprint, current_app, jsonify, request, session
 import backoffice
 import db
 import order_risk
+import picklist_cache
 import picklist_rules
 import picklists
 import profit
 import shipping_estimate
 from auth import section_required
 from shopify_client import (PICKLIST_DAYS, ShopifyError, change_tags, economics_from_order, get_order_fraud,
-                            get_picklist_orders, list_picklist_orders, list_shop_tags)
+                            get_picklist_orders, list_shop_tags)
 from util import CENTRAL, api_error, audit, central_time
 
 bp = Blueprint("picklists", __name__, url_prefix="/api/picklists")
@@ -58,9 +59,13 @@ def _known_upcs(orders):
     if not db_id:
         return None, NO_DB_MESSAGE
     try:
-        return set(backoffice.find_items_by_upc(db_id, {line["barcode"] for o in orders for line in o["lines"]})), None
+        return backoffice.known_upcs(db_id, {line["barcode"] for o in orders for line in o["lines"]}), None
     except backoffice.BackofficeError as e:
         return None, str(e)
+
+
+def _iso(when):
+    return when.isoformat() if when else None
 
 
 def _store_names(store_ids):
@@ -96,27 +101,36 @@ def _per_store(store_ids, fetch):
 def eligible_orders():
     """Every eligible order of the chosen stores, each with the saved rules it
     matches so the page toggles rules without asking again, and the products
-    that would leave it off a pick list. A store Shopify cannot answer for is
-    reported and the others still load; so do the orders when BackOffice
-    cannot check the barcodes."""
+    that would leave it off a pick list. sync=auto (the default) first asks
+    Shopify for what changed since the last read, sync=full reads every order
+    again, sync=none answers from the last read alone. A store Shopify cannot
+    answer for is reported, with its orders as last read; so are the orders
+    when BackOffice cannot check the barcodes."""
     try:
         store_ids = [int(s) for s in (request.args.get("store_ids") or "").split(",") if s.strip()]
     except ValueError:
         return api_error("store_ids must be a comma-separated list of ids")
+    sync = request.args.get("sync") or "auto"
+    if sync not in ("auto", "full", "none"):
+        return api_error("sync must be auto, full or none")
+    errors = []
+    if sync != "none":
+        names = _store_names(store_ids) if store_ids else {}
+        results = _per_store(store_ids, lambda sid: picklist_cache.sync_store(sid, full=sync == "full"))
+        errors = [{"store_id": store_id, "store_name": names.get(store_id), "error": error}
+                  for store_id, _mode, error in results if error]
+    synced = picklist_cache.synced_at(store_ids) if store_ids else {}
+    for error in errors:
+        error["synced_at"] = _iso(synced.get(error["store_id"]))
     rules = picklist_rules.load_rules()
     reserved = picklists.active_order_keys(store_ids) if store_ids else set()
-    names = _store_names(store_ids) if store_ids else {}
-    orders, errors = [], []
-    for store_id, nodes, error in _per_store(store_ids, list_picklist_orders):
-        if error:
-            errors.append({"store_id": store_id, "store_name": names.get(store_id), "error": error})
+    orders = []
+    for store_id, node in picklist_cache.cached_orders(store_ids) if store_ids else []:
+        order = picklists.from_shopify_order(node, store_id)
+        if picklists.ineligible_reason(order, reserved):
             continue
-        for node in nodes:
-            order = picklists.from_shopify_order(node, store_id)
-            if picklists.ineligible_reason(order, reserved):
-                continue
-            order["rule_ids"] = picklist_rules.matched_rule_ids(rules, order)
-            orders.append(order)
+        order["rule_ids"] = picklist_rules.matched_rule_ids(rules, order)
+        orders.append(order)
     orders.sort(key=lambda o: (o["created_at"], o["name"]))
     known, backoffice_error = _known_upcs(orders) if orders else (None, None)
     for order in orders:
@@ -127,6 +141,7 @@ def eligible_orders():
         "backoffice_error": backoffice_error,
         "hidden_tags": picklists.parse_tag_list(db.get_setting(HIDDEN_TAGS_KEY)),
         "days": PICKLIST_DAYS,
+        "synced": {str(sid): _iso(synced.get(sid)) for sid in store_ids},
         "rules": [{"id": r["id"], "name": r["name"], "action": r["action"]} for r in rules],
         "presets": picklist_rules.load_presets(rules),
     })

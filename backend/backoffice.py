@@ -388,6 +388,27 @@ def find_items_by_upc(db_id, upcs):
     return found
 
 
+def known_upcs(db_id, upcs):
+    """The barcodes among upcs that BackOffice has a product for."""
+    upcs = sorted({u for u in upcs if u})
+    known = set()
+    if not upcs:
+        return known
+    conn = _connect(db_id)
+    try:
+        with conn.cursor() as cur:
+            for i in range(0, len(upcs), UPC_CHUNK):
+                chunk = upcs[i:i + UPC_CHUNK]
+                cur.execute(
+                    f"SELECT DISTINCT ProductUPC FROM Items_tbl WHERE ProductUPC IN ({','.join(['%s'] * len(chunk))})",
+                    tuple(chunk),
+                )
+                known.update((row[0] or "").strip() for row in cur.fetchall())
+    finally:
+        conn.close()
+    return known
+
+
 def quotation_detail_row(quotation_id, item, qty):
     """The QuotationsDetails_tbl values for one pick-list line, in
     QUOTATION_DETAIL_COLUMNS order — defaults as BackOffice writes them:
