@@ -353,6 +353,17 @@
         <div id="pl-presets-list"></div>
         <button class="btn btn-outlined plr-add" id="add-pl-preset">+ New preset</button>
       </div>
+
+      <div class="card" id="card-picklist-coverage">
+        <div class="plc-head">
+          <h2>Preset coverage</h2>
+          <button class="btn btn-outlined btn-small pl-refresh" id="plc-check" title="Ask Shopify for new orders and work it out again">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>Check again</button>
+        </div>
+        <p class="hint mb-16">Which presets each eligible order falls in, with the rules and presets above as they are now, saved or not. Orders in more than one preset, or in none, are listed first. Exclusions and filters on the Pick lists page don’t count here.</p>
+        <div class="pl-chip-row mb-16" id="plc-stores"></div>
+        <div id="plc-body"></div>
+      </div>
     </section>
 
     <!-- ================= Users ================= -->

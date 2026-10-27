@@ -210,5 +210,25 @@ class ParsePresetsTest(unittest.TestCase):
                          (["Retail", "Twin"], "p1", 2))
 
 
+class PresetMatchesTest(unittest.TestCase):
+    """(wholesale or big) and not same — the expression the page shows."""
+    PRESET = preset(("or", [("wholesale", False), ("big", False)]), ("and", [("same", True)]))
+
+    def test_cases(self):
+        any_group = preset(("and", [("wholesale", False)]), ("and", [("big", False)]), join="or")
+        cases = [
+            ("first of an or-group", self.PRESET, {"wholesale"}, True),
+            ("second of an or-group", self.PRESET, {"big"}, True),
+            ("no rule of the or-group", self.PRESET, set(), False),
+            ("a negated rule that matches", self.PRESET, {"big", "same"}, False),
+            ("groups joined by or: one is enough", any_group, {"big"}, True),
+            ("groups joined by or: neither", any_group, {"same"}, False),
+        ]
+        for name, p, matched, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(picklist_rules.preset_matches(p, matched), expected)
+
+
+
 if __name__ == "__main__":
     unittest.main()

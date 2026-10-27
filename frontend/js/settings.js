@@ -21,6 +21,8 @@ initNav('settings').then(async () => {
   await renderProviders();
   await loadPicklistOptions();
   await loadSettings();
+  plcReady = true;
+  plcMaybeStart();
   updatePrintModeUI();
   renderTagRules();
   loadServiceNames();
@@ -53,6 +55,7 @@ function showTab(tab) {
   document.querySelectorAll('.tab-panel')
     .forEach((p) => p.classList.toggle('active', p.dataset.panel === tab));
   if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`);
+  if (tab === 'picklists') plcMaybeStart();
 }
 
 /* ---------- Unsaved-changes save bar ---------- */
@@ -225,6 +228,7 @@ function readPlRules() {
 function writePlRules(rules) {
   document.getElementById('picklist_rules').value = JSON.stringify(rules);
   setDirty(true);
+  plcSchedule();
 }
 
 const plAttr = (v) => esc(v).replace(/"/g, '&quot;');
@@ -543,6 +547,7 @@ function readPlPresets() {
 function writePlPresets(presets) {
   document.getElementById('picklist_presets').value = JSON.stringify(presets);
   setDirty(true);
+  plcSchedule();
   // Rule cards show how many presets use them.
   const rules = readPlRules();
   document.querySelectorAll('#pl-rules-list .plr').forEach((el, i) => {
@@ -791,6 +796,186 @@ function plPresetsUsing(ruleId) {
   if (!ruleId) return [];
   return readPlPresets().filter((p) => (p.groups || []).some((g) => g.items.some((it) => it.rule === ruleId)));
 }
+
+/* ---------- Preset coverage ----------
+   The server matches the rules and presets as edited here against the
+   eligible orders, so overlaps and gaps show before anything is saved. */
+const PLC_STORE_COLORS = ['#2563eb', '#d97706', '#16a34a', '#9333ea', '#db2777', '#0891b2', '#65a30d', '#dc2626']; // the Pick lists page's
+const PLC_ROWS_SHOWN = 200;
+let plcStores = null; // starts from the stores chosen on the Pick lists page
+let plcData = null;
+let plcReady = false; // the saved rules and presets are in the editors
+let plcStarted = false;
+let plcSeq = 0;
+let plcTimer = null;
+const plcOpen = new Set();
+
+const plcActiveStores = () => plStores.filter((s) => s.is_active);
+const plcColor = (id) => {
+  const i = plcActiveStores().findIndex((s) => s.id === id);
+  return i < 0 ? 'var(--outline-strong)' : PLC_STORE_COLORS[i % PLC_STORE_COLORS.length];
+};
+
+function plcDefaultStores() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('easyship.picklistStores')); } catch { /* none kept */ }
+  const active = plcActiveStores().map((s) => s.id);
+  const chosen = Array.isArray(saved) ? saved.filter((id) => active.includes(id)) : [];
+  return new Set(chosen.length ? chosen : active);
+}
+
+/* Runs once the Pick lists tab is open and the saved rules are loaded. */
+function plcMaybeStart() {
+  const panel = document.querySelector('.tab-panel[data-panel="picklists"]');
+  if (!plcReady || plcStarted || !panel || !panel.classList.contains('active')) return;
+  plcStarted = true;
+  loadPresetCoverage('auto');
+}
+
+/* An edit above re-counts from the orders already read, a moment after typing stops. */
+function plcSchedule() {
+  if (!plcStarted) return;
+  clearTimeout(plcTimer);
+  plcTimer = setTimeout(() => loadPresetCoverage('none'), 600);
+}
+
+async function loadPresetCoverage(sync) {
+  if (!plcStores) plcStores = plcDefaultStores();
+  renderPlcStores();
+  const seq = ++plcSeq;
+  const body = document.getElementById('plc-body');
+  const check = document.getElementById('plc-check');
+  if (!plcStores.size) {
+    plcData = null;
+    body.innerHTML = '<p class="hint">Pick at least one store.</p>';
+    return;
+  }
+  check.classList.add('loading');
+  if (!plcData) body.innerHTML = '<div class="plc-loading"><span class="spinner"></span> Reading eligible orders…</div>';
+  try {
+    const res = await api('/api/picklists/coverage', {
+      method: 'POST', body: { store_ids: [...plcStores], rules: readPlRules(), presets: readPlPresets(), sync },
+    });
+    if (seq !== plcSeq) return;
+    plcData = res;
+    renderPlCoverage();
+  } catch (err) {
+    if (seq !== plcSeq) return;
+    plcData = null;
+    body.innerHTML = `<div class="rule-banner err"><span>Couldn’t work out the coverage — ${esc(err.message)}</span></div>`;
+  } finally {
+    if (seq === plcSeq) check.classList.remove('loading');
+  }
+}
+
+function renderPlcStores() {
+  const tick = plSvg('<path d="M20 6 9 17l-5-5"/>');
+  const counts = new Map();
+  (plcData ? plcData.orders : []).forEach((o) => counts.set(o.store_id, (counts.get(o.store_id) || 0) + 1));
+  document.getElementById('plc-stores').innerHTML = plcActiveStores().map((s) => {
+    const on = plcStores.has(s.id);
+    return `<button type="button" class="pl-store-pill ${on ? 'on' : ''}" data-store="${s.id}" aria-pressed="${on}" style="--dot:${plcColor(s.id)}">
+      <span class="pl-tick">${on ? tick : ''}</span>${esc(s.name)}${on && plcData ? `<span class="pl-store-n">${counts.get(s.id) || 0}</span>` : ''}</button>`;
+  }).join('');
+}
+
+/* Orders grouped by the exact set of presets they fall in: overlaps first,
+   then orders in none, then each preset's own. */
+function plcCombos(orders) {
+  const byKey = new Map();
+  orders.forEach((o) => {
+    const key = o.presets.join(',');
+    if (!byKey.has(key)) byKey.set(key, { key, presets: o.presets, orders: [] });
+    byKey.get(key).orders.push(o);
+  });
+  const rank = (c) => (c.presets.length > 1 ? 0 : c.presets.length === 0 ? 1 : 2);
+  return [...byKey.values()].sort((a, b) => rank(a) - rank(b)
+    || (rank(a) === 0 ? b.orders.length - a.orders.length : (a.presets[0] || 0) - (b.presets[0] || 0)));
+}
+
+function renderPlCoverage() {
+  const { orders, presets, errors, synced } = plcData;
+  renderPlcStores();
+  const token = (i) => `<span class="pl-ptoken">${esc(presets[i].name)}</span>`;
+  const combos = plcCombos(orders);
+  const sum = (test) => combos.filter(test).reduce((n, c) => n + c.orders.length, 0);
+  const shared = sum((c) => c.presets.length > 1);
+  const none = sum((c) => !c.presets.length);
+  const single = orders.length - shared - none;
+  const times = Object.values(synced).filter(Boolean).map((t) => new Date(t));
+  const asOf = times.length ? ` · orders as of ${new Date(Math.min(...times)).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : '';
+  const dropped = readPlPresets().length - presets.length;
+  const pct = (n) => (orders.length ? (n / orders.length) * 100 : 0);
+  const errorsHtml = errors.map((e) => `<div class="rule-banner warn mb-8"><span><strong>Couldn’t ask Shopify about ${esc(e.store_name || plStoreName(e.store_id))}</strong> — ${esc(e.error)}. Its orders as last read are counted.</span></div>`).join('');
+  if (!presets.length) {
+    document.getElementById('plc-body').innerHTML = `${errorsHtml}<p class="hint">${plural(orders.length, 'eligible order')}${asOf}. Add a preset with a name and a rule to see which of them it takes.</p>`;
+    return;
+  }
+  const perPreset = presets.map((p, i) => {
+    const total = orders.filter((o) => o.presets.includes(i)).length;
+    const only = orders.filter((o) => o.presets.length === 1 && o.presets[0] === i).length;
+    return `<span class="plc-preset">${token(i)} <strong>${total}</strong>${total !== only ? ` <span class="hint">· ${only} only here</span>` : ''}</span>`;
+  }).join('');
+  const rows = combos.map((c) => {
+    const kind = c.presets.length > 1 ? 'shared' : c.presets.length ? 'single' : 'none';
+    const label = kind === 'shared' ? `${c.presets.map(token).join('<span class="pl-pjoin">and</span>')}<span class="plc-tag warn">in ${c.presets.length} presets</span>`
+      : kind === 'none' ? '<span class="plc-none-label">In no preset</span><span class="plc-tag">no tab shows them</span>'
+        : `<span class="pl-pjoin">only</span>${token(c.presets[0])}`;
+    const open = plcOpen.has(c.key);
+    return `<div class="plc-row ${kind}${open ? ' open' : ''}" data-key="${esc(c.key)}">
+      <button type="button" class="plc-row-head" aria-expanded="${open}">
+        <span class="plc-chevron">${PL_ICONS.chevron}</span><span class="plc-label">${label}</span><span class="plc-n">${c.orders.length}</span></button>
+      ${open ? plcOrdersHtml(c.orders) : ''}
+    </div>`;
+  }).join('');
+  document.getElementById('plc-body').innerHTML = `${errorsHtml}
+    <div class="plc-bar" role="img" aria-label="${single} in one preset, ${shared} in more than one, ${none} in none">
+      <span class="single" style="width:${pct(single)}%"></span><span class="shared" style="width:${pct(shared)}%"></span><span class="none" style="width:${pct(none)}%"></span></div>
+    <div class="plc-summary"><strong>${plural(orders.length, 'eligible order')}</strong>
+      <span><i class="plc-key single"></i>${single} in one preset</span>
+      <span><i class="plc-key shared"></i>${shared} in more than one</span>
+      <span><i class="plc-key none"></i>${none} in none</span><span class="hint">${asOf.replace(' · ', '')}</span></div>
+    <div class="plc-presets">${perPreset}</div>
+    ${dropped > 0 ? `<p class="hint mb-8">${plural(dropped, 'preset')} without a name or a rule ${dropped === 1 ? 'isn’t' : 'aren’t'} counted.</p>` : ''}
+    <div class="plc-rows">${rows}</div>`;
+}
+
+function plcOrdersHtml(orders) {
+  const ruleName = (id) => (readPlRules().find((r) => r.id === id) || {}).name || 'a deleted rule';
+  const tags = (list) => (list.length ? list.map((t) => `<span class="plc-chip">${esc(t)}</span>`).join('') : '<span class="hint">—</span>');
+  const rows = orders.slice(0, PLC_ROWS_SHOWN).map((o) => `<tr>
+    <td class="plc-order">${esc(o.name)}</td>
+    <td><span class="pl-dot" style="--dot:${plcColor(o.store_id)}"></span>${esc(plStoreName(o.store_id))}</td>
+    <td class="plc-muted">${esc(o.created_at)}</td>
+    <td>${esc(o.customer)}</td>
+    <td>${esc(o.ship_state || '—')}</td>
+    <td>${o.rule_ids.length ? o.rule_ids.map((id) => `<span class="pl-ptoken">${esc(ruleName(id))}</span>`).join(' ') : '<span class="hint">none</span>'}</td>
+    <td>${tags(o.tags)}</td>
+    <td>${tags(o.customer_tags)}</td>
+  </tr>`).join('');
+  const more = orders.length - PLC_ROWS_SHOWN;
+  return `<div class="table-wrap plc-orders"><table>
+    <thead><tr><th>Order</th><th>Store</th><th>Placed</th><th>Customer</th><th>Ship to</th><th>Rules it matches</th><th>Order tags</th><th>Customer tags</th></tr></thead>
+    <tbody>${rows}</tbody></table>${more > 0 ? `<p class="hint">and ${more} more</p>` : ''}</div>`;
+}
+
+document.getElementById('plc-check').addEventListener('click', () => loadPresetCoverage('auto'));
+document.getElementById('plc-stores').addEventListener('click', (e) => {
+  const pill = e.target.closest('[data-store]');
+  if (!pill) return;
+  const id = Number(pill.dataset.store);
+  if (plcStores.has(id)) plcStores.delete(id);
+  else plcStores.add(id);
+  loadPresetCoverage('auto'); // a store not chosen before may never have been read
+});
+document.getElementById('plc-body').addEventListener('click', (e) => {
+  const head = e.target.closest('.plc-row-head');
+  if (!head) return;
+  const key = head.parentElement.dataset.key;
+  if (plcOpen.has(key)) plcOpen.delete(key);
+  else plcOpen.add(key);
+  renderPlCoverage();
+});
 
 /* Service-name suggestions for the rule editor: every courier service the
    enabled providers expose, deduped by name. */
@@ -1660,6 +1845,7 @@ async function loadSettings() {
   syncDeleteButtons();
   syncProfitSummary();
   renderPlRules();
+  plcSchedule(); // saved or discarded: count what is in the editors now
 }
 
 /* ---------- Profit check summary ---------- */

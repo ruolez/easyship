@@ -14,7 +14,7 @@ import picklist_rules
 import picklists
 import profit
 import shipping_estimate
-from auth import section_required
+from auth import admin_required, section_required
 from shopify_client import (PICKLIST_DAYS, ShopifyError, change_tags, economics_from_order, get_order_fraud,
                             get_picklist_orders, list_shop_tags)
 from util import CENTRAL, api_error, audit, central_time
@@ -96,6 +96,74 @@ def _per_store(store_ids, fetch):
         return list(pool.map(run, store_ids))
 
 
+SYNC_MODES = ("auto", "full", "none")
+
+
+def _eligible(store_ids, sync, rules):
+    """(eligible orders with the rules they match, store errors, store_id →
+    last read) — after bringing the stores' saved orders up to date unless
+    sync is "none"."""
+    if not store_ids:
+        return [], [], {}
+    errors = []
+    if sync != "none":
+        names = _store_names(store_ids)
+        results = _per_store(store_ids, lambda sid: picklist_cache.sync_store(sid, full=sync == "full"))
+        errors = [{"store_id": store_id, "store_name": names.get(store_id), "error": error}
+                  for store_id, _mode, error in results if error]
+    synced = picklist_cache.synced_at(store_ids)
+    for error in errors:
+        error["synced_at"] = _iso(synced.get(error["store_id"]))
+    reserved = picklists.active_order_keys(store_ids)
+    orders = []
+    for store_id, node in picklist_cache.cached_orders(store_ids):
+        order = picklists.from_shopify_order(node, store_id)
+        if picklists.ineligible_reason(order, reserved):
+            continue
+        order["rule_ids"] = picklist_rules.matched_rule_ids(rules, order)
+        orders.append(order)
+    orders.sort(key=lambda o: (o["created_at"], o["name"]))
+    return orders, errors, synced
+
+
+COVERAGE_FIELDS = ("store_id", "id", "name", "created_at", "customer", "ship_state", "tags", "customer_tags",
+                   "shipping_method", "total", "rule_ids")
+
+
+@bp.post("/coverage")
+@admin_required
+def preset_coverage():
+    """Which presets each eligible order falls in, for the preset editor in
+    Settings: the rules and presets are the ones being edited, saved or not,
+    and per-computer exclusions don't count. Presets the page would drop (no
+    name, no rules) are left out; each order's `presets` indexes the list
+    returned."""
+    data = request.get_json(silent=True) or {}
+    try:
+        store_ids = [int(s) for s in data.get("store_ids") or []]
+    except (TypeError, ValueError):
+        return api_error("store_ids must be a list of ids")
+    sync = data.get("sync") or "auto"
+    if sync not in SYNC_MODES:
+        return api_error("sync must be auto, full or none")
+    rules = picklist_rules.parse_rules(data.get("rules"))
+    presets = picklist_rules.parse_presets(data.get("presets"), [r["id"] for r in rules])
+    orders, errors, synced = _eligible(store_ids, sync, rules)
+    rows = []
+    for order in orders:
+        row = {key: order[key] for key in COVERAGE_FIELDS}
+        matched = set(order["rule_ids"])
+        row["presets"] = [i for i, p in enumerate(presets) if picklist_rules.preset_matches(p, matched)]
+        rows.append(row)
+    return jsonify({
+        "orders": rows,
+        "presets": [{"name": p["name"]} for p in presets],
+        "errors": errors,
+        "days": PICKLIST_DAYS,
+        "synced": {str(sid): _iso(synced.get(sid)) for sid in store_ids},
+    })
+
+
 @bp.get("/orders")
 @section_required(SECTION)
 def eligible_orders():
@@ -111,27 +179,10 @@ def eligible_orders():
     except ValueError:
         return api_error("store_ids must be a comma-separated list of ids")
     sync = request.args.get("sync") or "auto"
-    if sync not in ("auto", "full", "none"):
+    if sync not in SYNC_MODES:
         return api_error("sync must be auto, full or none")
-    errors = []
-    if sync != "none":
-        names = _store_names(store_ids) if store_ids else {}
-        results = _per_store(store_ids, lambda sid: picklist_cache.sync_store(sid, full=sync == "full"))
-        errors = [{"store_id": store_id, "store_name": names.get(store_id), "error": error}
-                  for store_id, _mode, error in results if error]
-    synced = picklist_cache.synced_at(store_ids) if store_ids else {}
-    for error in errors:
-        error["synced_at"] = _iso(synced.get(error["store_id"]))
     rules = picklist_rules.load_rules()
-    reserved = picklists.active_order_keys(store_ids) if store_ids else set()
-    orders = []
-    for store_id, node in picklist_cache.cached_orders(store_ids) if store_ids else []:
-        order = picklists.from_shopify_order(node, store_id)
-        if picklists.ineligible_reason(order, reserved):
-            continue
-        order["rule_ids"] = picklist_rules.matched_rule_ids(rules, order)
-        orders.append(order)
-    orders.sort(key=lambda o: (o["created_at"], o["name"]))
+    orders, errors, synced = _eligible(store_ids, sync, rules)
     known, backoffice_error = _known_upcs(orders) if orders else (None, None)
     for order in orders:
         order["issues"] = picklists.pick_issues(order, known)

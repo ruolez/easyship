@@ -268,6 +268,43 @@ class PicklistsApiTest(unittest.TestCase):
     def test_unknown_sync_mode_is_refused(self):
         self.assertEqual(self.client.get("/api/picklists/orders?store_ids=1&sync=later").status_code, 400)
 
+    # ----- preset coverage -----
+
+    COVERAGE_RULES = [
+        {"id": "w", "name": "Wholesale", "action": "keep", "conditions": [
+            {"field": "order_tag", "op": "contains", "value": "wholesale"}]},
+        {"id": "v", "name": "VIP", "action": "keep", "conditions": [
+            {"field": "order_tag", "op": "contains", "value": "vip"}]},
+    ]
+    COVERAGE_PRESETS = [
+        {"name": "Alpha", "groups": [{"join": "and", "items": [{"rule": "w", "negate": False}]}]},
+        {"name": "", "groups": [{"join": "and", "items": [{"rule": "w", "negate": False}]}]},
+        {"name": "Beta", "groups": [{"join": "and", "items": [{"rule": "v", "negate": False}]}]},
+    ]
+
+    def coverage(self, **body):
+        return self.client.post("/api/picklists/coverage", json={
+            "store_ids": [STORE], "rules": self.COVERAGE_RULES, "presets": self.COVERAGE_PRESETS, **body})
+
+    def test_coverage_says_which_unsaved_presets_each_eligible_order_falls_in(self):
+        self.login("admin")
+        self.shopify[STORE] = [node("g1", "#1", tags=["Wholesale"]), node("g2", "#2", tags=["wholesale", "VIP"]),
+                               node("g3", "#3"), node("g4", "#4", financial="PENDING", tags=["vip"])]
+        res = self.coverage().get_json()
+        self.assertEqual(
+            ([(o["name"], o["rule_ids"], o["presets"]) for o in res["orders"]], res["presets"], self.syncs),
+            ([("#1", ["w"], [0]), ("#2", ["w", "v"], [0, 1]), ("#3", [], [])],
+             [{"name": "Alpha"}, {"name": "Beta"}], [(STORE, False)]))
+
+    def test_coverage_can_answer_from_the_last_read_alone(self):
+        self.login("admin")
+        self.cache[STORE] = [node("g9", "#9", tags=["vip"])]
+        res = self.coverage(sync="none").get_json()
+        self.assertEqual(([(o["name"], o["presets"]) for o in res["orders"]], self.syncs), ([("#9", [1])], []))
+
+    def test_coverage_is_for_admins(self):
+        self.assertEqual(self.coverage().status_code, 403)
+
     def test_orders_tagged_as_being_worked_on_are_not_eligible(self):
         self.shopify[STORE] = [node("g1", "#1"), node("g6", "#6", tags=["Checked"]),
                                node("g7", "#7", tags=["picklist 10202026191"])]

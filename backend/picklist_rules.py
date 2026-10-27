@@ -167,6 +167,18 @@ def load_presets(rules):
     return parse_presets(db.get_setting(PRESETS_KEY), [r["id"] for r in rules])
 
 
+def preset_matches(preset, matched_rule_ids):
+    """Whether an order matching these rules falls in the preset — the same
+    reading as presetMatches on the Pick lists page."""
+    def item(it):
+        return (it["rule"] in matched_rule_ids) != it["negate"]
+
+    def group(g):
+        return (any if g["join"] == "or" else all)(item(it) for it in g["items"])
+
+    return (any if preset["join"] == "or" else all)(group(g) for g in preset["groups"])
+
+
 def _condition_matches(cond, order):
     field, op, value = cond["field"], cond["op"], cond["value"]
     if field in TAG_FIELDS:
