@@ -220,8 +220,11 @@ async function loadOrders({ full = false } = {}) {
   }
   const ids = [...selectedStores].join(',');
   const url = (sync) => `/api/picklists/orders?store_ids=${ids}&sync=${sync}`;
+  const started = Date.now();
   refresh.classList.add('loading');
-  if (shownStores !== ids) {
+  if (shownStores === ids) showChecking(full, started);
+  else {
+    hideSync();
     document.getElementById('pl-errors').innerHTML = '';
     document.getElementById('pl-empty').style.display = 'none';
     tbody.innerHTML = '<tr><td colspan="12"><span class="spinner"></span> Loading eligible orders…</td></tr>';
@@ -231,6 +234,7 @@ async function loadOrders({ full = false } = {}) {
     api(url('none')).then((res) => {
       if (seq !== loadSeq || synced || !Object.values(res.synced).every(Boolean)) return;
       showOrders(res, ids, true);
+      showChecking(full, started);
     }).catch(() => {});
   }
   let res;
@@ -239,8 +243,9 @@ async function loadOrders({ full = false } = {}) {
   } catch (err) {
     if (seq !== loadSeq) return;
     refresh.classList.remove('loading');
+    hideSync();
     if (shownStores === ids) {
-      setUpdated(false);
+      setUpdated();
       showLoadErrors([{ error: err.message }]);
       return;
     }
@@ -252,27 +257,71 @@ async function loadOrders({ full = false } = {}) {
   synced = true;
   if (seq !== loadSeq) return; // a newer store selection is loading
   refresh.classList.remove('loading');
+  const before = shownStores === ids ? new Set(orders.map(orderKey)) : null;
+  const after = new Set(res.orders.map(orderKey));
+  newKeys = before ? new Set([...after].filter((k) => !before.has(k))) : new Set();
   showOrders(res, ids, false);
+  if (before && !res.errors.length) showChecked(newKeys.size, [...before].filter((k) => !after.has(k)).length);
+  else hideSync();
+}
+
+/* ---------- Shopify check ---------- */
+let syncTimer = null;
+let newKeys = new Set(); // orders the last check brought in, marked New until the next one
+
+const clockTime = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+function hideSync() {
+  clearInterval(syncTimer);
+  clearTimeout(syncTimer);
+  document.getElementById('pl-sync').hidden = true;
+}
+
+/* Above a table that is on screen while Shopify is asked: what it is waiting
+   for, how long it has been, and how old the rows below are. */
+function showChecking(full, started) {
+  hideSync();
+  const el = document.getElementById('pl-sync');
+  const what = full ? 'Reading every order from Shopify again…' : 'Checking Shopify for new orders…';
+  const asOf = lastSynced && lastSynced.at ? ` The list below is from ${clockTime(lastSynced.at)} until it’s done.` : '';
+  const tick = () => {
+    const secs = Math.round((Date.now() - started) / 1000);
+    el.innerHTML = `<div class="rule-banner"><span class="spinner" aria-hidden="true"></span>
+      <span><strong>${what}</strong>${asOf}</span><span class="pl-sync-time">${secs >= 2 ? `${secs}s` : ''}</span></div>`;
+  };
+  tick();
+  el.hidden = false;
+  syncTimer = setInterval(tick, 1000);
+}
+
+function showChecked(added, gone) {
+  hideSync();
+  const el = document.getElementById('pl-sync');
+  const found = [added ? `${plural(added, 'new order')}, marked New below` : 'no new orders',
+    gone ? `${plural(gone, 'order')} left the list` : ''].filter(Boolean).join(' · ');
+  el.innerHTML = `<div class="rule-banner ok"><span><strong>Up to date with Shopify</strong> — ${found}.</span></div>`;
+  el.hidden = false;
+  if (added && el.getBoundingClientRect().bottom < 0) snackbar(`${plural(added, 'new order')} from Shopify`);
+  syncTimer = setTimeout(() => { el.hidden = true; }, added || gone ? 12000 : 4000);
 }
 
 let lastSynced = null;
 
 /* "Updated" is when the stalest chosen store was last read from Shopify. */
-function setUpdated(refreshing, res) {
+function setUpdated(res) {
   const updated = document.getElementById('pl-updated');
   if (res) {
     const times = Object.values(res.synced).filter(Boolean).map((t) => new Date(t));
     lastSynced = { days: res.days, at: times.length ? new Date(Math.min(...times)) : null };
   }
   if (!lastSynced) return;
-  const at = lastSynced.at ? ` · Updated ${lastSynced.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : '';
-  updated.textContent = `Last ${lastSynced.days} days${at}${refreshing ? ' · Checking Shopify…' : ''}`;
+  updated.textContent = `Last ${lastSynced.days} days${lastSynced.at ? ` · Updated ${clockTime(lastSynced.at)}` : ''}`;
   updated.title = `Paid, unfulfilled orders created in the last ${lastSynced.days} days`;
 }
 
 function showOrders(res, ids, refreshing) {
   shownStores = ids;
-  setUpdated(refreshing, res);
+  setUpdated(res);
   orders = res.orders;
   const counts = new Map();
   orders.forEach((o) => counts.set(o.store_id, (counts.get(o.store_id) || 0) + 1));
@@ -308,8 +357,7 @@ function forgetGoneExclusions(errors) {
 function loadErrorNote(e) {
   if (!e.store_id) return '';
   if (e.synced_at) {
-    const at = new Date(e.synced_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    return ` Its orders as of ${at} are shown.`;
+    return ` Its orders as of ${clockTime(new Date(e.synced_at))} are shown.`;
   }
   return orders.length ? ' Orders from the other stores are shown.' : '';
 }
@@ -861,10 +909,10 @@ function shippingHtml(o) {
 function rowHtml(o, i, action) {
   const key = orderKey(o);
   const products = o.lines.length;
-  return `<tr class="${checked.has(key) ? 'selected' : ''}${key === cursorKey ? ' cursor' : ''}" data-key="${attr(key)}">
+  return `<tr class="${checked.has(key) ? 'selected' : ''}${key === cursorKey ? ' cursor' : ''}${newKeys.has(key) ? ' pl-new' : ''}" data-key="${attr(key)}">
     <td class="pl-check"><input type="checkbox" data-check="${attr(key)}" ${checked.has(key) ? 'checked' : ''} aria-label="Select ${attr(o.name)}"></td>
     <td class="pl-num">${i + 1}</td>
-    <td class="pl-order"><button class="link-btn" data-fraud="${attr(key)}" title="Open order details">${esc(o.name)}</button>${flagsHtml(o)}</td>
+    <td class="pl-order"><button class="link-btn" data-fraud="${attr(key)}" title="Open order details">${esc(o.name)}</button>${newKeys.has(key) ? '<span class="pl-new-badge" title="Came in with the last Shopify check">New</span>' : ''}${flagsHtml(o)}</td>
     ${reviewOnly ? `<td class="pl-whycell"><div class="pl-cellflex">${flagReasonsHtml(o)}</div></td>` : ''}
     <td class="pl-storecell"><span class="pl-dot" style="--dot:${storeColor(o.store_id)}"></span>${esc(storeName(o.store_id))}</td>
     <td class="pl-date">${placedHtml(o)}</td>

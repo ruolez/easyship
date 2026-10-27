@@ -1662,6 +1662,11 @@ body.pl-page .card { margin-bottom: 12px; }
 .pl-rule-chip.mode-hide { background: var(--error-light); border-color: var(--error); color: var(--error); }
 
 .pl-errors { display: flex; flex-direction: column; gap: 6px; }
+.pl-sync { margin-bottom: 12px; }
+.pl-sync .rule-banner { flex-wrap: nowrap; gap: 10px; }
+.pl-sync .rule-banner.ok { background: var(--success-light); border-left-color: var(--success); }
+.pl-sync .spinner { width: 14px; height: 14px; border-width: 2px; flex: 0 0 auto; }
+.pl-sync-time { margin-left: auto; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .pl-errors:not(:empty) { margin-bottom: 12px; }
 .pl-errors .rule-banner { justify-content: space-between; flex-wrap: nowrap; gap: 12px; }
 .link-btn {
@@ -1814,6 +1819,11 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .pl-flag .ico { width: 15px; height: 15px; stroke-width: 2.2; }
 .pl-flag.err { color: var(--error); }
 .pl-flag.warn { color: var(--warning); }
+.pl-new-badge {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; line-height: 18px;
+  background: var(--success-light); color: var(--success); font-size: 11px; font-weight: 700; vertical-align: 1px;
+}
+.pl-table tbody tr.pl-new:not(.cursor) td:first-child { box-shadow: inset 3px 0 0 var(--success); }
 .pl-storecell { font-size: 13px; }
 .pl-dot { display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: var(--dot); vertical-align: 1px; }
 .pl-date { color: var(--text-secondary); font-size: 13px; }
