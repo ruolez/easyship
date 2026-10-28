@@ -729,6 +729,63 @@ def change_tags(store_id, resource_gid, add=(), remove=()):
             raise ShopifyError("; ".join(e.get("message") or "" for e in errors))
 
 
+# The reasons Shopify's own "Hold fulfillment" dialog offers.
+HOLD_REASONS = ("INVENTORY_OUT_OF_STOCK", "INCORRECT_ADDRESS", "HIGH_RISK_OF_FRAUD", "AWAITING_PAYMENT", "OTHER")
+HOLD_MUTATION = """
+mutation picklistHold($id: ID!, $fulfillmentHold: FulfillmentOrderHoldInput!) {
+  fulfillmentOrderHold(id: $id, fulfillmentHold: $fulfillmentHold) {
+    fulfillmentHold { id }
+    userErrors { field message }
+  }
+}
+"""
+RELEASE_HOLD_MUTATION = """
+mutation picklistReleaseHold($id: ID!, $holdIds: [ID!]) {
+  fulfillmentOrderReleaseHold(id: $id, holdIds: $holdIds) {
+    fulfillmentOrder { id status }
+    userErrors { field message }
+  }
+}
+"""
+
+
+def hold_order(store_id, order_gid, reason, notes=None):
+    """Put the order's open fulfillment orders on hold, like Shopify's "Hold
+    fulfillment" → [{fulfillment_order_id, hold_id}] to release them by. A
+    refusal part way releases the holds already placed, so the order is held
+    whole or not at all."""
+    data = _graphql(store_id, FULFILLMENT_ORDERS_QUERY, {"id": order_gid})
+    nodes = (((data.get("order") or {}).get("fulfillmentOrders") or {}).get("nodes")) or []
+    open_fos = [fo for fo in nodes if fo.get("status") == "OPEN"]
+    if not open_fos:
+        raise ShopifyError("This order has nothing left to put on hold")
+    hold = {"reason": reason, **({"reasonNotes": notes} if notes else {})}
+    holds = []
+    for fo in open_fos:
+        data = _graphql(store_id, HOLD_MUTATION, {"id": fo["id"], "fulfillmentHold": hold})
+        result = data.get("fulfillmentOrderHold") or {}
+        errors = result.get("userErrors") or []
+        if errors or not result.get("fulfillmentHold"):
+            if holds:
+                release_holds(store_id, holds)
+            raise ShopifyError("; ".join(e.get("message") or "" for e in errors) or "Shopify placed no hold")
+        holds.append({"fulfillment_order_id": fo["id"], "hold_id": result["fulfillmentHold"]["id"]})
+    return holds
+
+
+def release_holds(store_id, holds):
+    """Release exactly the given holds (from hold_order); any other hold on the
+    order stays."""
+    by_fo = {}
+    for h in holds:
+        by_fo.setdefault(h["fulfillment_order_id"], []).append(h["hold_id"])
+    for fo_id, hold_ids in by_fo.items():
+        result = _graphql(store_id, RELEASE_HOLD_MUTATION, {"id": fo_id, "holdIds": hold_ids})
+        errors = (result.get("fulfillmentOrderReleaseHold") or {}).get("userErrors") or []
+        if errors:
+            raise ShopifyError("; ".join(e.get("message") or "" for e in errors))
+
+
 # Shopify builds tracking links only for carrier names spelled exactly as on
 # its supported-companies list, and other apps on the store (Tracktor) rewrite
 # the tracking info — dropping every number but one — when they see anything

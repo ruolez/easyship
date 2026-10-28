@@ -94,6 +94,10 @@ class PicklistsApiTest(unittest.TestCase):
             (picklists_api, "get_order_fraud", lambda sid, gid: self.fraud_node),
             (picklists_api, "list_shop_tags", self.fake_shop_tags),
             (picklists_api, "change_tags", self.fake_change_tags),
+            (picklists_api, "hold_order", self.fake_hold_order),
+            (picklists_api, "release_holds", self.fake_release_holds),
+            (picklist_cache, "put_orders", lambda sid, nodes: self.calls.append(
+                ("put_orders", sid, [(n["id"], n["tags"]) for n in nodes]))),
             (picklists, "start_tagging", self.fake_start_tagging),
             (picklists, "tag_rows", lambda pid: [dict(r) for r in self.tag_db.values()]),
             (picklists, "record_tag_results", self.fake_record_tag_results),
@@ -104,6 +108,7 @@ class PicklistsApiTest(unittest.TestCase):
         self.cache, self.synced, self.syncs = {}, {}, []
         self.fraud_node = FRAUD_NODE
         self.tag_error = None
+        self.hold_error = None
         self.tag_fail = {}  # order gid -> Shopify error for that order
         self.tag_db = {}  # picklist_orders.id -> row
         picklists_api._tag_cache.clear()
@@ -184,6 +189,21 @@ class PicklistsApiTest(unittest.TestCase):
         if self.tag_error or gid in self.tag_fail:
             raise ShopifyError(self.tag_error or self.tag_fail[gid])
         self.calls.append(("change_tags", store_id, gid, list(add), list(remove)))
+        for n in self.shopify[store_id]:
+            owner = n if n["id"] == gid else n.get("customer") if (n.get("customer") or {}).get("id") == gid else None
+            if owner is not None:
+                owner["tags"] = [t for t in owner["tags"] if t not in remove] + [t for t in add if t not in owner["tags"]]
+
+    def fake_hold_order(self, store_id, gid, reason, notes=None):
+        if self.hold_error:
+            raise ShopifyError(self.hold_error)
+        self.calls.append(("hold", store_id, gid, reason, notes))
+        return [{"fulfillment_order_id": "fo1", "hold_id": "h1"}]
+
+    def fake_release_holds(self, store_id, holds):
+        if self.hold_error:
+            raise ShopifyError(self.hold_error)
+        self.calls.append(("release_holds", store_id, holds))
 
     def body(self, ids, **extra):
         return {"orders": [{"store_id": STORE, "order_id": gid} for gid in ids], **extra}
@@ -488,13 +508,13 @@ class PicklistsApiTest(unittest.TestCase):
         self.shopify[STORE][0]["tags"] = ["old", "Keep"]
         status, data = self.tag_change(add=["rush, Gift ", "keep"], remove=["OLD"])
         self.assertEqual(
-            (status, data["order"]["tags"], data["order"]["rule_ids"], self.calls[-1]),
+            (status, data["order"]["tags"], data["order"]["rule_ids"], self.calls[-2]),
             (200, ["Keep", "rush", "Gift"], [], ("change_tags", STORE, "g1", ["rush", "Gift"], ["old"])))
 
     def test_customer_tags_go_to_the_orders_customer(self):
         self.shopify[STORE][0]["customer"] = {"id": "gid://shopify/Customer/5", "displayName": "Ann", "tags": ["vip"]}
         status, data = self.tag_change(kind="customer", add=["wholesale"])
-        self.assertEqual((status, data["order"]["customer_tags"], self.calls[-1]),
+        self.assertEqual((status, data["order"]["customer_tags"], self.calls[-2]),
                          (200, ["vip", "wholesale"], ("change_tags", STORE, "gid://shopify/Customer/5", ["wholesale"], [])))
 
     def test_new_tags_join_the_suggestions(self):
@@ -517,6 +537,88 @@ class PicklistsApiTest(unittest.TestCase):
                          (502, "This store's Shopify token can't change order tags. Add the write_orders and "
                                "write_customers scopes to the store's app, then try again."))
 
+
+    def test_tag_change_saves_the_order_to_the_cache_as_shopify_now_has_it(self):
+        self.tag_change(add=["rush"])
+        self.assertEqual(self.calls[-1], ("put_orders", STORE, [("g1", ["rush"])]))
+
+    # ----- holds -----
+
+    def hold(self, path="/api/picklists/orders/hold", **body):
+        res = self.client.post(path, json={"store_id": STORE, "order_id": "g1", **body})
+        return res.status_code, res.get_json()
+
+    def test_hold_puts_the_order_on_hold_and_caches_it_as_shopify_now_has_it(self):
+        status, data = self.hold(reason="INCORRECT_ADDRESS", notes="  Apt missing ")
+        self.assertEqual((status, data, self.calls), (
+            200, {"holds": [{"fulfillment_order_id": "fo1", "hold_id": "h1"}]},
+            [("hold", STORE, "g1", "INCORRECT_ADDRESS", "Apt missing"), ("put_orders", STORE, [("g1", [])])]))
+
+    def test_hold_refusals(self):
+        cases = [({"reason": "BORED"}, 400), ({"reason": "OTHER", "order_id": ""}, 400),
+                 ({"reason": "OTHER", "store_id": "1"}, 400)]
+        self.assertEqual([self.hold(**body)[0] for body, _ in cases], [code for _, code in cases])
+        self.assertEqual(self.calls, [])
+
+    def test_missing_fulfillment_scope_is_explained(self):
+        self.hold_error = "Shopify GraphQL error: [{'extensions': {'code': 'ACCESS_DENIED'}}]"
+        status, data = self.hold(reason="OTHER")
+        self.assertEqual((status, data["error"]), (
+            502, "This store's Shopify token can't put orders on hold. Add the "
+                 "write_merchant_managed_fulfillment_orders scope to the store's app, then try again."))
+
+    def test_a_hold_still_counts_when_the_order_cannot_be_read_back(self):
+        picklists_api.get_picklist_orders = lambda sid, gids: (_ for _ in ()).throw(ShopifyError("down"))
+        status, data = self.hold(reason="OTHER")
+        self.assertEqual((status, [c[0] for c in self.calls]), (200, ["hold"]))
+
+    def test_release_lets_go_of_the_holds_given_and_recaches_the_order(self):
+        holds = [{"fulfillment_order_id": "fo1", "hold_id": "h1"}]
+        status, _ = self.hold("/api/picklists/orders/hold/release", holds=holds)
+        self.assertEqual((status, self.calls),
+                         (200, [("release_holds", STORE, holds), ("put_orders", STORE, [("g1", [])])]))
+
+    def test_release_needs_the_holds(self):
+        cases = [{}, {"holds": []}, {"holds": [{"hold_id": "h1"}]}]
+        self.assertEqual([self.hold("/api/picklists/orders/hold/release", **body)[0] for body in cases], [400] * 3)
+
+    # ----- bulk tags -----
+
+    def bulk_tag(self, ids, **body):
+        res = self.client.post("/api/picklists/orders/tags/bulk",
+                               json={"orders": [{"store_id": STORE, "order_id": g} for g in ids], **body})
+        return res.status_code, res.get_json()
+
+    def test_bulk_tags_every_order_and_sends_them_back_with_their_rules(self):
+        status, data = self.bulk_tag(["g1", "g2"], add=["rush, Gift"])
+        self.assertEqual(
+            (status, sorted(c for c in self.calls if c[0] == "change_tags"),
+             [(o["id"], o["rule_ids"]) for o in data["orders"]], data["failed"], data["tags"]),
+            (200, [("change_tags", STORE, "g1", ["rush", "Gift"], []), ("change_tags", STORE, "g2", ["rush", "Gift"], [])],
+             [("g1", []), ("g2", [])], [], ["rush", "Gift"]))
+
+    def test_an_order_shopify_refuses_is_reported_and_the_rest_still_get_tagged(self):
+        self.tag_fail = {"g2": "Order is archived"}
+        status, data = self.bulk_tag(["g1", "g2"], add=["rush"])
+        self.assertEqual((status, [o["id"] for o in data["orders"]], data["failed"]),
+                         (200, ["g1"], [{"store_id": STORE, "order_id": "g2", "error": "Order is archived"}]))
+
+    def test_bulk_tags_are_cached_and_join_the_suggestions(self):
+        self.client.get("/api/picklists/tags?store_id=1&kind=order")
+        self.bulk_tag(["g1"], add=["fragile"])
+        tags = self.client.get("/api/picklists/tags?store_id=1&kind=order").get_json()["tags"]
+        self.assertEqual(([c for c in self.calls if c[0] == "put_orders"], tags),
+                         ([("put_orders", STORE, [("g1", ["fragile"])])], ["fragile", "Wholesale", "rush"]))
+
+    def test_a_tag_that_marks_the_order_as_worked_on_says_it_can_no_longer_be_picked(self):
+        _, data = self.bulk_tag(["g1"], add=["Checked"])
+        self.assertEqual([o["ineligible_reason"] for o in data["orders"]], ["Tagged “Checked” — already being worked on"])
+
+    def test_bulk_tag_refusals(self):
+        too_many = [f"g{i}" for i in range(picklists_api.BULK_TAG_LIMIT + 1)]
+        cases = [(["g1"], {"add": [" , "]}), ([], {"add": ["x"]}), (too_many, {"add": ["x"]})]
+        self.assertEqual([self.bulk_tag(ids, **body)[0] for ids, body in cases], [400] * 3)
+        self.assertEqual(self.calls, [])
 
     # ----- Shopify tag "picklist <quotation number>" -----
 

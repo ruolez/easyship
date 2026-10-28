@@ -15,8 +15,8 @@ import picklists
 import profit
 import shipping_estimate
 from auth import admin_required, section_required
-from shopify_client import (PICKLIST_DAYS, ShopifyError, change_tags, economics_from_order, get_order_fraud,
-                            get_picklist_orders, list_shop_tags)
+from shopify_client import (HOLD_REASONS, PICKLIST_DAYS, ShopifyError, change_tags, economics_from_order,
+                            get_order_fraud, get_picklist_orders, hold_order, list_shop_tags, release_holds)
 from util import CENTRAL, api_error, audit, central_time
 
 bp = Blueprint("picklists", __name__, url_prefix="/api/picklists")
@@ -308,6 +308,15 @@ def shop_tags():
     return jsonify({"tags": cached[1]})
 
 
+def _remember_shop_tags(store_id, kind, tags):
+    """New tags join the cached suggestions straight away."""
+    with _tag_lock:
+        cached = _tag_cache.get((store_id, kind))
+        if cached:
+            known = {t.lower() for t in cached[1]}
+            _tag_cache[(store_id, kind)] = (cached[0], [t for t in tags if t.lower() not in known] + cached[1])
+
+
 @bp.post("/orders/tags")
 @section_required(SECTION)
 def change_order_tags():
@@ -341,16 +350,153 @@ def change_order_tags():
     except ShopifyError as e:
         return api_error(_tag_error_text(e, kind), 502)
     owner["tags"] = [t for t in current if t not in remove] + add
-    with _tag_lock:
-        cached = _tag_cache.get((store_id, kind))
-        if cached:
-            known = {t.lower() for t in cached[1]}
-            _tag_cache[(store_id, kind)] = (cached[0], [t for t in add if t.lower() not in known] + cached[1])
+    _remember_shop_tags(store_id, kind, add)
+    picklist_cache.put_orders(store_id, [node])
     audit("picklist.tags", {"store_id": store_id, "order": node.get("name"), "kind": kind,
                             "added": add, "removed": remove})
+    return jsonify({"order": _listed_order(node, store_id, picklist_rules.load_rules())})
+
+
+BULK_TAG_LIMIT = 250
+
+
+def _order_refs(raw):
+    """[{store_id, order_id}] as sent → unique (store_id, order gid) pairs, or None when malformed."""
+    if not isinstance(raw, list):
+        return None
+    refs = []
+    for item in raw:
+        store_id = (item or {}).get("store_id") if isinstance(item, dict) else None
+        gid = str((item or {}).get("order_id") or "").strip() if isinstance(item, dict) else ""
+        if not isinstance(store_id, int) or not gid:
+            return None
+        if (store_id, gid) not in refs:
+            refs.append((store_id, gid))
+    return refs
+
+
+def _listed_order(node, store_id, rules):
     order = picklists.from_shopify_order(node, store_id)
-    order["rule_ids"] = picklist_rules.matched_rule_ids(picklist_rules.load_rules(), order)
-    return jsonify({"order": order})
+    order["rule_ids"] = picklist_rules.matched_rule_ids(rules, order)
+    return order
+
+
+@bp.post("/orders/tags/bulk")
+@section_required(SECTION)
+def bulk_add_order_tags():
+    """Add tags to many orders at once, like Shopify's bulk "Add tags" (tagsAdd
+    leaves a tag an order already has alone). One order failing never stops
+    the others; the tagged ones are read back and sent as the list shows
+    them, with the rules they now match and why they can no longer be picked
+    when a tag ("checked") took them off."""
+    data = request.get_json(silent=True) or {}
+    refs = _order_refs(data.get("orders"))
+    add = _clean_tags(data.get("add") or [])
+    if not refs or not add:
+        return api_error("orders and the tags to add are required")
+    if len(refs) > BULK_TAG_LIMIT:
+        return api_error(f"Tag at most {BULK_TAG_LIMIT} orders at a time")
+    app = current_app._get_current_object()
+
+    def run(ref):
+        with app.app_context():
+            try:
+                change_tags(ref[0], ref[1], add=add)
+                return ref, None
+            except ShopifyError as e:
+                return ref, _tag_error_text(e, "order")
+            except Exception as e:  # noqa: BLE001 — reported per order, shown to the user
+                log.exception("Tagging order %s failed", ref[1])
+                return ref, f"Unexpected error: {e}"
+
+    with ThreadPoolExecutor(max_workers=min(TAG_WORKERS, len(refs))) as pool:
+        results = list(pool.map(run, refs))
+    failed = [{"store_id": sid, "order_id": gid, "error": error} for (sid, gid), error in results if error]
+    tagged = {}
+    for (sid, gid), error in results:
+        if not error:
+            tagged.setdefault(sid, []).append(gid)
+    rules = picklist_rules.load_rules()
+    orders = []
+    for store_id, gids in tagged.items():
+        _remember_shop_tags(store_id, "order", add)
+        try:
+            nodes = get_picklist_orders(store_id, gids)
+            picklist_cache.put_orders(store_id, nodes)
+        except Exception:  # noqa: BLE001 — the tags are on; the page adds them to its rows itself
+            log.exception("Reading back tagged orders of store %s failed", store_id)
+            continue
+        for n in nodes:
+            order = _listed_order(n, store_id, rules)
+            order["ineligible_reason"] = picklists.ineligible_reason(order, set())
+            orders.append(order)
+    audit("picklist.tags.bulk", {"added": add, "done": len(refs) - len(failed),
+                                 "failed": [f["order_id"] for f in failed]})
+    return jsonify({"orders": orders, "failed": failed, "tags": add})
+
+
+def _hold_error_text(error):
+    text = str(error)
+    if "ACCESS_DENIED" in text or "access denied" in text.lower():
+        return ("This store's Shopify token can't put orders on hold. Add the "
+                "write_merchant_managed_fulfillment_orders scope to the store's app, then try again.")
+    return text
+
+
+def _recache(store_id, order_gid):
+    """Read the order back into the cache after a hold changed it; holds may
+    not touch updatedAt, so the next sync of changes could miss it."""
+    try:
+        picklist_cache.put_orders(store_id, get_picklist_orders(store_id, [order_gid]))
+    except Exception:  # noqa: BLE001 — the hold is done; the next whole read catches up
+        log.exception("Reading back order %s after a hold change failed", order_gid)
+
+
+def _hold_target(data):
+    store_id = data.get("store_id")
+    order_gid = str(data.get("order_id") or "").strip()
+    return (store_id, order_gid) if isinstance(store_id, int) and order_gid else (None, None)
+
+
+@bp.post("/orders/hold")
+@section_required(SECTION)
+def hold():
+    """Put the order on hold in Shopify, as its "Hold fulfillment" does. The
+    holds placed come back so the page can offer Undo."""
+    data = request.get_json(silent=True) or {}
+    store_id, order_gid = _hold_target(data)
+    reason = data.get("reason")
+    notes = str(data.get("notes") or "").strip()[:MAX_TAG_LENGTH]
+    if not store_id or reason not in HOLD_REASONS:
+        return api_error("store_id, order_id and a hold reason are required")
+    try:
+        holds = hold_order(store_id, order_gid, reason, notes or None)
+    except ShopifyError as e:
+        return api_error(_hold_error_text(e), 502)
+    _recache(store_id, order_gid)
+    audit("picklist.hold", {"store_id": store_id, "order_id": order_gid, "reason": reason, "notes": notes})
+    return jsonify({"holds": holds})
+
+
+@bp.post("/orders/hold/release")
+@section_required(SECTION)
+def release_hold():
+    """Undo a hold placed from the page: only the holds it placed are released."""
+    data = request.get_json(silent=True) or {}
+    store_id, order_gid = _hold_target(data)
+    holds = data.get("holds")
+    valid = isinstance(holds, list) and holds and all(
+        isinstance(h, dict) and h.get("fulfillment_order_id") and h.get("hold_id") for h in holds)
+    if not store_id or not valid:
+        return api_error("store_id, order_id and the holds to release are required")
+    holds = [{"fulfillment_order_id": str(h["fulfillment_order_id"]), "hold_id": str(h["hold_id"])} for h in holds]
+    try:
+        release_holds(store_id, holds)
+    except ShopifyError as e:
+        return api_error(_hold_error_text(e), 502)
+    _recache(store_id, order_gid)
+    audit("picklist.hold.release", {"store_id": store_id, "order_id": order_gid})
+    return jsonify({"ok": True})
 
 
 @bp.get("/sales-reps")

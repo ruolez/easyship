@@ -1600,8 +1600,6 @@ body.pl-page .card { margin-bottom: 12px; }
 .pl-fbtn.on .pl-fbtn-main strong { overflow: hidden; text-overflow: ellipsis; font-weight: 650; }
 .pl-fbtn-x { justify-content: center; width: 26px; padding: 0 2px 0 0; font-size: 16px; line-height: 1; color: var(--primary-hover); border-radius: 0 999px 999px 0; }
 .pl-fbtn-x:hover { background: #dbeafe; }
-.pl-fbtn.paused { border-color: var(--outline-strong); background: var(--surface-sunken); }
-.pl-fbtn.paused .pl-fbtn-main, .pl-fbtn.paused .pl-fbtn-x { color: var(--text-secondary); }
 .pl-clear-filters { margin-left: 4px; font-size: 12.5px; }
 
 /* Filter menus */
@@ -1877,7 +1875,7 @@ body.pl-page #snackbar.show { transform: translateY(0); }
   display: flex; flex-direction: column; overflow: hidden;
 }
 .om-head {
-  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  position: relative; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
   padding: 18px 24px 14px; border-bottom: 1px solid var(--outline);
 }
 .om-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 18px; font-weight: 650; letter-spacing: -0.2px; }
@@ -2037,6 +2035,46 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .tagbox-opt { padding: 6px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tagbox-opt.active { background: var(--primary-light); color: var(--primary); }
 .tagbox-opt mark { background: transparent; color: inherit; font-weight: 700; }
+
+/* Hold panel, dropped from the order window's header */
+.om-head-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+.om-head-actions .btn .ico { width: 13px; height: 13px; }
+.om-head-actions kbd {
+  display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 4px; border-radius: 4px; text-align: center;
+  border: 1px solid currentColor; border-bottom-width: 2px; font: 600 10.5px/15px var(--font); opacity: 0.7;
+}
+.om-hold {
+  position: absolute; top: calc(100% - 6px); right: 24px; z-index: 30; width: 320px;
+  display: flex; flex-direction: column; gap: 10px; padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--outline); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.2);
+}
+.om-hold[hidden] { display: none; }
+.om-hold-title { font-size: 14px; font-weight: 650; }
+.om-hold-reasons { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; border: 0; }
+.om-hold-reasons legend { margin-bottom: 4px; }
+.om-hold-reason { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.om-hold-reason:hover { background: var(--surface-sunken); }
+.om-hold-reason:has(input:checked) { background: var(--primary-light); color: var(--primary); font-weight: 600; }
+.om-hold-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 600px) { .om-hold { left: 16px; right: 16px; width: auto; } }
+
+/* Bulk "Add tags" window */
+.modal.bulktag { overflow: visible; }
+.bt-box { max-width: none; }
+.bt-box .tagbox-field { max-height: 120px; }
+.bt-box .tagbox-menu { top: calc(100% + 6px); bottom: auto; }
+.bt-note { margin-top: 6px; font-size: 12px; }
+.bt-suggest { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.bt-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.bt-chip {
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--outline-strong); background: var(--surface);
+  font: inherit; font-size: 12.5px; color: var(--on-surface); cursor: pointer;
+}
+.bt-chip:hover { border-color: var(--primary); color: var(--primary); }
+.bt-chip.on { background: var(--primary-light); border-color: var(--primary); color: var(--primary); font-weight: 600; }
+.bt-failed { margin: 8px 0 0 18px; font-size: 13px; max-height: 240px; overflow-y: auto; }
+#bt-error { margin-top: 10px; }
 
 /* Short screens: tighter spacing so the window still fits without scrolling. */
 @media (max-height: 820px) {

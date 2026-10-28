@@ -49,6 +49,17 @@ def _state(store_id):
     return db.query("SELECT * FROM picklist_store_sync WHERE store_id = %s", (store_id,), one=True)
 
 
+def _upsert(cur, store_id, nodes):
+    if nodes:
+        psycopg2.extras.execute_values(
+            cur,
+            """INSERT INTO picklist_order_cache (store_id, order_gid, created_at, node) VALUES %s
+               ON CONFLICT (store_id, order_gid) DO UPDATE
+               SET created_at = EXCLUDED.created_at, node = EXCLUDED.node""",
+            [(store_id, n["id"], n["createdAt"], json.dumps(n)) for n in nodes],
+        )
+
+
 def _save(store_id, nodes, now, whole):
     """Store what Shopify returned in one transaction. A whole read replaces
     the store's orders; a read of changes updates the orders it returned and
@@ -65,14 +76,7 @@ def _save(store_id, nodes, now, whole):
                 cur.execute(
                     "DELETE FROM picklist_order_cache WHERE store_id = %s AND (order_gid = ANY(%s) OR created_at < %s)",
                     (store_id, gone, picklist_since(now)))
-            if keep:
-                psycopg2.extras.execute_values(
-                    cur,
-                    """INSERT INTO picklist_order_cache (store_id, order_gid, created_at, node) VALUES %s
-                       ON CONFLICT (store_id, order_gid) DO UPDATE
-                       SET created_at = EXCLUDED.created_at, node = EXCLUDED.node""",
-                    [(store_id, n["id"], n["createdAt"], json.dumps(n)) for n in keep],
-                )
+            _upsert(cur, store_id, keep)
             cur.execute(
                 """INSERT INTO picklist_store_sync (store_id, changed_since, synced_at, full_at)
                    VALUES (%s, %s, %s, %s)
@@ -81,6 +85,25 @@ def _save(store_id, nodes, now, whole):
                        full_at = CASE WHEN %s THEN EXCLUDED.full_at ELSE picklist_store_sync.full_at END""",
                 (store_id, now - OVERLAP, now, now, whole),
             )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def put_orders(store_id, nodes):
+    """Save orders just read live after a change made from the page (a hold, a
+    tag), so a load from the cache shows them as they are now even when the
+    change did not touch their updatedAt. The sync state is left alone."""
+    by_id = {n["id"]: n for n in nodes}
+    conn = db.get_db()
+    try:
+        with conn.cursor() as cur:
+            gone = [gid for gid, n in by_id.items() if not worth_caching(n)]
+            if gone:
+                cur.execute("DELETE FROM picklist_order_cache WHERE store_id = %s AND order_gid = ANY(%s)",
+                            (store_id, gone))
+            _upsert(cur, store_id, [n for n in by_id.values() if worth_caching(n)])
         conn.commit()
     except Exception:
         conn.rollback()

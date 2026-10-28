@@ -89,7 +89,7 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 
 /* ---------- Keyboard ----------
    In the list: ↑ / ↓ move, Space ticks, Enter opens, E excludes (or restores),
-   ⌘Z / Ctrl+Z undoes, / finds. In the order window: ← → and E. */
+   T tags the selected orders, ⌘Z / Ctrl+Z undoes, / finds. In the order window: ← →, E and H. */
 document.addEventListener('keydown', (e) => {
   const modalOpen = document.getElementById('modal-backdrop').classList.contains('show');
   if (e.key === 'Escape' && pop) {
@@ -109,6 +109,11 @@ document.addEventListener('keydown', (e) => {
     if (e.key === '/') {
       e.preventDefault();
       document.getElementById('qf-search').focus();
+      return;
+    }
+    if (key === 't' && checked.size && !e.repeat) {
+      e.preventDefault();
+      openBulkTags();
       return;
     }
     if (key === 'arrowdown' || key === 'arrowup') {
@@ -137,6 +142,10 @@ document.addEventListener('keydown', (e) => {
   if ((e.key === 'e' || e.key === 'E') && !e.repeat && plain) {
     e.preventDefault();
     moveAndAdvance(modalOrderKey);
+  }
+  if ((e.key === 'h' || e.key === 'H') && !e.repeat && plain) {
+    e.preventDefault();
+    toggleHoldPanel(modalOrderKey);
   }
 });
 
@@ -421,8 +430,8 @@ function setPreset(id) {
   render();
 }
 
-/* "All orders" (the rules in use) plus one tab per preset, each with how many
-   orders it would put on the pick list. */
+/* "All orders" plus one tab per preset, each with how many orders it would
+   put on the pick list with the rules and filters in use. */
 function renderViewTabs() {
   const row = document.getElementById('pl-viewtabs-row');
   row.hidden = !presets.length;
@@ -458,9 +467,10 @@ const FACETS = [
 ];
 const facetDef = (key) => FACETS.find((f) => f.key === key);
 
+/* The preset decides first; the rules in use narrow what it keeps. */
 function rulesPass(o, presetId) {
   const preset = presets.find((p) => p.id === presetId);
-  if (preset) return presetMatches(preset, o);
+  if (preset && !presetMatches(preset, o)) return false;
   const inMode = (mode) => [...ruleModes].filter(([, m]) => m === mode).map(([id]) => id);
   const matches = (id) => o.rule_ids.includes(id);
   if (inMode('hide').some(matches)) return false;
@@ -533,9 +543,7 @@ function renderFilterBar() {
     const on = rules.filter((r) => ruleModes.has(r.id));
     const names = on.map((r) => (ruleModes.get(r.id) === 'hide' ? `not ${r.name}` : r.name));
     const title = on.map((r) => `${RULE_LABEL[ruleModes.get(r.id)]}: ${r.name}`).join(' · ');
-    const paused = activePreset && on.length;
-    parts.push(button('rules', 'Rules', paused ? `${on.length} paused` : shortList(names),
-      paused ? `Paused while a saved view is on — ${title}` : title, paused ? ' paused' : ''));
+    parts.push(button('rules', 'Rules', shortList(names), title));
   }
   const any = facetsInUse() || ruleModes.size;
   bar.innerHTML = `<span class="pl-fbar-icon" aria-hidden="true">${FILTER_ICON}</span>${parts.join('')}`
@@ -625,7 +633,7 @@ function renderPopList() {
     const note = document.getElementById('pl-pop-note');
     const preset = presets.find((p) => p.id === activePreset);
     note.hidden = !preset;
-    note.innerHTML = preset ? `The <strong>${esc(preset.name)}</strong> view decides on its own; choosing a rule switches to All orders.` : '';
+    note.innerHTML = preset ? `Rules narrow the <strong>${esc(preset.name)}</strong> view further.` : '';
     list.innerHTML = rules.map((r) => {
       const current = ruleModes.get(r.id) || '';
       const modes = r.action === 'hide' ? ['', 'hide'] : ['', 'add', 'narrow'];
@@ -671,11 +679,6 @@ document.getElementById('pl-pop').addEventListener('click', (e) => {
   }
   const seg = e.target.closest('[data-rule]');
   if (seg) {
-    if (activePreset) {
-      activePreset = null;
-      remember(PRESET_KEY, null);
-      snackbar('Switched to All orders — the rules work again');
-    }
     const next = new Map(ruleModes);
     if (seg.dataset.mode) next.set(seg.dataset.rule, seg.dataset.mode);
     else next.delete(seg.dataset.rule);
@@ -826,12 +829,13 @@ function undoMove() {
   snackbar(`${plural(keys.length, 'order')} ${toExcluded ? 'back on the pick list' : 'excluded again'}`);
 }
 
-function moveSnackbar(message) {
+function undoSnackbar(message, undo) {
   snackbar(message);
   const el = document.getElementById('snackbar');
   el.insertAdjacentHTML('beforeend', '<button type="button" class="snackbar-action">Undo</button>');
-  el.querySelector('.snackbar-action').addEventListener('click', undoMove);
+  el.querySelector('.snackbar-action').addEventListener('click', undo, { once: true });
 }
+const moveSnackbar = (message) => undoSnackbar(message, undoMove);
 
 /* Moves rows from the list itself; the keyboard row moves on to the next one. */
 function moveRows(keys) {
@@ -1153,6 +1157,7 @@ const ICONS = {
   search: svg('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>'),
   check: svg('<path d="M20 6 9 17l-5-5"/>'),
   copy: svg('<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
+  pause: svg('<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>'),
   box: svg('<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'),
 };
 
@@ -1348,14 +1353,19 @@ async function showOrder(key) {
         <div class="om-meta">${esc(storeName(o.store_id))} · ${esc(shortDate(o.created_at))} · ${esc(o.customer)} · ${o.units} unit${o.units === 1 ? '' : 's'}
           <span id="om-tags">${tagsHtml(o.tags)}</span></div>
       </div>
-      <button class="om-close" onclick="closeModal()" aria-label="Close">${ICONS.close}</button>
+      <div class="om-head-actions">
+        <button class="btn btn-outlined btn-small" id="om-hold" aria-haspopup="dialog" aria-expanded="false"
+          title="Hold fulfillment in Shopify (H)">${ICONS.pause} Put on hold <kbd>H</kbd></button>
+        <button class="om-close" onclick="closeModal()" aria-label="Close">${ICONS.close}</button>
+      </div>
+      <div class="om-hold" id="om-hold-panel" role="dialog" aria-label="Put ${attr(o.name)} on hold" hidden></div>
     </div>
     <div class="om-body" id="om-body"><div class="om-loading"><span class="spinner"></span> Loading order details…</div></div>
     <div class="om-foot">
       <button class="btn btn-outlined btn-small" id="om-prev" ${idx === 0 ? 'disabled' : ''}>${ICONS.prev} Previous</button>
       <span class="om-pos">${idx + 1} of ${list.length}</span>
       <button class="btn btn-outlined btn-small" id="om-next" ${idx === list.length - 1 ? 'disabled' : ''}>Next ${ICONS.next}</button>
-      <span class="om-keys" title="← → Previous / Next · E ${view === 'pick' ? 'Exclude' : 'Restore'} · Esc Close" aria-label="Keyboard shortcuts: arrow keys for previous and next, E to ${view === 'pick' ? 'exclude' : 'restore'}, Escape to close">
+      <span class="om-keys" title="← → Previous / Next · E ${view === 'pick' ? 'Exclude' : 'Restore'} · H Put on hold · Esc Close" aria-label="Keyboard shortcuts: arrow keys for previous and next, E to ${view === 'pick' ? 'exclude' : 'restore'}, H to put on hold, Escape to close">
         <span><kbd>←</kbd><kbd>→</kbd></span><span><kbd>E</kbd></span><span><kbd>Esc</kbd></span>
       </span>
       <span class="om-spacer"></span>
@@ -1368,6 +1378,7 @@ async function showOrder(key) {
   document.getElementById('om-prev').addEventListener('click', () => stepOrder(-1));
   document.getElementById('om-next').addEventListener('click', () => stepOrder(1));
   document.getElementById('om-move').addEventListener('click', () => moveAndAdvance(key));
+  document.getElementById('om-hold').addEventListener('click', () => toggleHoldPanel(key));
   document.querySelectorAll('#modal .tagbox').forEach((box) => wireTagBox(box, key));
   const current = fetchOrderDetail(o);
   if (list[idx + 1]) fetchOrderDetail(list[idx + 1]).catch(() => {}); // ready before Next / Exclude
@@ -1421,6 +1432,113 @@ function moveAndAdvance(key) {
     return;
   }
   showOrder(orderKey(after[Math.min(idx, after.length - 1)]));
+}
+
+/* ---------- Hold ----------
+   Like Shopify's "Hold fulfillment": a reason and an optional note. A held
+   order can't be picked, so it leaves the list and the window moves on;
+   Undo releases exactly the holds just placed and puts it back. */
+const HOLD_REASONS = [
+  ['INVENTORY_OUT_OF_STOCK', 'Inventory out of stock'],
+  ['INCORRECT_ADDRESS', 'Incorrect address'],
+  ['HIGH_RISK_OF_FRAUD', 'High risk of fraud'],
+  ['AWAITING_PAYMENT', 'Awaiting payment'],
+  ['OTHER', 'Other'],
+];
+
+function toggleHoldPanel(key) {
+  const panel = document.getElementById('om-hold-panel');
+  if (!panel || modalOrderKey !== key) return;
+  const button = document.getElementById('om-hold');
+  if (!panel.hidden) {
+    closeHoldPanel();
+    return;
+  }
+  const o = orders.find((x) => orderKey(x) === key);
+  panel.innerHTML = `<div class="om-hold-title">Put ${esc(o.name)} on hold</div>
+    <div class="hint">Fulfillment is held in Shopify. The order leaves the pick list until the hold is released.</div>
+    <fieldset class="om-hold-reasons"><legend class="om-label">Reason</legend>
+      ${HOLD_REASONS.map(([value, label], i) => `<label class="om-hold-reason"><input type="radio" name="om-hold-reason" value="${value}" ${i === 0 ? 'checked' : ''}> ${label}</label>`).join('')}
+    </fieldset>
+    <div class="field"><label for="om-hold-notes">Note <span class="hint">(optional)</span></label>
+      <input id="om-hold-notes" maxlength="255" autocomplete="off" placeholder="Shown on the hold in Shopify"></div>
+    <div class="error-note" id="om-hold-error" hidden></div>
+    <div class="om-hold-actions">
+      <button type="button" class="btn btn-text btn-small" id="om-hold-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary btn-small" id="om-hold-save">Put on hold</button>
+    </div>`;
+  panel.hidden = false;
+  button.setAttribute('aria-expanded', 'true');
+  panel.querySelector('input[type=radio]:checked').focus();
+  document.getElementById('om-hold-cancel').addEventListener('click', closeHoldPanel);
+  document.getElementById('om-hold-save').addEventListener('click', () => holdOrder(key));
+  // The window's shortcuts stay out of the panel; Esc closes only the panel, Enter puts on hold.
+  panel.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') closeHoldPanel();
+    else if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+      e.preventDefault();
+      holdOrder(key);
+    }
+  });
+}
+
+function closeHoldPanel() {
+  const panel = document.getElementById('om-hold-panel');
+  if (!panel || panel.hidden) return;
+  panel.hidden = true;
+  const button = document.getElementById('om-hold');
+  button.setAttribute('aria-expanded', 'false');
+  button.focus();
+}
+
+async function holdOrder(key) {
+  const save = document.getElementById('om-hold-save');
+  if (!save || save.disabled) return;
+  const o = orders.find((x) => orderKey(x) === key);
+  const reason = document.querySelector('input[name="om-hold-reason"]:checked').value;
+  const notes = document.getElementById('om-hold-notes').value.trim();
+  const error = document.getElementById('om-hold-error');
+  save.disabled = true;
+  save.textContent = 'Putting on hold…';
+  error.hidden = true;
+  let res;
+  try {
+    res = await api('/api/picklists/orders/hold', { method: 'POST', body: { store_id: o.store_id, order_id: o.id, reason, notes } });
+  } catch (err) {
+    if (!save.isConnected) {
+      snackbar(err.message, 'error');
+      return;
+    }
+    error.textContent = err.message;
+    error.hidden = false;
+    save.disabled = false;
+    save.textContent = 'Put on hold';
+    return;
+  }
+  const before = listedOrders();
+  const idx = Math.max(before.findIndex((x) => orderKey(x) === key), 0);
+  orders = orders.filter((x) => orderKey(x) !== key);
+  orderDetails.delete(key);
+  checked.delete(key);
+  render();
+  undoSnackbar(`${o.name} is on hold in Shopify`, () => releaseHold(o, res.holds));
+  if (modalOrderKey !== key) return;
+  const after = listedOrders();
+  if (!after.length) closeModal();
+  else showOrder(orderKey(after[Math.min(idx, after.length - 1)]));
+}
+
+async function releaseHold(o, holds) {
+  try {
+    await api('/api/picklists/orders/hold/release', { method: 'POST', body: { store_id: o.store_id, order_id: o.id, holds } });
+  } catch (err) {
+    snackbar(`${o.name} is still on hold: ${err.message}`, 'error');
+    return;
+  }
+  if (!orders.some((x) => orderKey(x) === orderKey(o))) orders.push(o);
+  render();
+  snackbar(`${o.name} is off hold and back in the list`);
 }
 
 /* ---------- Tag fields in the order window ----------
@@ -1617,6 +1735,213 @@ function applyOrderUpdate(updated) {
     snackbar(`${updated.name} no longer fits the view and filters in use — it leaves this list when you move on`);
   }
 }
+
+/* ---------- Bulk tags ----------
+   Shopify's bulk "Add tags": pick or type tags, then they are added to every
+   selected order (tags an order already has stay as they are). The orders
+   come back with the rules they now match, so the list re-sorts them into
+   or out of the view straight away. */
+const BULK_SUGGESTIONS = 14;
+
+function selectedOrders() {
+  return listedOrders().filter((o) => checked.has(orderKey(o)));
+}
+
+/* The selected orders' stores' tags, most used first, store by store. */
+async function bulkTagSuggestions(targets) {
+  const storeIds = [...new Set(targets.map((o) => o.store_id))];
+  const lists = await Promise.all(storeIds.map((id) => loadShopTags(id, 'order').catch(() => [])));
+  const seen = new Set();
+  return lists.flat().filter((t) => !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()));
+}
+
+function openBulkTags() {
+  const targets = selectedOrders();
+  if (!targets.length) return;
+  const pending = [];
+  let all = [];
+  let options = [];
+  let active = 0;
+  const count = plural(targets.length, 'order');
+  openModal(`<h3>Add tags to ${count}</h3>
+    <div class="tagbox bt-box" data-kind="order">
+      <div class="tagbox-field">
+        <input class="tagbox-input" id="bt-input" placeholder="Find or create tags" autocomplete="off" spellcheck="false"
+          aria-label="Tags to add" aria-autocomplete="list">
+      </div>
+      <ul class="tagbox-menu" role="listbox" hidden></ul>
+    </div>
+    <div class="hint bt-note">Tags the orders already have stay as they are. Separate tags with a comma.</div>
+    <div class="bt-suggest" id="bt-suggest"><span class="hint">Loading the store's tags…</span></div>
+    <div class="error-note" id="bt-error" hidden></div>
+    <div class="actions">
+      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="bt-save" disabled>Add tags</button>
+    </div>`, 'bulktag');
+  const box = document.querySelector('#modal .bt-box');
+  const input = document.getElementById('bt-input');
+  const menu = box.querySelector('.tagbox-menu');
+  const save = document.getElementById('bt-save');
+  const have = () => new Set(pending.map((t) => t.toLowerCase()));
+
+  function draw() {
+    box.querySelectorAll('.tagbox-chip').forEach((c) => c.remove());
+    input.insertAdjacentHTML('beforebegin', pending.map((t) => tagChipHtml(t)).join(''));
+    const taken = have();
+    const shown = all.slice(0, BULK_SUGGESTIONS);
+    document.getElementById('bt-suggest').innerHTML = shown.length
+      ? `<span class="om-label">Frequently used</span><div class="bt-chips">${shown.map((t) => `<button type="button"
+          class="bt-chip${taken.has(t.toLowerCase()) ? ' on' : ''}" data-tag="${attr(t)}" aria-pressed="${taken.has(t.toLowerCase())}">${esc(t)}</button>`).join('')}</div>`
+      : '';
+    save.disabled = !pending.length;
+    save.textContent = pending.length ? `Add ${plural(pending.length, 'tag')} to ${count}` : 'Add tags';
+  }
+
+  function closeMenu() {
+    menu.hidden = true;
+    options = [];
+  }
+
+  function openMenu() {
+    const typed = input.value.trim();
+    options = typed ? tagOptions(all, have(), typed) : [];
+    active = 0;
+    if (!options.length) {
+      closeMenu();
+      return;
+    }
+    menu.innerHTML = options.map((opt, i) => `<li class="tagbox-opt${i === active ? ' active' : ''}" role="option" data-i="${i}">
+      ${opt.isNew ? `<span class="hint">Add</span> “${esc(opt.tag)}”` : highlightTag(opt.tag, typed)}</li>`).join('');
+    menu.hidden = false;
+  }
+
+  function add(raw) {
+    const taken = have();
+    raw.split(',').map((t) => t.trim()).filter(Boolean).forEach((t) => {
+      if (!taken.has(t.toLowerCase())) {
+        pending.push(t);
+        taken.add(t.toLowerCase());
+      }
+    });
+    input.value = '';
+    closeMenu();
+    draw();
+  }
+
+  function drop(tag) {
+    const i = pending.findIndex((t) => t.toLowerCase() === tag.toLowerCase());
+    if (i >= 0) pending.splice(i, 1);
+    draw();
+  }
+
+  input.addEventListener('input', () => {
+    if (input.value.includes(',')) add(input.value);
+    else openMenu();
+  });
+  input.addEventListener('blur', closeMenu);
+  input.addEventListener('keydown', (e) => {
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && options.length) {
+      e.preventDefault();
+      active = (active + (e.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+      menu.querySelectorAll('.tagbox-opt').forEach((li, i) => li.classList.toggle('active', i === active));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!menu.hidden && options[active]) add(options[active].tag);
+      else if (input.value.trim()) add(input.value);
+      else if (pending.length) saveBulkTags(targets, pending);
+    } else if (e.key === 'Backspace' && !input.value && pending.length) {
+      drop(pending[pending.length - 1]);
+    } else if (e.key === 'Escape') {
+      e.stopPropagation();
+      if (!menu.hidden) closeMenu();
+      else closeModal();
+    }
+  });
+  menu.addEventListener('mousedown', (e) => {
+    const li = e.target.closest('.tagbox-opt');
+    e.preventDefault();
+    if (li) add(options[Number(li.dataset.i)].tag);
+  });
+  box.querySelector('.tagbox-field').addEventListener('click', (e) => {
+    const x = e.target.closest('.tagbox-x');
+    if (x) drop(x.closest('.tagbox-chip').dataset.tag);
+    input.focus();
+  });
+  document.getElementById('bt-suggest').addEventListener('click', (e) => {
+    const chip = e.target.closest('.bt-chip');
+    if (!chip) return;
+    if (have().has(chip.dataset.tag.toLowerCase())) drop(chip.dataset.tag);
+    else add(chip.dataset.tag);
+    input.focus();
+  });
+  save.addEventListener('click', () => saveBulkTags(targets, pending));
+  input.focus();
+  bulkTagSuggestions(targets).then((tags) => {
+    all = tags;
+    if (input.isConnected) draw();
+  });
+}
+
+const sameTag = (a) => (b) => a.toLowerCase() === b.toLowerCase();
+
+async function saveBulkTags(targets, tags) {
+  const save = document.getElementById('bt-save');
+  const error = document.getElementById('bt-error');
+  if (save.disabled) return;
+  save.disabled = true;
+  save.textContent = 'Adding tags…';
+  error.hidden = true;
+  let res;
+  try {
+    res = await api('/api/picklists/orders/tags/bulk', {
+      method: 'POST', body: { orders: targets.map((o) => ({ store_id: o.store_id, order_id: o.id })), add: tags },
+    });
+  } catch (err) {
+    error.textContent = err.message;
+    error.hidden = false;
+    save.disabled = false;
+    save.textContent = 'Try again';
+    return;
+  }
+  const failed = new Set(res.failed.map((f) => `${f.store_id}|${f.order_id}`));
+  const back = new Map(res.orders.map((o) => [orderKey(o), o]));
+  const gone = [];
+  orders = orders.flatMap((o) => {
+    const key = orderKey(o);
+    if (!targets.some((t) => orderKey(t) === key) || failed.has(key)) return [o];
+    const updated = back.get(key);
+    orderDetails.delete(key); // the window reads the tags afresh
+    if (!updated) return [{ ...o, tags: [...o.tags, ...res.tags.filter((t) => !o.tags.some(sameTag(t)))] }];
+    if (updated.ineligible_reason) {
+      gone.push(o.name);
+      return [];
+    }
+    return [{ ...o, ...updated }];
+  });
+  res.tags.forEach((t) => [...new Set(targets.map((o) => o.store_id))].forEach((id) => rememberShopTag(id, 'order', t)));
+  render();
+  const done = targets.length - res.failed.length;
+  const stillListed = new Set(listedOrders().map(orderKey));
+  const leftView = targets.filter((o) => !failed.has(orderKey(o)) && !gone.includes(o.name) && !stillListed.has(orderKey(o))).length;
+  const note = [
+    gone.length ? `${gone.length} can no longer be picked` : '',
+    leftView ? `${leftView} no longer fit the view and filters` : '',
+  ].filter(Boolean).join(' · ');
+  const tagText = res.tags.length === 1 ? `“${res.tags[0]}”` : plural(res.tags.length, 'tag');
+  if (!res.failed.length) {
+    closeModal();
+    snackbar(`Added ${tagText} to ${plural(done, 'order')}${note ? ` · ${note}` : ''}`);
+    return;
+  }
+  const name = (f) => (targets.find((o) => o.store_id === f.store_id && o.id === f.order_id) || {}).name || f.order_id;
+  document.getElementById('modal').innerHTML = `<h3>${done ? `Added ${esc(tagText)} to ${plural(done, 'order')}` : 'No orders were tagged'}</h3>
+    ${note ? `<p class="hint">${esc(note)}</p>` : ''}
+    <div class="error-note">${plural(res.failed.length, 'order')} could not be tagged:</div>
+    <ul class="bt-failed">${res.failed.map((f) => `<li><strong>${esc(name(f))}</strong> — ${esc(f.error)}</li>`).join('')}</ul>
+    <div class="actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>`;
+}
+
+document.getElementById('pl-bulk-tag').addEventListener('click', openBulkTags);
 
 /* ---------- Generate ---------- */
 document.getElementById('pl-generate').addEventListener('click', openGenerate);
