@@ -6,6 +6,7 @@ from werkzeug.security import generate_password_hash
 
 import config
 import db
+import dbadmin
 import picklist_rules
 import profit
 import providers
@@ -47,6 +48,13 @@ BASE_SETTING_KEYS = [
     "shipper_db",
     "shipper_user",
     "shipper_password",
+    "dbadmin_host",
+    "dbadmin_port",
+    "dbadmin_db",
+    "dbadmin_user",
+    "dbadmin_password",
+    "verify_skip_prefixes_shopify",
+    "verify_skip_prefixes_backoffice",
     "picklist_backoffice_db_id",
     "picklist_quote_status",
     "picklist_title_prefix",
@@ -56,7 +64,7 @@ BASE_SETTING_KEYS = [
     picklist_rules.PRESETS_KEY,
 ]
 
-BASE_SECRET_KEYS = {"shipper_password", profit.SETTING_PASSWORD}
+BASE_SECRET_KEYS = {"shipper_password", "dbadmin_password", profit.SETTING_PASSWORD}
 
 
 def _provider_setting_keys():
@@ -197,6 +205,8 @@ def put_settings():
         if value != (db.get_setting(key) or ""):
             changed.append(key)
         db.set_setting(key, value)
+    if any(key.startswith("dbadmin_") for key in changed):
+        dbadmin.forget_sources()
     audit("settings.update", {"keys": changed})
     return jsonify({"ok": True})
 
@@ -446,6 +456,33 @@ def test_shipper():
     except Exception as e:
         return api_error(f"Connection failed: {e}")
     return jsonify({"ok": True})
+
+
+@bp.post("/settings/test/dbadmin")
+@admin_required
+def test_dbadmin():
+    data = request.get_json(silent=True) or {}
+
+    def val(field):
+        v = (data.get(field) or "").strip()
+        return v if v and v != MASK else (db.get_setting(dbadmin.SETTING_KEYS[field]) or "").strip()
+
+    cfg = {field: val(field) for field in dbadmin.SETTING_KEYS}
+    if not (cfg["host"] and cfg["db"] and cfg["user"]):
+        return api_error("Host, database and username are required")
+    try:
+        conn = dbadmin.connect_with(cfg, timeout=10)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM AdminDBs_admin")
+                databases = cur.fetchone()[0]
+                cur.execute("SELECT TOP 1 id FROM QuotationsStatus ORDER BY id DESC")
+                cur.fetchone()
+        finally:
+            conn.close()
+    except Exception as e:
+        return api_error(f"Connection failed: {e}")
+    return jsonify({"ok": True, "databases": databases})
 
 
 FALLBACK_CATEGORIES = [

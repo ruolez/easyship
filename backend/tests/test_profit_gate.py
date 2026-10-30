@@ -63,7 +63,8 @@ class BuyRouteTest(unittest.TestCase):
         self.audits = []
         db = shipments_api.db
         self._orig = (db.query, db.execute, db.get_setting, providers.enabled_for_user,
-                      shipments_api.threading, shipments_api.audit)
+                      shipments_api.threading, shipments_api.audit, shipments_api.verify_gate.check)
+        shipments_api.verify_gate.check = lambda shipment: {"verified": True}
         db.query = lambda sql, params=None, **kw: list(self.rows)
         db.execute = lambda sql, params=None, **kw: self.executed.append((sql, params))
         db.get_setting = lambda key, default=None: self.settings.get(key, default)
@@ -75,7 +76,7 @@ class BuyRouteTest(unittest.TestCase):
     def tearDown(self):
         db = shipments_api.db
         (db.query, db.execute, db.get_setting, providers.enabled_for_user,
-         shipments_api.threading, shipments_api.audit) = self._orig
+         shipments_api.threading, shipments_api.audit, shipments_api.verify_gate.check) = self._orig
 
     def _buy(self, **body):
         payload = {"provider": "fake", "courier_service_id": "svc-1", "rate": RATE}

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyShip — Verification history</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header id="appbar"></header>
+  <div class="container wide">
+    <div class="page-head"><h1>Verification history</h1><span class="sub" id="vh-sub">Every order scanned on the Verify page</span>
+      <a class="btn btn-primary btn-small" href="/verify.html" style="margin-left:auto">Verify an order</a></div>
+
+    <nav class="tabs" id="vh-tabs">
+      <button class="tab active" data-tab="history">Orders</button>
+      <button class="tab" data-tab="wrong" id="vh-wrong-tab" hidden>Wrong barcodes <span id="vh-wrong-count"></span></button>
+    </nav>
+
+    <section class="tab-panel active" data-panel="history">
+      <div class="card">
+        <div class="vh-filters">
+          <div class="field wide"><label>Order or customer</label><input id="vh-q" type="search" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label>Status</label><select id="vh-status">
+            <option value="">Any</option><option value="verified">Verified</option><option value="in_progress">In progress</option><option value="reset">Started over</option></select></div>
+          <div class="field"><label>Source</label><select id="vh-source">
+            <option value="">Any</option><option value="shopify">Shopify</option><option value="backoffice">BackOffice</option></select></div>
+          <div class="field" id="vh-user-field" hidden><label>User</label><select id="vh-user"><option value="">Anyone</option></select></div>
+          <div class="field"><label>From</label><input id="vh-from" type="date"></div>
+          <div class="field"><label>To</label><input id="vh-to" type="date"></div>
+          <label class="svc-item" style="align-self:center"><input type="checkbox" id="vh-forced"> Marked without scanning</label>
+        </div>
+        <div class="table-wrap flush">
+          <table class="striped compact">
+            <thead><tr>
+              <th>Order</th><th>Source</th><th>Customer</th><th>Status</th><th class="num">Units</th>
+              <th class="num">Wrong scans</th><th>Verified by</th><th>Verified (CT)</th><th>Started</th><th>Writeback</th>
+            </tr></thead>
+            <tbody id="vh-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="vh-empty" style="display:none"></div>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="wrong">
+      <div class="card">
+        <h2>Barcodes not on the order
+          <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center">
+            <label class="svc-item"><input type="checkbox" id="vw-show-fixed"> Show fixed</label>
+            <button class="btn btn-primary btn-small" id="vw-fix" disabled>Mark fixed</button>
+          </span>
+        </h2>
+        <p class="hint mb-16">A packer scanned these and they matched nothing on the order — often a product whose barcode in Shopify or BackOffice differs from the one on the shelf. Fix the product, then mark the row fixed.</p>
+        <div class="table-wrap flush">
+          <table class="striped compact">
+            <thead><tr>
+              <th style="width:34px"><input type="checkbox" id="vw-all" title="Select all"></th>
+              <th>Scanned barcode</th><th>Order</th><th>Source</th><th>Packer</th><th>When</th><th>Fixed</th>
+            </tr></thead>
+            <tbody id="vw-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="vw-empty" style="display:none"></div>
+      </div>
+    </section>
+  </div>
+  <div class="modal-backdrop" id="modal-backdrop"><div class="modal wide" id="modal"></div></div>
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/verifications.js"></script>
+</body>
+</html>

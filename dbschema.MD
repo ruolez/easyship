@@ -687,4 +687,32 @@ CREATE TABLE [dbo].[Quotations_tbl](
 	[barcode] [varchar](max) NULL,
 	[cdate] [datetime2](7) NULL,
 	[mdate] [datetime2](7) NULL
-***ShihpperPlatform TABLES END
+***ShihpperPlatform TABLES END ***
+
+*** DB Admin ***
+[dbo].[AdminDBs_admin](
+	[id] [int] IDENTITY(1,1) NOT NULL,
+	[TypeDB] [varchar](255) NULL,
+	[Username] [varchar](255) NULL,
+	[Password] [varchar](255) NULL,
+	[ipAddress] [varchar](255) NULL,
+	[ShareName] [varchar](255) NULL,
+	[Port] [varchar](255) NULL,
+	[NameDB] [varchar](255) NULL,
+	[Nick] [varchar](255) NULL,
+	[dop1] [varchar](255) NULL,
+	[dop2] [varchar](255) NULL,
+	[dop3] [varchar](255) NULL,
+	[dop4] [varchar](255) NULL,
+	[interval_1] [varchar](255) NULL,
+	[interval_2] [varchar](255) NULL,
+	[interval_3] [varchar](255) NULL,
+	[interval_4] [varchar](255) NULL,
+	[time_1] [varchar](255) NULL,
+	[time_2] [varchar](255) NULL,
+	[time_3] [varchar](255) NULL,
+	[time_4] [varchar](255) NULL,
+	[activated_shed] [bit] NULL,
+	[activated_shed_1] [bit] NULL,
+	[activated_dop] [bit] NULL,
+	[activated_dop_1] [bit] NULL,

@@ -28,8 +28,8 @@ class UserSectionsTest(unittest.TestCase):
     def test_access_per_role_and_grant(self):
         self.assertEqual(
             [self.run_case("admin", None), self.run_case("user", None), self.run_case("user", []),
-             self.run_case("user", ["picklists", "bogus"])],
-            [["picklists"], [], [], ["picklists"]])
+             self.run_case("user", ["verify_override", "picklists", "bogus"])],
+            [["picklists", "verify", "verify_override"], [], [], ["picklists", "verify_override"]])
 
 
 class SetUserSectionsRouteTest(unittest.TestCase):

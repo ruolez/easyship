@@ -48,6 +48,7 @@ Default login: **admin** / value of `ADMIN_INITIAL_PASSWORD` in `.env` (change i
 4. **Shopify stores** — one row per store: name, `*.myshopify.com` domain, Admin API access token from a custom app with scopes:
    - `read_orders`, `read_customers`, `read_products`, `read_inventory`
    - `read_merchant_managed_fulfillment_orders`, `write_merchant_managed_fulfillment_orders`
+   - `write_orders` — order tags (pick list tags, the Verify page's `Checked` tag)
 5. **Users** — create logins for warehouse staff. Every label records who bought it.
 6. **Shopify order tag rules** (Shipping tab, optional) — map an order tag to a preferred courier service and/or a signature requirement (signature / adult 21+). Tagged orders show the tags, the order note and the matched rule on the Ship page; the preferred rate is pre-selected and the signature requirement is sent to the provider (Easyship `delivery_confirmation`, Shippo `signature_confirmation`, EasyPost `delivery_confirmation`). Packers can override both before buying. Easyship only enables signature options for some accounts — if it rejects the option, rating falls back without it and the packer is warned.
 
@@ -64,6 +65,32 @@ Default login: **admin** / value of `ADMIN_INITIAL_PASSWORD` in `.env` (change i
 ### Auto Mode (scan → weigh → rate → buy → print, no clicks)
 
 On the Scan page tick **Auto Mode** and choose a Carrier, Service and Box for this station (stored in the browser, per shipping provider). From then on a scanned order opens the Ship page with the preset box, waits for a stable weight from the USB scale (or a typed weight + Enter), rates, buys the preset service — a Shopify tag rule's preferred service and signature requirement take precedence — and prints. Anything uncertain (preset service not offered, multi-box invoice, missing address, rate/buy errors) drops back to the normal manual form with a message; **Esc** or *Switch to manual* cancels any time before the label is bought. For truly click-free printing use the *Network thermal printer* or *Zebra Browser Print* print mode — the browser print dialog still needs one click.
+
+### Verify (scan every product before shipping)
+
+The **Verify** page (`/verify.html`, users with the *Verify* section) is built for Android scanner phones. The packer scans the order barcode, then every product. Good scans beep and flash green. A wrong product, a product that is already complete, or a case bigger than what is left turns the screen red, and it stays red until the packer taps **OK**. Lines can be counted three ways: scan every unit; scan one, then **Type count**; or scan one, then **Check all**. Lines without a barcode are confirmed with a tap. Every scan is saved at once and retried on network trouble; a failure stays on screen with **Copy** and **Retry**.
+
+- **Which order a scan opens:** a Shopify store's order-number prefix opens that store's order. Any other number is looked up in DB_Admin `QuotationsStatus`: `SourceDB` names the BackOffice database (its connection comes from `AdminDBs_admin` › `Nick`), and `Dop1` is the QuotationID. BackOffice orders are verified as quotations, before they are invoiced.
+- **When an order is verified:**
+  - Shopify orders get the tag `Checked`. This needs `write_orders` on the store token.
+  - BackOffice quotations get the EasyShip username in `QuotationsStatus.Checker`.
+  - The time and every scan stay in EasyShip, under **History** (`/verifications.html`).
+- **Buying a label:** refused unless the order is verified in EasyShip or checked in the old Shipper app. If the order changed after it was verified (more units, new lines), the new items count as unverified again. Users with the **Verify override** section can buy anyway (logged), and can mark lines or whole orders verified without scanning (logged).
+- **Settings › Verify:**
+  - DB_Admin connection.
+  - Product-name prefixes that are never scanned, per source (e.g. `Shipping`, `Shipping Protection`).
+  - Case barcodes: one scan counts N units. *Import from Shipper* copies the old app's `case_barcodes`.
+- **History › Wrong barcodes** (admins / Verify override): scans that matched nothing on the order. These are usually a product whose barcode in Shopify or BackOffice differs from the shelf.
+
+**Scanner phone setup (once per device):** open `https://<server-ip>:<https-port>/verify.html` in Chrome and accept the self-signed certificate. The scanner must type the code as keystrokes and press Enter after it. Settings by brand:
+
+| Brand | Setting |
+|---|---|
+| Zebra | DataWedge: a profile for Chrome › Keystroke output on › *Send characters as events* on, Enter suffix |
+| Honeywell | Scan settings › Data processing › Wedge method *Keyboard*, suffix Enter |
+| Urovo / Chainway / Newland and others | Output mode *Keyboard / Keystroke* (not Broadcast / Intent), suffix Enter |
+
+Also turn on *convert UPC-E to UPC-A* if the scanner offers it. Optionally turn off the scanner's own beep so the app's error sound stands out. Matching ignores leading zeros, so UPC-A and EAN-13 forms of the same code match. The **Camera** button only appears where Chrome can read barcodes itself (Android); with the self-signed certificate it works after the warning has been accepted.
 
 ### Zebra Browser Print (silent label printing)
 

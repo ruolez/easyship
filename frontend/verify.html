@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <title>EasyShip — Verify</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="verify-page">
+  <header id="appbar"></header>
+
+  <main class="vf">
+    <!-- Start: waiting for an order barcode -->
+    <section class="vf-start" id="vf-start">
+      <div class="vf-start-card">
+        <span class="vf-start-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 7v10"/><path d="M12 7v10"/><path d="M16 7v10"/></svg></span>
+        <h1>Verify an order</h1>
+        <p class="vf-start-sub">Scan the barcode on the packing slip or the quotation</p>
+        <div class="vf-start-status" id="vf-start-status" aria-live="polite"></div>
+        <div class="vf-start-actions">
+          <button class="btn btn-outlined vf-big" id="vf-type-order">Type the number</button>
+          <button class="btn btn-outlined vf-big" id="vf-camera-order" hidden>Use the camera</button>
+        </div>
+      </div>
+      <div class="vf-today" id="vf-today"></div>
+      <div class="vf-start-links"><a href="/verifications.html">History</a><button class="vf-link" id="vf-sound-toggle"></button></div>
+    </section>
+
+    <!-- An order being verified -->
+    <section class="vf-order" id="vf-order" hidden>
+      <div class="vf-head">
+        <button class="vf-icon-btn" id="vf-close" aria-label="Close order" title="Close order">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+        <div class="vf-head-text">
+          <div class="vf-order-name" id="vf-order-name"></div>
+          <div class="vf-order-sub" id="vf-order-sub"></div>
+        </div>
+        <button class="vf-icon-btn" id="vf-menu" aria-label="More" title="More">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>
+        </button>
+      </div>
+      <div class="vf-progress">
+        <div class="vf-count"><b id="vf-units-done">0</b><span id="vf-units-total"> / 0 units</span></div>
+        <div class="vf-lines-count" id="vf-lines-count"></div>
+        <div class="vf-bar"><span id="vf-bar"></span></div>
+      </div>
+      <div class="vf-banner" id="vf-banner" hidden></div>
+      <div class="vf-last" id="vf-last" hidden></div>
+      <ul class="vf-lines" id="vf-lines"></ul>
+      <div class="vf-actions">
+        <button class="vf-action" id="vf-undo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg><span>Undo</span></button>
+        <button class="vf-action" id="vf-type"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span>Type code</span></button>
+        <button class="vf-action" id="vf-camera" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/></svg><span>Camera</span></button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Feedback layers -->
+  <div class="vf-flash" id="vf-flash" aria-hidden="true"></div>
+  <div class="vf-alert" id="vf-alert" role="alertdialog" aria-modal="true" hidden></div>
+  <div class="vf-done" id="vf-done" role="dialog" aria-modal="true" hidden></div>
+  <div class="vf-sheet-backdrop" id="vf-sheet-backdrop" hidden><div class="vf-sheet" id="vf-sheet" role="dialog" aria-modal="true"></div></div>
+  <div class="vf-camera" id="vf-camera-view" hidden>
+    <video id="vf-video" playsinline muted></video>
+    <div class="vf-camera-frame" aria-hidden="true"></div>
+    <div class="vf-camera-bar">
+      <button class="vf-icon-btn light" id="vf-camera-close" aria-label="Close camera"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      <span class="vf-camera-hint" id="vf-camera-hint">Point at a barcode</span>
+      <button class="vf-icon-btn light" id="vf-torch" aria-label="Flashlight" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6c0 2-2 2-2 4v10a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V10c0-2-2-2-2-4V2h12z"/><path d="M6 6h12"/><path d="M12 12v.01"/></svg></button>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/feedback.js"></script>
+  <script src="/js/scanner.js"></script>
+  <script src="/js/camera-scan.js"></script>
+  <script src="/js/verify.js"></script>
+</body>
+</html>

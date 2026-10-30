@@ -8,6 +8,8 @@ const BASE_SETTING_IDS = [
   'label_timeout_seconds', 'countdown_seconds', 'order_tag_rules',
   'profit_min_amount', 'profit_min_margin_pct', 'profit_bypass_password',
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
+  'dbadmin_host', 'dbadmin_port', 'dbadmin_db', 'dbadmin_user', 'dbadmin_password',
+  'verify_skip_prefixes_shopify', 'verify_skip_prefixes_backoffice',
   'picklist_backoffice_db_id', 'picklist_quote_status', 'picklist_title_prefix',
   'picklist_number_tag', 'picklist_hidden_tags', 'picklist_rules', 'picklist_presets',
 ];
@@ -30,12 +32,13 @@ initNav('settings').then(async () => {
   await loadStores();
   await loadDbs();
   await loadBoxes();
+  await loadCaseBarcodes();
   await loadUsers();
   await loadAudit();
 });
 
 /* ---------- Tabs ---------- */
-const ADMIN_TABS = ['providers', 'shipping', 'printing', 'boxes', 'integrations', 'picklists', 'users', 'audit'];
+const ADMIN_TABS = ['providers', 'shipping', 'printing', 'boxes', 'integrations', 'picklists', 'verify', 'users', 'audit'];
 
 function initTabs(isAdmin) {
   const buttons = [...document.querySelectorAll('#settings-tabs .tab')];
@@ -1935,6 +1938,92 @@ document.getElementById('test-shipper').addEventListener('click', () => {
   }));
 });
 
+document.getElementById('test-dbadmin').addEventListener('click', () => {
+  testResult('dbadmin-test-result', api('/api/settings/test/dbadmin', {
+    method: 'POST',
+    body: {
+      host: document.getElementById('dbadmin_host').value,
+      port: document.getElementById('dbadmin_port').value,
+      db: document.getElementById('dbadmin_db').value,
+      user: document.getElementById('dbadmin_user').value,
+      password: document.getElementById('dbadmin_password').value,
+    },
+  }).then((r) => ({ ...r, account: `${r.databases} BackOffice database${r.databases === 1 ? '' : 's'}` })));
+});
+
+/* ---------- Case barcodes (Verify) ---------- */
+let caseBarcodes = [];
+
+async function loadCaseBarcodes() {
+  caseBarcodes = await api('/api/verify/case-barcodes');
+  renderCaseBarcodes();
+}
+
+function renderCaseBarcodes() {
+  const q = document.getElementById('cases-search').value.trim().toLowerCase();
+  const rows = caseBarcodes.filter((c) => !q || c.barcode.toLowerCase().includes(q) || c.unit_barcode.toLowerCase().includes(q));
+  document.getElementById('cases-count').textContent = caseBarcodes.length
+    ? `${caseBarcodes.length} case barcode${caseBarcodes.length === 1 ? '' : 's'} — one scan counts all the units in the case`
+    : 'One scan of a case barcode counts all the units in the case';
+  const trash = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+  document.getElementById('cases-body').innerHTML = rows.length
+    ? rows.map((c) => `<tr>
+        <td class="mono">${esc(c.barcode)}</td>
+        <td class="mono">${esc(c.unit_barcode)}</td>
+        <td class="num">${c.quantity}</td>
+        <td class="text-secondary">${esc(new Date(c.created_at).toLocaleDateString())}${c.created_by_name ? ` · ${esc(c.created_by_name)}` : ''}</td>
+        <td class="num"><button class="us-icon us-deact" onclick="deleteCaseBarcode(${c.id})" title="Delete" aria-label="Delete case barcode ${esc(c.barcode)}">${trash}</button></td>
+      </tr>`).join('')
+    : `<tr><td colspan="5" class="text-secondary">${caseBarcodes.length ? 'No case barcode matches.' : 'No case barcodes yet. Add one above or import them from Shipper.'}</td></tr>`;
+}
+
+document.getElementById('cases-search').addEventListener('input', renderCaseBarcodes);
+
+document.getElementById('add-case').addEventListener('click', async () => {
+  try {
+    await api('/api/verify/case-barcodes', {
+      method: 'POST',
+      body: {
+        barcode: document.getElementById('case-barcode').value,
+        unit_barcode: document.getElementById('case-unit-barcode').value,
+        quantity: document.getElementById('case-quantity').value,
+      },
+    });
+    ['case-barcode', 'case-unit-barcode', 'case-quantity'].forEach((id) => { document.getElementById(id).value = ''; });
+    snackbar('Case barcode added', 'success');
+    document.getElementById('case-barcode').focus();
+    loadCaseBarcodes();
+  } catch (err) {
+    snackbar(err.message, 'error');
+  }
+});
+
+window.deleteCaseBarcode = async (id) => {
+  const c = caseBarcodes.find((x) => x.id === id);
+  if (!c) return;
+  try {
+    await api(`/api/verify/case-barcodes/${id}`, { method: 'DELETE' });
+    snackbar(`Deleted case barcode ${c.barcode}`, 'success');
+    loadCaseBarcodes();
+  } catch (err) {
+    snackbar(err.message, 'error');
+  }
+};
+
+document.getElementById('import-cases').addEventListener('click', async () => {
+  const btn = document.getElementById('import-cases');
+  btn.disabled = true;
+  try {
+    const res = await api('/api/verify/case-barcodes/import', { method: 'POST' });
+    snackbar(`Imported ${res.added} case barcode${res.added === 1 ? '' : 's'}${res.skipped ? ` — ${res.skipped} already here or incomplete` : ''}`, 'success');
+    loadCaseBarcodes();
+  } catch (err) {
+    snackbar(err.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById('test-browserprint').addEventListener('click', () => {
   testResult('browserprint-test-result',
     ZebraPrint.test().then(() => ({ account: 'test label sent' })));
@@ -2186,7 +2275,7 @@ function providerNamesToLabels(names) {
 }
 
 /* Sections an admin grants per user; admins always have every one. */
-const SECTIONS = [['picklists', 'Pick lists']];
+const SECTIONS = [['picklists', 'Pick lists'], ['verify', 'Verify'], ['verify_override', 'Verify override']];
 
 function sectionsCell(u) {
   if (u.role === 'admin') return '<span class="us-chip all">All sections</span>';

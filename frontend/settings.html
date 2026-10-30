@@ -23,6 +23,7 @@
       <button class="tab" data-tab="boxes">Boxes</button>
       <button class="tab" data-tab="integrations">Integrations</button>
       <button class="tab" data-tab="picklists">Pick lists</button>
+      <button class="tab" data-tab="verify">Verify</button>
       <button class="tab" data-tab="users">Users</button>
       <button class="tab" data-tab="audit">Audit</button>
       <button class="tab" data-tab="account">My account</button>
@@ -306,6 +307,57 @@
           <div class="field"><label>Password</label><input type="password" id="shipper_password" autocomplete="off"></div>
           <div class="fixed"><button class="btn btn-outlined" id="test-shipper">Test connection</button></div>
           <div class="fixed" id="shipper-test-result"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= Verify ================= -->
+    <section class="tab-panel" data-panel="verify">
+      <div class="card" id="card-dbadmin">
+        <h2>DB_Admin database</h2>
+        <p class="hint mb-16">Tells the Verify page which BackOffice database a scanned quotation number belongs to (QuotationsStatus › SourceDB, connection from AdminDBs_admin). A verified quotation gets the EasyShip username in QuotationsStatus › Checker.</p>
+        <div class="row mb-16">
+          <div class="field"><label>Host</label><input id="dbadmin_host"></div>
+          <div class="field fixed" style="min-width:100px"><label>Port</label><input id="dbadmin_port" placeholder="1433"></div>
+          <div class="field"><label>Database</label><input id="dbadmin_db" placeholder="DB_Admin"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Username</label><input id="dbadmin_user"></div>
+          <div class="field"><label>Password</label><input type="password" id="dbadmin_password" autocomplete="off"></div>
+          <div class="fixed"><button class="btn btn-outlined" id="test-dbadmin">Test connection</button></div>
+          <div class="fixed" id="dbadmin-test-result"></div>
+        </div>
+      </div>
+
+      <div class="card" id="card-verify-skip">
+        <h2>Items that are never scanned</h2>
+        <p class="hint mb-16">Order lines whose product name starts with one of these (any case) are shown as skipped and never need verifying. One per line. Shopify lines that need no shipping are always skipped.</p>
+        <div class="row">
+          <div class="field"><label>Shopify</label><textarea id="verify_skip_prefixes_shopify" rows="4" spellcheck="false" placeholder="Shipping Protection"></textarea></div>
+          <div class="field"><label>BackOffice</label><textarea id="verify_skip_prefixes_backoffice" rows="4" spellcheck="false" placeholder="Shipping"></textarea></div>
+        </div>
+      </div>
+
+      <div class="card" id="card-case-barcodes">
+        <div class="us-head">
+          <div>
+            <h2>Case barcodes</h2>
+            <div class="hint" id="cases-count">One scan of a case barcode counts all the units in the case</div>
+          </div>
+          <button class="btn btn-outlined" id="import-cases" title="Copy the case barcodes from the old Shipper app (Shipper verification database in Integrations)">Import from Shipper</button>
+        </div>
+        <div class="row mb-16">
+          <div class="field"><label>Case barcode</label><input id="case-barcode" spellcheck="false" autocomplete="off"></div>
+          <div class="field"><label>Product barcode</label><input id="case-unit-barcode" spellcheck="false" autocomplete="off"></div>
+          <div class="field fixed" style="min-width:110px"><label>Units per case</label><input id="case-quantity" type="number" min="2" step="1"></div>
+          <div class="fixed"><button class="btn btn-primary" id="add-case">Add</button></div>
+        </div>
+        <div class="field mb-16"><input id="cases-search" type="search" placeholder="Search barcodes…" spellcheck="false" autocomplete="off"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Case barcode</th><th>Product barcode</th><th class="num">Units</th><th>Added</th><th></th></tr></thead>
+            <tbody id="cases-body"></tbody>
+          </table>
         </div>
       </div>
     </section>

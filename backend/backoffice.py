@@ -111,6 +111,40 @@ def find_invoice_id_by_number(db_id, number):
     return row[0] if row else None
 
 
+def quotation_number_for_invoice(db_id, invoice_number):
+    """The quotation an invoice was made from (Quotations_tbl.AutoOrderNo
+    holds the invoice number once it is invoiced), or None."""
+    conn = _connect(db_id)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT TOP 1 LTRIM(RTRIM(QuotationNumber)) FROM Quotations_tbl
+                   WHERE LTRIM(RTRIM(AutoOrderNo)) = %s
+                   ORDER BY QuotationID DESC""",
+                ((invoice_number or "").strip(),),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    return row[0] if row and row[0] else None
+
+
+def invoice_verify_lines(db_id, invoice_id):
+    """The invoice's lines with their barcodes, for the verification gate."""
+    conn = _connect(db_id)
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            cur.execute(
+                """SELECT ProductUPC, ProductSKU, ProductDescription, QtyShipped, QtyOrdered
+                   FROM InvoicesDetails_tbl
+                   WHERE InvoiceID = %s AND (Void IS NULL OR Void = 0)""",
+                (invoice_id,),
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
 def _first_positive(*values):
     for v in values:
         if v is not None and float(v) > 0:

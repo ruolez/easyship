@@ -32,7 +32,7 @@ def admin_required(f):
 
 
 # Sections an admin grants per user (users.allowed_sections); admins have all.
-SECTIONS = {"picklists": "Pick lists"}
+SECTIONS = {"picklists": "Pick lists", "verify": "Verify", "verify_override": "Verify override"}
 
 
 def sanitize_sections(values):

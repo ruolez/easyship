@@ -164,6 +164,41 @@ function confirmReship(what, numbers, note) {
 
 /* The profit gate's prompt: the breakdown behind the block and the bypass
    password. Resolves the password, or null when the packer backs out. */
+/* Buy refused because the order is not verified. Users with Verify override
+   may buy anyway (recorded); everyone else can only go and verify it.
+   Resolves true to buy anyway. */
+function confirmVerifyOverride(data) {
+  return new Promise((resolve) => {
+    const backdrop = document.getElementById('modal-backdrop');
+    const check = data.verify || {};
+    const items = (check.unverified || []).map((i) =>
+      `<li>${esc(i.title || i.barcode || 'Item')} — ${i.qty_verified} of ${i.qty_required} verified</li>`).join('');
+    document.getElementById('modal').innerHTML = `
+      <h3>Order not verified</h3>
+      <p>${esc(check.message || data.error || '')}</p>
+      ${items ? `<ul class="profit-reasons">${items}</ul>` : ''}
+      <p class="text-secondary" style="margin-top:8px">${data.can_override
+        ? 'You have Verify override: buying anyway is recorded under your name.'
+        : 'Verify it on the <a href="/verify.html">Verify</a> page, or ask someone with Verify override.'}</p>
+      <div class="actions">
+        <button class="btn btn-text" id="m-cancel">${data.can_override ? 'Cancel' : 'Close'}</button>
+        ${data.can_override ? '<button class="btn btn-primary" id="m-override">Buy anyway</button>' : ''}
+      </div>`;
+    backdrop.classList.add('show');
+    const close = (value) => {
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.classList.remove('show');
+      resolve(value);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(false); } };
+    document.addEventListener('keydown', onKey, true);
+    document.getElementById('m-cancel').addEventListener('click', () => close(false));
+    if (data.can_override) document.getElementById('m-override').addEventListener('click', () => close(true));
+    // Focus Cancel: a scanner's Enter must never buy past the gate.
+    document.getElementById('m-cancel').focus();
+  });
+}
+
 function confirmProfitBypass(p, rate, errorMessage = '') {
   return new Promise((resolve) => {
     const backdrop = document.getElementById('modal-backdrop');
@@ -596,6 +631,7 @@ async function buyLabel() {
   let gate = selectedRate.profit && selectedRate.profit.below_threshold ? selectedRate.profit : null;
   let gateError = '';
   let bypassPassword = null;
+  let verifyOverride = false;
   for (;;) {
     if (gate) {
       spinner.style.display = 'none';
@@ -611,6 +647,7 @@ async function buyLabel() {
           courier_service_id: selectedRate.courier_service_id,
           rate: { ...selectedRate, profit: undefined },
           ...(bypassPassword != null ? { bypass_password: bypassPassword } : {}),
+          ...(verifyOverride ? { verify_override: true } : {}),
         },
       });
       break;
@@ -619,6 +656,15 @@ async function buyLabel() {
         gate = err.data.profit;
         gateError = err.data.bypass === 'wrong_password' ? 'Wrong password — try again' : '';
         continue;
+      }
+      if (err.status === 403 && err.data && err.data.code === 'verify_gate' && !verifyOverride) {
+        spinner.style.display = 'none';
+        if (await confirmVerifyOverride(err.data)) {
+          verifyOverride = true;
+          spinner.style.display = '';
+          continue;
+        }
+        return giveUp('cancelled', err.message);
       }
       snackbar(err.message, 'error');
       const out = giveUp('failed', err.message);

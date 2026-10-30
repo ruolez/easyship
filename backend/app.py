@@ -25,6 +25,7 @@ def create_app():
     import shipments_api
     import shipper_api
     import shopify_api
+    import verify_api
 
     app.register_blueprint(auth.bp)
     app.register_blueprint(settings_api.bp)
@@ -36,6 +37,7 @@ def create_app():
     app.register_blueprint(reports_api.bp)
     app.register_blueprint(external_api.bp)
     app.register_blueprint(picklists_api.bp)
+    app.register_blueprint(verify_api.bp)
 
     app.teardown_appcontext(db.close_db)
 

@@ -66,20 +66,30 @@ def check_backoffice(db_id, number):
     cfg = get_config()
     if cfg is None:
         return {"status": "not_configured", "checked_at": None}
-    conn = backoffice._connect(db_id)
+    quotation_number = backoffice.quotation_number_for_invoice(db_id, number)
+    if not quotation_number:
+        return {"status": "not_found", "checked_at": None}
+    return _check_parcel(cfg, [quotation_number])
+
+
+def check_quotation(quotation_number):
+    cfg = get_config()
+    if cfg is None:
+        return {"status": "not_configured", "checked_at": None}
+    return _check_parcel(cfg, [quotation_number])
+
+
+def list_case_barcodes():
+    """The old Shipper app's case barcodes, or None when it is not configured."""
+    cfg = get_config()
+    if cfg is None:
+        return None
+    conn = _connect(cfg)
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT TOP 1 LTRIM(RTRIM(QuotationNumber)) FROM Quotations_tbl
-                WHERE LTRIM(RTRIM(AutoOrderNo)) = %s
-                ORDER BY QuotationID DESC
-                """,
-                ((number or "").strip(),),
-            )
-            row = cur.fetchone()
+        with conn.cursor(as_dict=True) as cur:
+            cur.execute("SELECT barcode, unit_barcode, quantity FROM case_barcodes ORDER BY id")
+            return cur.fetchall()
+    except pymssql.Error as e:
+        raise ShipperError(f"Reading Shipper case barcodes failed: {e}")
     finally:
         conn.close()
-    if not row or not row[0]:
-        return {"status": "not_found", "checked_at": None}
-    return _check_parcel(cfg, [row[0]])

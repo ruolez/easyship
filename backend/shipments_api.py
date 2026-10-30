@@ -15,7 +15,8 @@ import profit
 import providers
 import shopify_client
 import tag_rules
-from auth import admin_required, login_required
+import verify_gate
+from auth import admin_required, login_required, user_sections
 from providers import labels
 from providers.base import LabelStatus, ProviderError
 from util import api_error, audit, central_time
@@ -458,6 +459,28 @@ def group_buy(group_id):
                 "error": "A label cannot be bought for this order — " + "; ".join(gate["reasons"]),
                 "code": "order_gate", "gate": gate, "live": live,
             }), 403
+
+    # Verification gate: the order must be verified in EasyShip or checked in
+    # Shipper. A user with Verify override may buy anyway; that is recorded on
+    # box 1 so a Resume is not asked again.
+    if not (primary.get("verify_gate") or {}).get("overridden_by"):
+        check = verify_gate.check(primary)
+        if not check["verified"]:
+            can_override = "verify_override" in user_sections(session["user_id"], session.get("role"))
+            if not (data.get("verify_override") and can_override):
+                return jsonify({
+                    "error": check["message"], "code": "verify_gate", "verify": check,
+                    "can_override": can_override,
+                }), 403
+            record = {"overridden_by": session["user_id"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                      "message": check["message"], "unverified": check["unverified"]}
+            db.execute("UPDATE shipments SET verify_gate=%s, updated_at=now() WHERE id=%s",
+                       (json.dumps(record), primary["id"]))
+            audit("verify.override_buy", {
+                "group_id": group_id, "source": primary["source"],
+                "order": primary["shopify_order_name"] or primary["backoffice_invoice_number"],
+                "message": check["message"], "unverified": check["unverified"],
+            })
 
     # Profit gate: a rate below the thresholds needs the bypass password. Once
     # cleared (either way) a Resume of the same rate is never asked again.

@@ -89,24 +89,23 @@ function confirmProceed(title, message, detailsHtml = '') {
   });
 }
 
-async function verificationGate(kind, id, number) {
+/* Warn before the Ship page when the order is not verified (EasyShip Verify
+   or the old Shipper app): rates still work there, but Buy refuses the label
+   unless the user has Verify override. */
+async function verificationGate(params) {
   let res;
   try {
-    const qs = kind === 'backoffice'
-      ? `source=backoffice&db_id=${id}&number=${encodeURIComponent(number)}`
-      : `source=shopify&number=${encodeURIComponent(number)}`;
-    res = await api(`/api/shipper/check?${qs}`);
-  } catch {
-    res = { status: 'unavailable' };
+    res = await api(`/api/verify/status?${new URLSearchParams(params)}`);
+  } catch (err) {
+    statusEl.innerHTML = '';
+    return confirmProceed('Verification unavailable', `Could not check whether this order was verified: ${err.message}`);
   }
-  if (res.status === 'verified' || res.status === 'not_configured') return true;
+  if (res.verified) return true;
   statusEl.innerHTML = '';
-  if (res.status === 'unavailable') {
-    return confirmProceed('Verification unavailable',
-      'Could not confirm verification — the Shipper database is unreachable.');
-  }
-  return confirmProceed('Order not verified',
-    'This order has not been verified in Shipper.');
+  const items = (res.unverified || []).map((i) => `<li>${esc(i.title || i.barcode || 'Item')} — ${i.qty_verified} of ${i.qty_required}</li>`).join('');
+  return confirmProceed('Order not verified', res.message,
+    `${items ? `<ul class="mb-16" style="margin:8px 0 0 18px">${items}</ul>` : ''}
+     <p class="text-secondary" style="margin-top:8px">Verify it on the <a href="/verify.html">Verify</a> page first — a label cannot be bought until it is verified, unless you have Verify override.</p>`);
 }
 
 /* Warn when Shopify will not let the order ship yet (on hold / not fully
@@ -331,7 +330,7 @@ async function lookup() {
         stayOnScan();
         return;
       }
-      if (!(await verificationGate('backoffice', id, number))) {
+      if (!(await verificationGate({ source: 'backoffice', db_id: id, invoice_id: inv.invoice_id, invoice_number: inv.invoice_number }))) {
         stayOnScan();
         return;
       }
@@ -364,7 +363,7 @@ async function lookup() {
         stayOnScan();
         return;
       }
-      if (!(await verificationGate('shopify', id, order.name || number))) {
+      if (!(await verificationGate({ source: 'shopify', store_id: id, order_id: order.id, order_name: order.name || number }))) {
         stayOnScan();
         return;
       }
