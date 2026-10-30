@@ -1,7 +1,7 @@
 /* Verification history: every order verified (or started) on the Verify
    page, with its scans; and the wrong-barcode queue (admins and Verify
    override users). Packers see only their own orders of today. */
-const STATUS_LABEL = { verified: '✓ Verified', in_progress: 'In progress', reset: 'Started over' };
+const STATUS_LABEL = { verified: 'Verified', in_progress: 'In progress', reset: 'Started over' };
 const EVENT_LABEL = {
   start: 'Opened', scan: 'Scan', count: 'Typed count', check_all: 'Check all', confirm: 'Confirmed (no barcode)',
   force_line: 'Marked without scanning', force_order: 'Whole order marked without scanning', undo: 'Undo',
@@ -58,6 +58,22 @@ async function load() {
   renderRows(data.limit);
 }
 
+function statusPill(status) {
+  return `<span class="vh-pill ${status}">${STATUS_LABEL[status] || esc(status)}</span>`;
+}
+
+function renderStats() {
+  const count = (fn) => rows.filter(fn).length;
+  const stats = [
+    ['verified', 'Verified', count((r) => r.status === 'verified')],
+    ['in_progress', 'In progress', count((r) => r.status === 'in_progress')],
+    ['forced', 'Marked without scanning', count((r) => r.forced)],
+    ['errors', 'Wrong scans', rows.reduce((sum, r) => sum + (r.errors || 0), 0)],
+  ];
+  document.getElementById('vh-stats').innerHTML = stats.map(([key, label, n]) => `
+    <div class="vh-stat ${key}${n ? '' : ' zero'}"><b>${n}</b><span>${label}</span></div>`).join('');
+}
+
 function writebackCell(r) {
   const state = r.source === 'shopify' ? r.shopify_tag_state : r.dbadmin_state;
   const label = r.source === 'shopify' ? 'Shopify tag' : 'DB_Admin';
@@ -71,17 +87,18 @@ function renderRows(limit) {
   const body = document.getElementById('vh-body');
   const empty = document.getElementById('vh-empty');
   body.innerHTML = rows.map((r) => `<tr class="vh-row" data-id="${r.id}">
-    <td><b>${esc(r.order_name)}</b></td>
-    <td>${esc(r.source === 'shopify' ? (r.store_name || 'Shopify') : (r.source_db || 'BackOffice'))}</td>
-    <td>${esc(r.customer || '')}</td>
-    <td><span class="vh-status ${r.status}">${STATUS_LABEL[r.status] || r.status}</span>${r.forced ? ' <span class="vf-forced-tag">marked</span>' : ''}</td>
-    <td class="num">${r.units_verified} / ${r.units_required}</td>
-    <td class="num">${r.errors || ''}</td>
-    <td>${esc(r.verified_by_name || '')}</td>
-    <td>${esc(ct(r.verified_at))}</td>
-    <td class="text-secondary">${esc(r.started_by_name || '')} · ${esc(ct(r.started_at))}</td>
-    <td>${writebackCell(r)}</td>
+    <td class="vh-c-order"><b>${esc(r.order_name)}</b></td>
+    <td class="vh-c-source">${esc(r.source === 'shopify' ? (r.store_name || 'Shopify') : (r.source_db || 'BackOffice'))}</td>
+    <td class="vh-c-customer">${esc(r.customer || '')}</td>
+    <td class="vh-c-status">${statusPill(r.status)}${r.forced ? ' <span class="vf-forced-tag">marked</span>' : ''}</td>
+    <td class="num vh-c-units" data-label="Units"><span class="vh-units"><span class="vh-units-bar" style="--pct:${r.units_required ? Math.round((r.units_verified / r.units_required) * 100) : 0}%"></span>${r.units_verified} / ${r.units_required}</span></td>
+    <td class="num vh-c-errors${r.errors ? ' err' : ''}" data-label="Wrong scans">${r.errors || ''}</td>
+    <td data-label="Verified by">${esc(r.verified_by_name || '')}</td>
+    <td data-label="Verified">${esc(ct(r.verified_at))}</td>
+    <td class="text-secondary" data-label="Started">${esc(r.started_by_name || '')} · ${esc(ct(r.started_at))}</td>
+    <td class="vh-c-wb">${writebackCell(r)}</td>
   </tr>`).join('');
+  renderStats();
   empty.style.display = rows.length ? 'none' : '';
   empty.textContent = 'No verifications match.';
   if (rows.length >= limit) snackbar(`Showing the newest ${limit} — narrow the filters to see older ones`);
@@ -136,8 +153,9 @@ async function openDetail(id) {
   const wbState = state.source === 'shopify' ? wb.shopify : wb.dbadmin;
   modal.innerHTML = `
     <h3>${esc(state.order_name)} <span class="text-secondary" style="font-weight:400">· ${esc(state.source_name || '')}${state.customer ? ` · ${esc(state.customer)}` : ''}</span></h3>
-    <p class="mb-16"><span class="vh-status ${state.status}">${STATUS_LABEL[state.status]}</span>
+    <p class="mb-16">${statusPill(state.status)}
       ${state.verified_by ? ` by ${esc(state.verified_by)} · ${esc(ct(state.verified_at))}` : ''}
+      <span class="vh-detail-units">${state.progress.units_verified} / ${state.progress.units_required} units</span>
       ${wbState && wbState.state === 'failed' ? `<br><span class="chip static err">✕ ${state.source === 'shopify' ? 'Shopify tag' : 'DB_Admin Checker'} failed</span> <span class="text-secondary">${esc(wbState.error || '')}</span> <button class="btn btn-text btn-small" id="m-retry">Retry</button>` : ''}</p>
     <div class="table-wrap vh-lines-wrap"><table class="striped compact vh-lines">
       <thead><tr><th>Item</th><th>Barcode</th><th class="num">Verified</th></tr></thead>

@@ -18,6 +18,7 @@
     </nav>
 
     <section class="tab-panel active" data-panel="history">
+      <div class="vh-stats" id="vh-stats"></div>
       <div class="card">
         <div class="vh-filters">
           <div class="field wide"><label>Order or customer</label><input id="vh-q" type="search" autocomplete="off" spellcheck="false"></div>
@@ -31,7 +32,7 @@
           <label class="svc-item" style="align-self:center"><input type="checkbox" id="vh-forced"> Marked without scanning</label>
         </div>
         <div class="table-wrap flush">
-          <table class="striped compact">
+          <table class="striped compact vh-table">
             <thead><tr>
               <th>Order</th><th>Source</th><th>Customer</th><th>Status</th><th class="num">Units</th>
               <th class="num">Wrong scans</th><th>Verified by</th><th>Verified (CT)</th><th>Started</th><th>Writeback</th>

@@ -5,6 +5,14 @@
    that must be tapped away for a wrong one. */
 const OPEN_KEY = 'easyship.verifyOpen';
 const RETRY_DELAYS_MS = [600, 1500];
+const svg = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+const ICON_X = svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>');
+const ICON_BANG = svg('<path d="M12 6v8"/><path d="M12 18.5v.01"/>');
+const ICON_CHECK = svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>');
+const ICON_SCAN = svg('<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M8 8v8M12 8v8M16 8v8"/>');
+const ICON_TAP = svg('<path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V10"/><path d="M12 10V9a1.5 1.5 0 0 1 3 0v2"/><path d="M15 11a1.5 1.5 0 0 1 3 0v3a6 6 0 0 1-6 6h-.5a6 6 0 0 1-5-2.7L4.2 14a1.5 1.5 0 0 1 2.5-1.7L9 15"/>');
+const ICON_SOUND_ON = svg('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>');
+const ICON_SOUND_OFF = svg('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/>');
 
 const startView = document.getElementById('vf-start');
 const orderView = document.getElementById('vf-order');
@@ -14,10 +22,15 @@ const doneEl = document.getElementById('vf-done');
 const sheetBackdrop = document.getElementById('vf-sheet-backdrop');
 const sheetEl = document.getElementById('vf-sheet');
 
+const readyEl = document.getElementById('vf-ready');
+
 let current = null; // the open verification, as the API returns it
-let lastScan = null; // { lineId, result, code }
+let lastScan = null; // { lineId, units, caseUnits, kind, seq }
+let scanSeq = 0;
 let blocker = null; // 'alert' | 'error' | 'opening' — scans are refused until it clears
+let openingNumber = '';
 let banner = null;
+const openGroups = new Set(); // folded line groups the packer opened
 const queue = [];
 let pumping = false;
 
@@ -54,6 +67,10 @@ function time(iso) {
   return iso ? new Date(iso).toLocaleString([], { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
 }
 
+function clock(iso) {
+  return iso ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+}
+
 function lineById(id) {
   return current && current.lines.find((l) => l.id === id);
 }
@@ -69,6 +86,55 @@ function flash(kind) {
   flash.timer = setTimeout(() => { el.className = 'vf-flash'; }, kind === 'done' ? 600 : 320);
 }
 
+function replay(el, cls) {
+  el.classList.remove(cls);
+  void el.offsetWidth; // restart the animation
+  el.classList.add(cls);
+}
+
+/* Whether a scan right now would count: the packer should never have to
+   guess if the phone is listening. */
+function readyState() {
+  if (blocker === 'opening') return ['busy', `Opening ${openingNumber}…`];
+  if (queue.length || pumping) return ['busy', queue.length > 1 ? `Saving ${queue.length}…` : 'Saving…'];
+  if (blocker || !sheetBackdrop.hidden) return ['paused', 'Paused'];
+  if (!document.hasFocus()) return ['paused', 'Tap to scan'];
+  return ['ready', 'Ready'];
+}
+
+function renderReady() {
+  const [state, label] = readyState();
+  const pill = (text) => `<span class="vf-ready ${state}"><i aria-hidden="true"></i>${esc(text)}</span>`;
+  readyEl.className = `vf-ready ${state}`;
+  readyEl.innerHTML = `<i aria-hidden="true"></i>${esc(label)}`;
+  startStatus.innerHTML = pill(state === 'ready' ? 'Ready — scan now' : label);
+}
+
+/* A scan that arrived while something needs a tap first: shake it so the
+   packer sees why nothing was counted. */
+function nudge() {
+  if (!alertEl.hidden) {
+    replay(alertEl.querySelector('.vf-alert-card'), 'vf-nudge');
+    const hint = alertEl.querySelector('.vf-alert-hint');
+    if (hint) hint.textContent = 'That scan was not counted — tap OK first';
+  } else if (!sheetBackdrop.hidden) {
+    replay(sheetEl, 'vf-nudge');
+  }
+}
+
+function deltaLabel(s) {
+  if (!s || !s.units) return '';
+  if (s.kind === 'undo') return `−${s.units} undone`;
+  if (s.caseUnits) return `+${s.units} · case`;
+  return `+${s.units}`;
+}
+
+// The last digits are what a packer compares against the shelf label.
+function codeHtml(code) {
+  const s = String(code);
+  return s.length > 6 ? `${esc(s.slice(0, -4))}<b>${esc(s.slice(-4))}</b>` : `<b>${esc(s)}</b>`;
+}
+
 /* ---------- blocking alert (wrong scan, refusals) ---------- */
 
 function showAlert({ title, message, code = '', sound = 'wrong', tone = 'error' }) {
@@ -77,7 +143,7 @@ function showAlert({ title, message, code = '', sound = 'wrong', tone = 'error' 
   alertEl.className = `vf-alert ${tone}`;
   alertEl.innerHTML = `
     <div class="vf-alert-card">
-      <div class="vf-alert-icon" aria-hidden="true">${tone === 'error' ? '✕' : '!'}</div>
+      <div class="vf-alert-icon" aria-hidden="true">${tone === 'error' ? ICON_X : ICON_BANG}</div>
       <h2>${esc(title)}</h2>
       <p>${esc(message)}</p>
       ${code ? `<div class="vf-alert-code mono">${esc(code)}</div>` : ''}
@@ -86,12 +152,14 @@ function showAlert({ title, message, code = '', sound = 'wrong', tone = 'error' 
     </div>`;
   alertEl.hidden = false;
   document.getElementById('vf-alert-ok').addEventListener('click', closeAlert);
+  renderReady();
 }
 
 function closeAlert() {
   alertEl.hidden = true;
   if (blocker === 'alert' || blocker === 'error') blocker = null;
   scanner.focus();
+  renderReady();
   pump();
 }
 
@@ -110,7 +178,7 @@ function showError({ title, err, retry, discard }) {
   alertEl.className = 'vf-alert error';
   alertEl.innerHTML = `
     <div class="vf-alert-card">
-      <div class="vf-alert-icon" aria-hidden="true">!</div>
+      <div class="vf-alert-icon" aria-hidden="true">${ICON_BANG}</div>
       <h2>${esc(title)}</h2>
       <pre class="vf-error-text" id="vf-error-text">${esc(text)}</pre>
       <div class="vf-error-actions">
@@ -120,9 +188,11 @@ function showError({ title, err, retry, discard }) {
       </div>
     </div>`;
   alertEl.hidden = false;
+  renderReady();
   document.getElementById('vf-error-retry').addEventListener('click', () => {
     alertEl.hidden = true;
     blocker = null;
+    renderReady();
     retry();
   });
   document.getElementById('vf-error-copy').addEventListener('click', () => copyText(text));
@@ -154,6 +224,7 @@ function onScan(code) {
   Feedback.keepAwake();
   if (blocker || !sheetBackdrop.hidden) {
     Feedback.play('blocked');
+    nudge();
     return;
   }
   if (!current || current.status !== 'in_progress') {
@@ -169,6 +240,7 @@ async function pump() {
   pumping = true;
   try {
     while (queue.length && !blocker && current) {
+      renderReady();
       const scan = queue[0];
       let res;
       try {
@@ -196,21 +268,23 @@ async function pump() {
     }
   } finally {
     pumping = false;
+    renderReady();
   }
 }
 
 function announceScan(scan, code) {
   if (!scan) return;
   const line = lineById(scan.line_id);
+  const counted = { lineId: scan.line_id, units: scan.units, caseUnits: scan.case_units, kind: 'scan', seq: ++scanSeq };
   if (scan.result === 'ok' || scan.result === 'line_done') {
-    lastScan = { lineId: scan.line_id, result: scan.result, code };
+    lastScan = counted;
     Feedback.play(scan.result === 'ok' ? 'ok' : 'line');
     flash(scan.result === 'ok' ? 'ok' : 'line');
     render();
     return;
   }
   if (scan.result === 'order_done') {
-    lastScan = { lineId: scan.line_id, result: scan.result, code };
+    lastScan = counted;
     Feedback.play('done');
     flash('done');
     render();
@@ -233,14 +307,15 @@ function announceScan(scan, code) {
 
 async function openOrder(number) {
   blocker = 'opening';
-  startStatus.innerHTML = `<span class="spinner"></span> Opening ${esc(number)}…`;
+  openingNumber = number;
+  renderReady();
   doneEl.hidden = true;
   let res;
   try {
     res = await withRetry(() => api('/api/verify/open', { method: 'POST', body: { number } }));
   } catch (err) {
     blocker = null;
-    startStatus.innerHTML = '';
+    renderReady();
     if (isTransient(err) || err.status === 502) {
       showError({ title: `Could not open ${number}`, err, retry: () => openOrder(number) });
     } else {
@@ -250,10 +325,10 @@ async function openOrder(number) {
     return;
   }
   blocker = null;
-  startStatus.innerHTML = '';
   queue.length = 0;
   lastScan = null;
   banner = null;
+  openGroups.clear();
   if (res.reopened && res.changes && res.changes.length) {
     banner = { tone: 'warn', html: `<b>This order changed after it was verified.</b> ${res.changes.map((c) => `${esc(c.title)}: ${c.from} → ${c.to}`).join(' · ')}. Verify the new items.` };
   } else if (res.changes && res.changes.length) {
@@ -289,6 +364,7 @@ function applyState(res) {
   orderView.hidden = false;
   document.body.classList.add('vf-active');
   render();
+  renderReady();
   if (!doneEl.hidden && res.status === 'verified') renderDone(doneEl.dataset.already === '1');
 }
 
@@ -302,6 +378,7 @@ function showStart() {
   document.body.classList.remove('vf-active');
   loadToday();
   scanner.focus();
+  renderReady();
 }
 
 /* ---------- rendering ---------- */
@@ -315,18 +392,22 @@ function lineState(l) {
 function render() {
   if (!current) return;
   const p = current.progress;
+  const left = p.units_required - p.units_verified;
+  const verified = current.status === 'verified';
   document.getElementById('vf-order-name').textContent = current.order_name;
   document.getElementById('vf-order-sub').textContent = [current.source_name, current.customer].filter(Boolean).join(' · ');
+  document.getElementById('vf-left').textContent = verified ? '✓' : left;
+  document.getElementById('vf-left-label').textContent = verified ? 'verified' : `unit${left === 1 ? '' : 's'} left`;
   document.getElementById('vf-units-done').textContent = p.units_verified;
   document.getElementById('vf-units-total').textContent = ` / ${p.units_required} units`;
   document.getElementById('vf-lines-count').textContent = `${p.lines_done} of ${p.lines_total} item${p.lines_total === 1 ? '' : 's'} done`;
   document.getElementById('vf-bar').style.width = `${p.units_required ? Math.round((p.units_verified / p.units_required) * 100) : 0}%`;
-  document.getElementById('vf-bar').parentElement.classList.toggle('complete', current.status === 'verified');
+  document.querySelector('.vf-progress').classList.toggle('complete', verified);
 
   const bannerEl = document.getElementById('vf-banner');
   const notes = [];
   if (banner) notes.push(banner);
-  if (current.status === 'verified') {
+  if (verified) {
     notes.push({ tone: 'ok', html: `Verified by <b>${esc(current.verified_by || '')}</b> · ${esc(time(current.verified_at))}${current.forced ? ' · some items marked without scanning' : ''}` });
   } else if (current.started_by && window.currentUser && current.started_by !== window.currentUser.username) {
     notes.push({ tone: 'info', html: `Started by <b>${esc(current.started_by)}</b> · ${esc(time(current.started_at))}` });
@@ -335,43 +416,102 @@ function render() {
   bannerEl.innerHTML = notes.map((n) => `<div class="vf-note ${n.tone}">${n.html}</div>`).join('');
 
   renderLast();
-
-  const order = { partial: 0, todo: 1, done: 2, skip: 3 };
-  const lines = [...current.lines].sort((a, b) => order[lineState(a)] - order[lineState(b)]);
-  document.getElementById('vf-lines').innerHTML = lines.map((l) => {
-    const state = lineState(l);
-    const qty = l.skip_reason
-      ? '<span class="vf-skip-tag">Skipped</span>'
-      : `<b>${l.qty_verified}</b><span>/${l.qty_required}</span>`;
-    const code = l.needs_tap ? '<span class="vf-tap-tag">No barcode — tap to confirm</span>'
-      : l.skip_reason ? esc(l.skip_reason) : esc(l.barcode);
-    return `<li class="vf-line ${state}${lastScan && lastScan.lineId === l.id ? ' last' : ''}" data-id="${l.id}" tabindex="-1">
-      <div class="vf-line-main">
-        <div class="vf-line-title">${esc(l.title || '(no name)')}</div>
-        <div class="vf-line-code${l.needs_tap || l.skip_reason ? '' : ' mono'}">${code}${l.forced ? ' <span class="vf-forced-tag">marked</span>' : ''}</div>
-      </div>
-      <div class="vf-line-qty">${qty}</div>
-    </li>`;
-  }).join('');
+  renderLines();
 }
+
+function lineHtml(l) {
+  const state = lineState(l);
+  const pct = l.qty_required ? Math.min(100, Math.round((l.qty_verified / l.qty_required) * 100)) : 0;
+  const qty = l.skip_reason
+    ? '<span class="vf-skip-tag">Skipped</span>'
+    : `<b>${l.qty_verified}</b><span>/${l.qty_required}</span>`;
+  let code;
+  if (l.skip_reason) code = esc(l.skip_reason);
+  else if (l.needs_tap && state !== 'done') code = '<span class="vf-tap-tag">No barcode · tap to confirm</span>';
+  else if (l.barcode) code = `<span class="mono">${codeHtml(l.barcode)}</span>`;
+  else code = 'No barcode';
+  const icon = state === 'done' ? ICON_CHECK : l.needs_tap && state !== 'skip' ? ICON_TAP : '';
+  return `<li class="vf-line ${state}${l.needs_tap ? ' tap' : ''}${lastScan && lastScan.lineId === l.id ? ' last' : ''}" data-id="${l.id}" style="--pct:${pct}%">
+    <span class="vf-line-icon" aria-hidden="true">${icon}</span>
+    <div class="vf-line-main">
+      <div class="vf-line-title">${esc(l.title || '(no name)')}</div>
+      <div class="vf-line-code">${code}${l.forced ? ' <span class="vf-forced-tag">marked</span>' : ''}</div>
+    </div>
+    <div class="vf-line-qty">${qty}</div>
+  </li>`;
+}
+
+/* To scan on top (started lines first), then the done and the never-scanned
+   lines folded away so the list stays short while packing. */
+function renderLines() {
+  const groups = { todo: [], done: [], skip: [] };
+  current.lines.forEach((l) => {
+    const state = lineState(l);
+    groups[state === 'partial' || state === 'todo' ? 'todo' : state].push(l);
+  });
+  groups.todo.sort((a, b) => (b.qty_verified > 0) - (a.qty_verified > 0));
+  const isOpen = (key) => openGroups.has(key) || (key === 'done' && !groups.todo.length);
+  const fold = (key, label, items) => (items.length ? `
+    <details class="vf-group" data-group="${key}"${isOpen(key) ? ' open' : ''}>
+      <summary>${label}<span class="vf-group-count">${items.length}</span></summary>
+      <ul class="vf-lines">${items.map(lineHtml).join('')}</ul>
+    </details>` : '');
+  document.getElementById('vf-lines').innerHTML = [
+    groups.todo.length ? `<div class="vf-group-title">To scan<span class="vf-group-count">${groups.todo.length}</span></div>
+      <ul class="vf-lines">${groups.todo.map(lineHtml).join('')}</ul>` : '',
+    fold('done', 'Done', groups.done),
+    fold('skip', 'Not scanned', groups.skip),
+  ].join('');
+}
+
+document.getElementById('vf-lines').addEventListener('toggle', (e) => {
+  const key = e.target.dataset && e.target.dataset.group;
+  if (!key) return;
+  if (e.target.open) openGroups.add(key);
+  else openGroups.delete(key);
+}, true);
 
 function renderLast() {
   const el = document.getElementById('vf-last');
   const line = lastScan && lineById(lastScan.lineId);
-  if (!line) { el.hidden = true; return; }
+  if (!line) {
+    const open = current.status === 'in_progress' ? current.lines.filter((l) => l.remaining > 0 && !l.skip_reason) : [];
+    el.hidden = !open.length;
+    if (!open.length) return;
+    const onlyTaps = open.every((l) => l.needs_tap);
+    el.className = 'vf-last prompt';
+    el.dataset.seq = '';
+    el.innerHTML = `
+      <span class="vf-last-prompt-icon" aria-hidden="true">${onlyTaps ? ICON_TAP : ICON_SCAN}</span>
+      <div>
+        <div class="vf-last-title">${onlyTaps ? 'Tap the items that have no barcode' : 'Scan any item from the order'}</div>
+        <div class="vf-last-hint">${onlyTaps ? 'Confirm each one once it is in the box' : 'Each scan counts one unit · a case barcode counts the whole case'}</div>
+      </div>`;
+    return;
+  }
   el.hidden = false;
   const canCount = current.status === 'in_progress' && line.scanned && line.remaining > 0;
-  el.className = `vf-last ${line.remaining === 0 ? 'done' : ''}`;
+  const delta = deltaLabel(lastScan);
+  el.className = `vf-last${line.remaining === 0 ? ' done' : ''}${lastScan.kind === 'undo' ? ' undo' : ''}`;
   el.innerHTML = `
-    <div class="vf-last-label">Last scan</div>
+    <div class="vf-last-top">
+      <span class="vf-last-label">${lastScan.kind === 'undo' ? 'Undone' : 'Last scan'}</span>
+      ${delta ? `<span class="vf-delta">${esc(delta)}</span>` : ''}
+    </div>
     <div class="vf-last-title">${esc(line.title)}</div>
+    ${line.barcode ? `<div class="vf-last-code mono">${codeHtml(line.barcode)}</div>` : ''}
     <div class="vf-last-row">
-      <div class="vf-last-qty"><b>${line.qty_verified}</b> of ${line.qty_required}${line.remaining === 0 ? ' ✓' : ''}</div>
+      <div class="vf-last-qty"><b>${line.qty_verified}</b> of ${line.qty_required}
+        <span class="vf-last-left">${line.remaining === 0 ? '✓ complete' : `${line.remaining} left`}</span></div>
       ${canCount ? `<div class="vf-last-actions">
         <button class="btn btn-outlined" data-act="count" data-id="${line.id}">Type count</button>
         <button class="btn btn-primary" data-act="check-all" data-id="${line.id}">Check all ${line.remaining}</button>
       </div>` : ''}
     </div>`;
+  if (el.dataset.seq !== String(lastScan.seq)) {
+    el.dataset.seq = String(lastScan.seq);
+    replay(el, 'pop');
+  }
 }
 
 document.getElementById('vf-last').addEventListener('click', (e) => {
@@ -398,7 +538,8 @@ async function lineAction(line, action, body = {}) {
       method: 'POST', body: { ...body, client_id: id },
     }));
     closeSheet();
-    lastScan = { lineId: line.id, result: 'ok', code: line.barcode };
+    const after = res.lines.find((l) => l.id === line.id);
+    lastScan = { lineId: line.id, units: after ? after.qty_verified - line.qty_verified : 0, kind: action, seq: ++scanSeq };
     applyState(res);
     if (res.status === 'verified') {
       Feedback.play('done');
@@ -421,12 +562,14 @@ async function lineAction(line, action, body = {}) {
 function openSheet(html) {
   sheetEl.innerHTML = html;
   sheetBackdrop.hidden = false;
+  renderReady();
 }
 
 function closeSheet() {
   sheetBackdrop.hidden = true;
   sheetEl.innerHTML = '';
   scanner.focus();
+  renderReady();
 }
 
 sheetBackdrop.addEventListener('click', (e) => {
@@ -451,7 +594,7 @@ function openLineSheet(line) {
   buttons.push('<button class="vf-sheet-btn" data-act="close">Close</button>');
   openSheet(`
     <div class="vf-sheet-title">${esc(line.title || '(no name)')}</div>
-    <div class="vf-sheet-sub">${line.barcode ? `<span class="mono">${esc(line.barcode)}</span>` : ''}${line.sku ? ` · SKU ${esc(line.sku)}` : ''}</div>
+    <div class="vf-sheet-sub">${[line.barcode ? `<span class="mono">${codeHtml(line.barcode)}</span>` : '', line.sku ? `SKU ${esc(line.sku)}` : ''].filter(Boolean).join(' · ')}</div>
     <div class="vf-sheet-qty">${line.skip_reason ? esc(line.skip_reason) : `<b>${line.qty_verified}</b> of ${line.qty_required} verified`}</div>
     <div class="vf-sheet-actions">${buttons.join('')}</div>`);
   sheetEl.querySelector('.vf-sheet-actions').addEventListener('click', (e) => {
@@ -583,10 +726,9 @@ async function undo() {
   try {
     const res = await withRetry(() => api(`/api/verify/${current.id}/undo`, { method: 'POST' }));
     const line = res.lines.find((l) => l.id === res.undone.line_id);
-    lastScan = line ? { lineId: line.id, result: 'undo', code: '' } : null;
+    lastScan = line ? { lineId: line.id, units: res.undone.units, kind: 'undo', seq: ++scanSeq } : null;
     applyState(res);
     Feedback.play('undo');
-    snackbar(`Undone: ${line ? line.title : 'last change'} −${res.undone.units}`);
   } catch (err) {
     if (isTransient(err)) showError({ title: 'Could not undo', err, retry: undo });
     else showAlert({ title: 'Nothing undone', message: err.message, tone: 'warn', sound: 'over' });
@@ -622,13 +764,14 @@ function renderDone(already) {
     : '';
   doneEl.innerHTML = `
     <div class="vf-done-card">
-      <div class="vf-done-check" aria-hidden="true">✓</div>
+      <div class="vf-done-check" aria-hidden="true">${ICON_CHECK}</div>
       <h2>${already ? 'Already verified' : 'Order verified'}</h2>
-      <div class="vf-done-order">${esc(current.order_name)} · ${current.progress.units_required} units</div>
+      <div class="vf-done-order">${esc(current.order_name)}</div>
+      <div class="vf-done-stats">${current.progress.units_required} unit${current.progress.units_required === 1 ? '' : 's'} · ${current.progress.lines_total} item${current.progress.lines_total === 1 ? '' : 's'}</div>
       <div class="vf-done-meta">by ${esc(current.verified_by || '')} · ${esc(time(current.verified_at))}${current.forced ? ' · some items marked without scanning' : ''}</div>
       <div class="vf-done-wb">${chips.join(' ')}</div>
       ${failed ? `<div class="vf-done-error">${esc(failure)} <button class="btn btn-text" id="vf-wb-retry">Retry</button></div>` : ''}
-      <p class="vf-done-hint">Scan the next order</p>
+      <p class="vf-done-hint"><span class="vf-ready ready"><i aria-hidden="true"></i>Scan the next order</span></p>
       <div class="vf-done-actions">
         <button class="btn btn-primary vf-big" id="vf-next">Next order</button>
         ${already ? '<button class="btn btn-outlined vf-big" id="vf-again">Verify again</button>' : ''}
@@ -664,14 +807,22 @@ async function loadToday() {
     el.innerHTML = '';
     return;
   }
-  const rows = data.rows.filter((r) => r.status !== 'reset').slice(0, 8);
-  el.innerHTML = rows.length ? `
-    <div class="vf-today-title">Today</div>
-    ${rows.map((r) => `<button class="vf-today-row" data-number="${esc(r.order_name)}">
+  const rows = data.rows.filter((r) => r.status !== 'reset');
+  const open = rows.filter((r) => r.status === 'in_progress').slice(0, 5);
+  const done = rows.filter((r) => r.status === 'verified');
+  const row = (r) => {
+    const pct = r.units_required ? Math.round((r.units_verified / r.units_required) * 100) : 0;
+    return `<button class="vf-today-row ${r.status}" data-number="${esc(r.order_name)}">
       <span class="vf-today-name">${esc(r.order_name)}</span>
       <span class="vf-today-meta">${esc(r.customer || '')}</span>
-      <span class="vf-today-state ${r.status}">${r.status === 'verified' ? '✓ verified' : `${r.units_verified}/${r.units_required}`}</span>
-    </button>`).join('')}` : '';
+      <span class="vf-today-state ${r.status}">${r.status === 'verified' ? `${ICON_CHECK}<span>${esc(clock(r.verified_at))}</span>` : `${r.units_verified}/${r.units_required}`}</span>
+      ${r.status === 'in_progress' ? `<span class="vf-today-bar" style="--pct:${pct}%"></span>` : ''}
+    </button>`;
+  };
+  el.innerHTML = [
+    open.length ? `<div class="vf-today-title">Not finished<span class="vf-group-count">${open.length}</span></div>${open.map(row).join('')}` : '',
+    done.length ? `<div class="vf-today-title">Verified today<span class="vf-group-count">${done.length}</span></div>${done.slice(0, 6).map(row).join('')}` : '',
+  ].join('');
 }
 
 document.getElementById('vf-today').addEventListener('click', (e) => {
@@ -680,7 +831,10 @@ document.getElementById('vf-today').addEventListener('click', (e) => {
 });
 
 function renderSoundToggle() {
-  document.getElementById('vf-sound-toggle').textContent = Feedback.muted() ? 'Sound is off — turn on' : 'Sound is on — turn off';
+  const btn = document.getElementById('vf-sound-toggle');
+  btn.innerHTML = Feedback.muted() ? `${ICON_SOUND_OFF}Sound off` : `${ICON_SOUND_ON}Sound on`;
+  btn.classList.toggle('off', Feedback.muted());
+  btn.setAttribute('aria-pressed', String(!Feedback.muted()));
 }
 
 document.getElementById('vf-sound-toggle').addEventListener('click', () => {
@@ -708,6 +862,8 @@ document.getElementById('vf-camera-close').addEventListener('click', () => { Cam
 /* ---------- page-wide ---------- */
 
 document.addEventListener('pointerdown', () => { Feedback.unlock(); Feedback.keepAwake(); });
+window.addEventListener('focus', renderReady);
+window.addEventListener('blur', renderReady);
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
