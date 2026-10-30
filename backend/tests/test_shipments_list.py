@@ -12,6 +12,7 @@ sys.modules.setdefault("config", types.SimpleNamespace(
 
 from flask import Flask  # noqa: E402
 
+import auth  # noqa: E402
 import shipments_api  # noqa: E402
 
 ACCOUNTS = [
@@ -28,6 +29,8 @@ class ShipmentsListTest(unittest.TestCase):
     parcel rather than the page on screen."""
 
     def setUp(self):
+        self.addCleanup(setattr, auth, "user_ships", auth.user_ships)
+        auth.user_ships = lambda user_id, role: True  # access itself: test_user_access
         self.app = Flask(__name__)
         self.app.secret_key = "test"
         self.app.register_blueprint(shipments_api.bp)

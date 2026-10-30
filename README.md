@@ -49,7 +49,7 @@ Default login: **admin** / value of `ADMIN_INITIAL_PASSWORD` in `.env` (change i
    - `read_orders`, `read_customers`, `read_products`, `read_inventory`
    - `read_merchant_managed_fulfillment_orders`, `write_merchant_managed_fulfillment_orders`
    - `write_orders` — order tags (pick list tags, the Verify page's `Checked` tag)
-5. **Users** — create logins for warehouse staff. Every label records who bought it.
+5. **Users** — create logins for warehouse staff. Every label records who bought it. *Access* sets which shipping accounts and sections (Pick lists, Verify, Verify override) a user has. With no shipping account checked the user doesn't ship: they sign in straight to their section (e.g. Verify on a scanner phone), see only it and Settings › My account, and every shipping page and API refuses them. A user needs at least one account or one section.
 6. **Shopify order tag rules** (Shipping tab, optional) — map an order tag to a preferred courier service and/or a signature requirement (signature / adult 21+). Tagged orders show the tags, the order note and the matched rule on the Ship page; the preferred rate is pre-selected and the signature requirement is sent to the provider (Easyship `delivery_confirmation`, Shippo `signature_confirmation`, EasyPost `delivery_confirmation`). Packers can override both before buying. Easyship only enables signature options for some accounts — if it rejects the option, rating falls back without it and the packer is warned.
 
 ## Workflow

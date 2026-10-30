@@ -16,7 +16,7 @@ import providers
 import shopify_client
 import tag_rules
 import verify_gate
-from auth import admin_required, login_required, user_sections
+from auth import admin_required, ship_required, user_sections
 from providers import labels
 from providers.base import LabelStatus, ProviderError
 from util import api_error, audit, central_time
@@ -154,7 +154,7 @@ def _group_rows(group_id):
 # ============================================================ rates
 
 @bp.post("/rates")
-@login_required
+@ship_required
 def get_rates():
     data = request.get_json(silent=True) or {}
     destination = data.get("destination") or {}
@@ -409,7 +409,7 @@ def _group_boxes_snapshot(rows, live_state=None, errors=None):
 
 
 @bp.post("/group/<group_id>/buy")
-@login_required
+@ship_required
 def group_buy(group_id):
     data = request.get_json(silent=True) or {}
     rows = _group_rows(group_id)
@@ -796,7 +796,7 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
 # ============================================================ group status / label / print
 
 @bp.get("/group/<group_id>")
-@login_required
+@ship_required
 def group_status(group_id):
     rows = _group_rows(group_id)
     if not rows:
@@ -820,7 +820,7 @@ def _group_label_bytes(group_id):
 
 
 @bp.get("/group/<group_id>/label")
-@login_required
+@ship_required
 def group_label(group_id):
     data, fmt = _group_label_bytes(group_id)
     if not data:
@@ -855,7 +855,7 @@ def _print_group(group_id):
 
 
 @bp.post("/group/<group_id>/print")
-@login_required
+@ship_required
 def group_print(group_id):
     try:
         import printer
@@ -978,7 +978,7 @@ def run_group_writebacks(group_id):
 
 
 @bp.post("/<int:shipment_id>/writeback")
-@login_required
+@ship_required
 def retry_writeback(shipment_id):
     row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
     if not row:
@@ -994,7 +994,7 @@ def retry_writeback(shipment_id):
 
 
 @bp.post("/<int:shipment_id>/shopify-link")
-@login_required
+@ship_required
 def link_shopify_order(shipment_id):
     """Attach a store + order number to a Shopify shipment that was bought
     without them, then push its tracking. Covers labels bought while Shopify
@@ -1120,7 +1120,7 @@ def _list_where(args):
 
 
 @bp.get("")
-@login_required
+@ship_required
 def list_shipments():
     try:
         limit = _int_arg("limit", LIST_PAGE_DEFAULT, 1, LIST_PAGE_MAX)
@@ -1158,7 +1158,7 @@ def list_shipments():
 
 
 @bp.get("/creators")
-@login_required
+@ship_required
 def creators():
     rows = db.query(
         """SELECT DISTINCT u.username FROM shipments s
@@ -1168,7 +1168,7 @@ def creators():
 
 
 @bp.get("/providers")
-@login_required
+@ship_required
 def shipped_providers():
     """Every shipping account that ever bought a label, as filter options —
     including accounts since disabled or deleted, which /api/providers/enabled
@@ -1185,7 +1185,7 @@ def shipped_providers():
 
 
 @bp.get("/filter-options")
-@login_required
+@ship_required
 def filter_options():
     """Distinct values for the Parcels list's Store / Service / Carrier / Size
     filters, drawn from every parcel rather than the page on screen."""
@@ -1202,7 +1202,7 @@ def filter_options():
 
 
 @bp.get("/<int:shipment_id>")
-@login_required
+@ship_required
 def get_shipment(shipment_id):
     row = _get_with_username(shipment_id)
     if not row:
@@ -1225,7 +1225,7 @@ def _zpl_response(data, fmt, name):
 
 
 @bp.get("/<int:shipment_id>/label")
-@login_required
+@ship_required
 def get_label(shipment_id):
     row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
     if not row or not row["label_path"]:
@@ -1267,7 +1267,7 @@ def easyship_raw(shipment_id):
 
 
 @bp.post("/<int:shipment_id>/print")
-@login_required
+@ship_required
 def print_label(shipment_id):
     row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
     if not row:
@@ -1284,7 +1284,7 @@ def print_label(shipment_id):
 # ============================================================ void / undo
 
 @bp.post("/<int:shipment_id>/void")
-@login_required
+@ship_required
 def void(shipment_id):
     """Undo a shipment: cancels the label(s) at Easyship and removes tracking
     from Shopify / BackOffice. For a multi-box group this undoes ALL boxes.

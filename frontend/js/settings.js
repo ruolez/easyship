@@ -1610,7 +1610,7 @@ function wireProviderCard(p) {
 /* ---------- Assigned users, per account card ---------- */
 function instanceUsersHtml(key, users) {
   const admins = users.filter((u) => u.role === 'admin' && u.is_active).map((u) => u.username);
-  const packers = users.filter((u) => u.role !== 'admin' && u.is_active);
+  const packers = users.filter((u) => u.role !== 'admin' && u.is_active && u.can_ship);
   const adminLine = admins.length ? `
     <div class="pv-admins"><span class="hint">Admins always can:</span>${admins.map((n) => `<span class="us-chip">${esc(n)}</span>`).join('')}</div>` : '';
   if (allProviders.length <= 1) {
@@ -2297,14 +2297,15 @@ function checkedSections() {
 }
 
 function integrationsCell(u) {
+  if (u.role !== 'admin' && !u.can_ship) return '<span class="us-none">Doesn’t ship</span>';
   if (u.role === 'admin' || !u.allowed_providers || !u.allowed_providers.length) return '<span class="us-chip all">All accounts</span>';
   return providerNamesToLabels(u.allowed_providers).map((l) => `<span class="us-chip">${esc(l)}</span>`).join('');
 }
 
 /* One checkbox per configured ACCOUNT (its own API key), grouped by platform
    so two ShipStation accounts read as two distinct choices. */
-function providerChecklistHtml(checkedNames) {
-  const all = !checkedNames || !checkedNames.length;
+function providerChecklistHtml(checkedNames, ships = true) {
+  const all = ships && !checkedNames.length;
   const groups = new Map();
   allProviders.forEach((p) => {
     const g = p.platform_label || p.platform || 'Other';
@@ -2313,7 +2314,7 @@ function providerChecklistHtml(checkedNames) {
   });
   const item = (p) => `
       <label class="svc-item"><input type="checkbox" class="m-user-provider" value="${esc(p.name)}"
-        ${all || checkedNames.includes(p.name) ? 'checked' : ''}> ${esc(p.label)}${p.label !== p.platform_label ? ` <span class="text-secondary">· ${esc(p.platform_label)}</span>` : ''}</label>`;
+        ${ships && (all || checkedNames.includes(p.name)) ? 'checked' : ''}> ${esc(p.label)}${p.label !== p.platform_label ? ` <span class="text-secondary">· ${esc(p.platform_label)}</span>` : ''}</label>`;
   return `<div class="field mb-16" id="m-user-providers"><label>Allowed shipping accounts</label>
     <div class="svc-checklist">${[...groups.entries()].map(([g, items]) => `
       <div class="svc-group">
@@ -2321,7 +2322,7 @@ function providerChecklistHtml(checkedNames) {
         ${items.map(item).join('')}
       </div>`).join('')}
     </div>
-    <span class="hint">Each box is one account with its own API key. All checked = no restriction; a user must keep at least one.</span>
+    <span class="hint">Each box is one account with its own API key. All checked = no restriction. None checked = the user doesn’t ship and sees only the sections below (e.g. Verify).</span>
   </div>`;
 }
 
@@ -2369,30 +2370,22 @@ document.getElementById('users-body').addEventListener('click', (e) => {
   ({ access: editUserAccess, password: resetPassword, deactivate: deactivateUser, activate: activateUser })[btn.dataset.userAct](u);
 });
 
-/* Shipping accounts and sections in one window; each is saved only when it changed. */
+/* Shipping accounts and sections in one window, saved together. */
 async function editUserAccess(u) {
   await loadAllProviders();
   openModal(`
     <h3>Access — ${esc(u.username)}</h3>
-    ${providerChecklistHtml(u.allowed_providers || [])}
+    ${providerChecklistHtml(u.allowed_providers || [], u.can_ship)}
     ${sectionChecklistHtml(u.allowed_sections || [])}
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="m-user-access-save">Save</button>
     </div>`);
-  const before = { providers: checkedProviders().join(','), sections: checkedSections().join(',') };
   document.getElementById('m-user-access-save').addEventListener('click', async () => {
-    if (!checkedProviders().length) {
-      snackbar('Keep at least one account — to remove all access, deactivate the user', 'error');
-      return;
-    }
     try {
-      if (checkedProviders().join(',') !== before.providers) {
-        await api(`/api/users/${u.id}/providers`, { method: 'PUT', body: { allowed_providers: checkedProviders() } });
-      }
-      if (checkedSections().join(',') !== before.sections) {
-        await api(`/api/users/${u.id}/sections`, { method: 'PUT', body: { allowed_sections: checkedSections() } });
-      }
+      await api(`/api/users/${u.id}/access`, {
+        method: 'PUT', body: { allowed_providers: checkedProviders(), allowed_sections: checkedSections() },
+      });
       closeModal();
       snackbar('Access updated', 'success');
       loadUsers();
@@ -2485,6 +2478,9 @@ function auditSummary(r) {
     case 'user.activate': return S('Reactivated a user', [auUser(d.id)]);
     case 'user.password_change': return S('Changed a password', [auUser(d.id)]);
     case 'user.providers': return S('Changed shipping accounts', [auUser(d.id), (d.allowed_providers || []).length ? auList(providerNamesToLabels(d.allowed_providers), 3) : 'all accounts']);
+    case 'user.access': return S('Changed access', [auUser(d.id),
+      d.can_ship ? ((d.allowed_providers || []).length ? auList(providerNamesToLabels(d.allowed_providers), 3) : 'all accounts') : 'doesn’t ship',
+      (d.allowed_sections || []).length ? d.allowed_sections.map(humanKey).join(', ') : 'no sections']);
     case 'user.sections': return S('Changed sections', [auUser(d.id), (d.allowed_sections || []).length ? d.allowed_sections.map(humanKey).join(', ') : 'none']);
     case 'store.create': return S('Added a store', [d.name, d.domain]);
     case 'store.update': return S('Updated a store', [d.name || auStore(d.id)]);

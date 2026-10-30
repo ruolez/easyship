@@ -5,14 +5,14 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   errEl.style.display = 'none';
   btn.disabled = true;
   try {
-    await api('/api/auth/login', {
+    const me = await api('/api/auth/login', {
       method: 'POST',
       body: {
         username: document.getElementById('username').value,
         password: document.getElementById('password').value,
       },
     });
-    location.href = '/index.html';
+    location.href = me.home || '/index.html';
   } catch (err) {
     errEl.textContent = err.message;
     errEl.style.display = 'block';

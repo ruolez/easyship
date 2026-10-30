@@ -103,7 +103,9 @@ def enabled_for_user(user_id, role):
     active = enabled_providers()
     if role == "admin" or not user_id:
         return active
-    row = db.query("SELECT allowed_providers FROM users WHERE id = %s", (user_id,), one=True)
+    row = db.query("SELECT allowed_providers, can_ship FROM users WHERE id = %s", (user_id,), one=True)
+    if row and row.get("can_ship") is False:
+        return []
     allowed = (row or {}).get("allowed_providers")
     if not allowed:
         return active
@@ -177,10 +179,10 @@ def rename_instance(instance_id, label):
 
 
 def _restrictable_users():
-    """Users whose allow-list matters: active, non-admin, in id order."""
+    """Users whose allow-list matters: active, non-admin, shipping, in id order."""
     return db.query(
         "SELECT id, username, allowed_providers FROM users "
-        "WHERE is_active AND role <> 'admin' ORDER BY id"
+        "WHERE is_active AND role <> 'admin' AND can_ship ORDER BY id"
     ) or []
 
 

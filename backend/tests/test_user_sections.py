@@ -1,4 +1,3 @@
-import json
 import sys
 import types
 import unittest
@@ -30,39 +29,6 @@ class UserSectionsTest(unittest.TestCase):
             [self.run_case("admin", None), self.run_case("user", None), self.run_case("user", []),
              self.run_case("user", ["verify_override", "picklists", "bogus"])],
             [["picklists", "verify", "verify_override"], [], [], ["picklists", "verify_override"]])
-
-
-class SetUserSectionsRouteTest(unittest.TestCase):
-    def setUp(self):
-        app = Flask(__name__)
-        app.secret_key = "test"
-        app.register_blueprint(settings_api.bp)
-        self.client = app.test_client()
-        with self.client.session_transaction() as sess:
-            sess.update({"user_id": 1, "role": "admin"})
-        self.role = "user"
-        self.writes = []
-        self._orig = (settings_api.db.query, settings_api.db.execute)
-        settings_api.db.query = lambda sql, params=None, one=False: {"id": 7, "role": self.role}
-        settings_api.db.execute = lambda sql, params=None, returning=False: (
-            self.writes.append(params) if sql.lstrip().startswith("UPDATE users") else None)
-
-    def tearDown(self):
-        settings_api.db.query, settings_api.db.execute = self._orig
-
-    def put(self, sections):
-        return self.client.put("/api/users/7/sections", json={"allowed_sections": sections})
-
-    def test_grant_and_revoke(self):
-        granted = self.put(["picklists", "nope"])
-        revoked = self.put([])
-        self.assertEqual(
-            (granted.get_json()["allowed_sections"], revoked.get_json()["allowed_sections"], self.writes),
-            (["picklists"], [], [(json.dumps(["picklists"]), 7), (None, 7)]))
-
-    def test_admin_users_cannot_be_restricted(self):
-        self.role = "admin"
-        self.assertEqual((self.put([]).status_code, self.writes), (400, []))
 
 
 class PicklistSettingsValidationTest(unittest.TestCase):

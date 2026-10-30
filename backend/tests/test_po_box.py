@@ -12,6 +12,7 @@ sys.modules.setdefault("config", types.SimpleNamespace(
 
 from flask import Flask  # noqa: E402
 
+import auth  # noqa: E402
 import po_box  # noqa: E402
 import providers  # noqa: E402
 import shipments_api  # noqa: E402
@@ -98,6 +99,8 @@ class RatesRouteTest(unittest.TestCase):
     provider that fails while another quotes is reported rather than dropped."""
 
     def setUp(self):
+        self.addCleanup(setattr, auth, "user_ships", auth.user_ships)
+        auth.user_ships = lambda user_id, role: True  # access itself: test_user_access
         app = Flask(__name__)
         app.secret_key = "test"
         app.register_blueprint(shipments_api.bp)

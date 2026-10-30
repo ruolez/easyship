@@ -1,13 +1,13 @@
 from flask import Blueprint, jsonify
 
 import db
-from auth import login_required
+from auth import ship_required
 
 bp = Blueprint("reports", __name__, url_prefix="/api/reports")
 
 
 @bp.get("/summary")
-@login_required
+@ship_required
 def summary():
     by_user = db.query(
         """SELECT u.username, COUNT(*) AS labels, COALESCE(SUM(s.shipping_cost), 0) AS cost

@@ -808,7 +808,7 @@ function renderDone(already) {
   const failed = writebackFailed();
   const failure = [wb.shopify && wb.shopify.state === 'failed' ? wb.shopify.error : '',
     wb.dbadmin && wb.dbadmin.state === 'failed' ? wb.dbadmin.error : ''].filter(Boolean).join(' · ');
-  const ship = current.source === 'shopify' && current.shopify_order_id
+  const ship = current.source === 'shopify' && current.shopify_order_id && window.currentUser && window.currentUser.ships
     ? `/ship.html?source=shopify&store_id=${current.shopify_store_id}&order_id=${encodeURIComponent(current.shopify_order_id)}&order_name=${encodeURIComponent(current.order_name)}`
     : '';
   doneEl.innerHTML = `

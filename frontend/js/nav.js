@@ -14,12 +14,12 @@ const NAV_ICONS = {
 };
 
 const NAV_ITEMS = [
-  { page: 'scan', href: '/index.html', label: 'Scan', icon: 'scan' },
+  { page: 'scan', href: '/index.html', label: 'Scan', icon: 'scan', ship: true },
   { page: 'verify', href: '/verify.html', label: 'Verify', icon: 'verify', section: 'verify' },
   { page: 'orders', href: '/orders.html', label: 'Orders', icon: 'orders', adminOnly: true },
   { page: 'picklists', href: '/picklists.html', label: 'Pick lists', icon: 'picklists', section: 'picklists' },
-  { page: 'parcels', href: '/parcels.html', label: 'Parcels', icon: 'parcels' },
-  { page: 'manifests', href: '/manifests.html', label: 'Manifests', icon: 'manifests' },
+  { page: 'parcels', href: '/parcels.html', label: 'Parcels', icon: 'parcels', ship: true },
+  { page: 'manifests', href: '/manifests.html', label: 'Manifests', icon: 'manifests', ship: true },
   { page: 'settings', href: '/settings.html', label: 'Settings', icon: 'settings' },
 ];
 
@@ -54,7 +54,7 @@ async function initNav(activePage) {
       <button class="nav-provider-mini" id="nav-provider-mini" style="display:none" title="Shipping with"></button>
       <nav>
         ${NAV_ITEMS.map((i) => `
-          <a href="${i.href}" title="${i.label}" data-page="${i.page}" class="${i.page === activePage ? 'active' : ''}"${i.adminOnly || i.section ? ' style="display:none"' : ''}>
+          <a href="${i.href}" title="${i.label}" data-page="${i.page}" class="${i.page === activePage ? 'active' : ''}"${i.adminOnly || i.section || i.ship ? ' style="display:none"' : ''}>
             ${NAV_ICONS[i.icon]}<span class="label">${i.label}</span>
           </a>`).join('')}
       </nav>
@@ -88,12 +88,19 @@ async function initNav(activePage) {
     window.currentUser = me;
     const isAdmin = me.role === 'admin';
     const sections = me.sections || [];
-    NAV_ITEMS.filter((i) => i.adminOnly || i.section).forEach((i) => {
-      const allowed = isAdmin || (i.section && sections.includes(i.section));
+    let denied = false;
+    // A user who doesn't ship (e.g. only verifies) sees just their sections.
+    NAV_ITEMS.filter((i) => i.adminOnly || i.section || i.ship).forEach((i) => {
+      const allowed = isAdmin || (i.ship ? me.ships : !!i.section && sections.includes(i.section));
       const link = document.querySelector(`.sidebar nav a[data-page="${i.page}"]`);
       if (link) link.style.display = allowed ? '' : 'none';
-      if (!allowed && i.page === activePage) location.replace('/index.html');
+      if (!allowed && i.page === activePage) denied = true;
     });
+    if (denied) {
+      location.replace(me.home || '/index.html');
+      return new Promise(() => {}); // the page's own code never starts
+    }
+    if (!me.ships) return;
   } catch {
     return; // api() already redirected to login
   }

@@ -12,6 +12,7 @@ sys.modules.setdefault("config", types.SimpleNamespace(EASYSHIP_BASE_URLS={}, LA
 from flask import Flask, session  # noqa: E402
 from werkzeug.security import check_password_hash  # noqa: E402
 
+import auth  # noqa: E402
 import providers  # noqa: E402
 import settings_api  # noqa: E402
 
@@ -39,6 +40,8 @@ class FakeProvider:
 
 class AvailableServicesTest(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(setattr, auth, "user_ships", auth.user_ships)
+        auth.user_ships = lambda user_id, role: True  # access itself: test_user_access
         self.app = Flask(__name__)
         self.app.secret_key = "test"
         self.app.register_blueprint(settings_api.bp)

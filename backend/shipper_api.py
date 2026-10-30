@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 import shipper
-from auth import login_required
+from auth import ship_required
 from backoffice import BackofficeError
 from util import api_error
 
@@ -9,7 +9,7 @@ bp = Blueprint("shipper", __name__, url_prefix="/api/shipper")
 
 
 @bp.get("/check")
-@login_required
+@ship_required
 def check():
     source = request.args.get("source")
     number = (request.args.get("number") or "").strip()

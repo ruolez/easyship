@@ -11,7 +11,7 @@ import picklist_rules
 import profit
 import providers
 import tag_rules
-from auth import admin_required, login_required, sanitize_sections
+from auth import admin_required, login_required, sanitize_sections, ship_required
 from providers.base import ProviderError
 from util import CENTRAL, api_error, audit, central_time
 
@@ -212,14 +212,14 @@ def put_settings():
 
 
 @bp.get("/settings/easyship-mode")
-@login_required
+@ship_required
 def easyship_mode():
     # Kept for the nav badge; now reports the aggregate environment.
     return jsonify({"mode": _aggregate_mode()})
 
 
 @bp.get("/settings/client")
-@login_required
+@ship_required
 def client_settings():
     """Non-secret settings any logged-in user's UI needs."""
     return jsonify({
@@ -507,7 +507,7 @@ def _item_categories(provider):
 
 
 @bp.get("/providers/<name>/item-categories")
-@login_required
+@ship_required
 def provider_item_categories(name):
     return jsonify(_item_categories(_provider_or_404(name)))
 
@@ -543,7 +543,7 @@ def provider_carriers(name):
 
 
 @bp.get("/providers/<name>/services/available")
-@login_required
+@ship_required
 def provider_available_services(name):
     """Services a packer can pick from (Auto Mode preset): the catalog minus
     the admin's exclusions. Providers without a catalog return an empty list."""
@@ -592,7 +592,7 @@ def provider_test(name):
 # ---------- Back-compat aliases (Easyship) ----------
 
 @bp.get("/settings/easyship-categories")
-@login_required
+@ship_required
 def easyship_categories():
     return jsonify(_item_categories(_provider_or_404("easyship")))
 
@@ -618,7 +618,7 @@ def test_easyship():
 # ---------- Box sizes ----------
 
 @bp.get("/boxes")
-@login_required
+@ship_required
 def list_boxes():
     rows = db.query(
         """SELECT id, name, length, width, height, is_active FROM boxes
@@ -758,7 +758,7 @@ def test_store(store_id):
 @admin_required
 def list_users():
     rows = db.query(
-        "SELECT id, username, role, is_active, allowed_providers, allowed_sections, created_at"
+        "SELECT id, username, role, is_active, can_ship, allowed_providers, allowed_sections, created_at"
         " FROM users ORDER BY id"
     )
     return jsonify([{**r, "created_at": r["created_at"].isoformat()} for r in rows])
@@ -776,16 +776,20 @@ def create_user():
     existing = db.query("SELECT id FROM users WHERE username = %s", (username,), one=True)
     if existing:
         return api_error("Username already exists")
-    allowed = providers.sanitize_allowed(data.get("allowed_providers")) if role == "user" else None
-    sections = sanitize_sections(data.get("allowed_sections")) if role == "user" else []
+    ships, allowed, sections = True, None, []
+    if role == "user":
+        try:
+            ships, allowed, sections = _user_access(data)
+        except ValueError as e:
+            return api_error(str(e))
     row = db.execute(
-        """INSERT INTO users (username, password_hash, role, allowed_providers, allowed_sections)
-           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-        (username, generate_password_hash(password), role, json.dumps(allowed) if allowed else None,
+        """INSERT INTO users (username, password_hash, role, can_ship, allowed_providers, allowed_sections)
+           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+        (username, generate_password_hash(password), role, ships, json.dumps(allowed) if allowed else None,
          json.dumps(sections) if sections else None),
         returning=True,
     )
-    audit("user.create", {"username": username, "role": role, "allowed_providers": allowed,
+    audit("user.create", {"username": username, "role": role, "can_ship": ships, "allowed_providers": allowed,
                           "allowed_sections": sections})
     return jsonify({"id": row["id"]})
 
@@ -808,48 +812,42 @@ def activate_user(user_id):
     return jsonify({"ok": True})
 
 
-@bp.put("/users/<int:user_id>/providers")
+def _user_access(data):
+    """(ships, allowed_providers, allowed_sections) for a non-admin user from a
+    request body. No shipping account checked = the user does not ship (e.g.
+    only verifies orders), which needs at least one section."""
+    keys = providers.instance_keys()
+    requested = [n for n in data.get("allowed_providers") or [] if str(n) in keys]
+    sections = sanitize_sections(data.get("allowed_sections"))
+    if not requested and not sections:
+        raise ValueError("Give the user at least one shipping account or one section — "
+                         "to remove all access, deactivate the user")
+    if not requested:
+        return False, None, sections
+    return True, providers.sanitize_allowed(requested), sections
+
+
+@bp.put("/users/<int:user_id>/access")
 @admin_required
-def set_user_providers(user_id):
-    """Assign which shipping accounts a user may ship with. Every account
-    selected = unrestricted; admins are never restricted. An empty selection
-    is refused — there is no 'no accounts' state; deactivate the user instead."""
+def set_user_access(user_id):
+    """Shipping accounts and sections, saved together. Every account checked =
+    unrestricted; none = the user does not ship. Admins are never restricted."""
     row = db.query("SELECT id, role, username FROM users WHERE id = %s", (user_id,), one=True)
     if not row:
         return api_error("User not found", 404)
     if row["role"] == "admin":
-        return api_error("Admins always have access to every integration")
-    data = request.get_json(silent=True) or {}
-    requested = data.get("allowed_providers") or []
-    if not any(str(n) in providers.instance_keys() for n in requested):
-        return api_error(f"{row['username']} {providers.NO_ACCOUNT_LEFT}")
-    allowed = providers.sanitize_allowed(requested)
+        return api_error("Admins always have access to everything")
+    try:
+        ships, allowed, sections = _user_access(request.get_json(silent=True) or {})
+    except ValueError as e:
+        return api_error(str(e))
     db.execute(
-        "UPDATE users SET allowed_providers = %s WHERE id = %s",
-        (json.dumps(allowed) if allowed else None, user_id),
+        "UPDATE users SET can_ship = %s, allowed_providers = %s, allowed_sections = %s WHERE id = %s",
+        (ships, json.dumps(allowed) if allowed else None, json.dumps(sections) if sections else None, user_id),
     )
-    audit("user.providers", {"id": user_id, "allowed_providers": allowed})
-    return jsonify({"ok": True, "allowed_providers": allowed})
-
-
-@bp.put("/users/<int:user_id>/sections")
-@admin_required
-def set_user_sections(user_id):
-    """Which extra sections (e.g. Pick lists) a user may open. Admins always
-    have every section; an empty selection removes them all."""
-    row = db.query("SELECT id, role FROM users WHERE id = %s", (user_id,), one=True)
-    if not row:
-        return api_error("User not found", 404)
-    if row["role"] == "admin":
-        return api_error("Admins always have access to every section")
-    data = request.get_json(silent=True) or {}
-    sections = sanitize_sections(data.get("allowed_sections"))
-    db.execute(
-        "UPDATE users SET allowed_sections = %s WHERE id = %s",
-        (json.dumps(sections) if sections else None, user_id),
-    )
-    audit("user.sections", {"id": user_id, "allowed_sections": sections})
-    return jsonify({"ok": True, "allowed_sections": sections})
+    detail = {"id": user_id, "can_ship": ships, "allowed_providers": allowed, "allowed_sections": sections}
+    audit("user.access", detail)
+    return jsonify({"ok": True, **{k: v for k, v in detail.items() if k != "id"}})
 
 
 @bp.put("/users/<int:user_id>/password")

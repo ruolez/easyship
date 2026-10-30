@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 import tag_rules
-from auth import admin_required, login_required
+from auth import admin_required, ship_required
 from shopify_client import ShopifyError, find_order_by_number, get_order, list_open_orders
 from util import api_error
 
@@ -9,7 +9,7 @@ bp = Blueprint("shopify", __name__, url_prefix="/api/shopify")
 
 
 @bp.get("/lookup")
-@login_required
+@ship_required
 def lookup():
     store_id = request.args.get("store_id", type=int)
     number = (request.args.get("number") or "").strip()
@@ -39,7 +39,7 @@ def orders():
 
 
 @bp.get("/orders/<path:order_gid>")
-@login_required
+@ship_required
 def order_detail(order_gid):
     store_id = request.args.get("store_id", type=int)
     if not store_id:

@@ -15,7 +15,7 @@ from flask import Blueprint, jsonify, request, send_file, session
 import config
 import db
 import providers
-from auth import login_required
+from auth import ship_required
 from providers.base import ProviderError
 from shipments_api import LIST_SELECT, _row_to_json
 from util import api_error, audit, central_time
@@ -78,7 +78,7 @@ def _manifest_json(row):
 
 
 @bp.get("/eligible")
-@login_required
+@ship_required
 def eligible():
     name = (request.args.get("provider") or "").strip()
     provider, err = _user_provider(name)
@@ -95,7 +95,7 @@ def eligible():
 
 
 @bp.get("")
-@login_required
+@ship_required
 def list_manifests():
     limit = min(int(request.args.get("limit") or 100), 500)
     rows = db.query(MANIFEST_SELECT + " ORDER BY m.created_at DESC LIMIT %s", (limit,))
@@ -103,7 +103,7 @@ def list_manifests():
 
 
 @bp.post("")
-@login_required
+@ship_required
 def create_manifest():
     data = request.get_json(silent=True) or {}
     name = (data.get("provider") or "").strip()
@@ -232,7 +232,7 @@ def _store_results(mid, name, provider_label, results, claimed):
 
 
 @bp.get("/<int:manifest_id>/document")
-@login_required
+@ship_required
 def get_document(manifest_id):
     row = db.query("SELECT * FROM manifests WHERE id = %s", (manifest_id,), one=True)
     if not row or not row["document_path"]:

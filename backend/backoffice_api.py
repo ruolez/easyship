@@ -2,7 +2,7 @@ import pymssql
 from flask import Blueprint, jsonify, request
 
 import db
-from auth import admin_required, login_required
+from auth import admin_required, ship_required
 from backoffice import (
     BackofficeError,
     find_invoice_id_by_number,
@@ -19,7 +19,7 @@ MASK = "••••••••"
 # ---------- BackOffice database connections (admin CRUD) ----------
 
 @bp.get("/backoffice-dbs")
-@login_required
+@ship_required
 def list_dbs():
     rows = db.query(
         """SELECT id, name, host, port, db_name, username, prefix, no_company, is_active
@@ -131,7 +131,7 @@ def invoices(db_id):
 
 
 @bp.get("/backoffice/<int:db_id>/invoices/<int:invoice_id>")
-@login_required
+@ship_required
 def invoice_detail(db_id, invoice_id):
     try:
         return jsonify(get_invoice(db_id, invoice_id))
@@ -140,7 +140,7 @@ def invoice_detail(db_id, invoice_id):
 
 
 @bp.get("/backoffice/<int:db_id>/lookup")
-@login_required
+@ship_required
 def lookup(db_id):
     number = (request.args.get("number") or "").strip()
     if not number:
