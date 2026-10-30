@@ -3104,10 +3104,21 @@ body.with-sidebar .vf-actions { left: var(--sidebar-rail-w); }
 .vf-done-error { margin-top: 8px; color: var(--error); font-size: 14px; overflow-wrap: anywhere; }
 .vf-done-hint { display: flex; justify-content: center; margin: 22px 0 12px; }
 .vf-done-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.vf-next { position: relative; overflow: hidden; min-width: 200px; }
+.vf-next-label { position: relative; font-variant-numeric: tabular-nums; }
+.vf-next-fill {
+  position: absolute; inset: 0; background: rgba(255, 255, 255, 0.24); transform-origin: left;
+  animation: vf-countdown linear forwards;
+}
+.vf-next-fill[hidden] { display: none; }
+@keyframes vf-countdown { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.vf-stay { margin-top: 10px; }
+.vf-stay[hidden] { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .vf-scan-laser, .vf-ready i, .vf-last.pop, .vf-nudge, .vf-done-check { animation: none !important; }
+  .vf-scan-laser, .vf-ready i, .vf-last.pop, .vf-nudge, .vf-done-check, .vf-next-fill { animation: none !important; }
   .vf-done-check svg { animation: none; stroke-dashoffset: 0; }
+  .vf-next-fill { display: none; }
 }
 
 /* bottom sheet */

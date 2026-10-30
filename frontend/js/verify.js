@@ -5,6 +5,7 @@
    that must be tapped away for a wrong one. */
 const OPEN_KEY = 'easyship.verifyOpen';
 const RETRY_DELAYS_MS = [600, 1500];
+const AUTO_NEXT_MS = 3000;
 const svg = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
 const ICON_X = svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>');
 const ICON_BANG = svg('<path d="M12 6v8"/><path d="M12 18.5v.01"/>');
@@ -33,6 +34,7 @@ let banner = null;
 const openGroups = new Set(); // folded line groups the packer opened
 const queue = [];
 let pumping = false;
+let autoNext = null; // { endsAt, timer } while the done screen counts down to the next order
 
 const scanner = createScanCapture({ onScan: (code) => onScan(code) });
 
@@ -306,6 +308,7 @@ function announceScan(scan, code) {
 /* ---------- opening an order ---------- */
 
 async function openOrder(number) {
+  stopAutoNext();
   blocker = 'opening';
   openingNumber = number;
   renderReady();
@@ -369,6 +372,7 @@ function applyState(res) {
 }
 
 function showStart() {
+  stopAutoNext();
   current = null;
   lastScan = null;
   try { sessionStorage.removeItem(OPEN_KEY); } catch { /* private mode */ }
@@ -743,6 +747,51 @@ function showDone(already) {
   doneEl.dataset.already = already ? '1' : '';
   renderDone(already);
   doneEl.hidden = false;
+  if (!already && !writebackFailed()) startAutoNext();
+}
+
+function writebackFailed() {
+  const wb = current.writebacks || {};
+  return (wb.shopify && wb.shopify.state === 'failed') || (wb.dbadmin && wb.dbadmin.state === 'failed');
+}
+
+function startAutoNext() {
+  stopAutoNext();
+  autoNext = { endsAt: Date.now() + AUTO_NEXT_MS, timer: setInterval(renderAutoNext, 200) };
+  renderAutoNext();
+}
+
+function stopAutoNext() {
+  if (!autoNext) return;
+  clearInterval(autoNext.timer);
+  autoNext = null;
+  renderAutoNext();
+}
+
+function renderAutoNext() {
+  const next = document.getElementById('vf-next');
+  if (!next) return;
+  const label = next.querySelector('.vf-next-label');
+  const fill = next.querySelector('.vf-next-fill');
+  const stay = document.getElementById('vf-stay');
+  if (!autoNext) {
+    label.textContent = 'Next order';
+    fill.hidden = true;
+    stay.hidden = true;
+    return;
+  }
+  const left = autoNext.endsAt - Date.now();
+  if (left <= 0) {
+    showStart();
+    return;
+  }
+  label.textContent = `Next order in ${Math.ceil(left / 1000)}`;
+  if (fill.hidden) {
+    fill.style.animationDuration = `${AUTO_NEXT_MS}ms`;
+    fill.style.animationDelay = `${left - AUTO_NEXT_MS}ms`;
+    fill.hidden = false;
+  }
+  stay.hidden = false;
 }
 
 function renderDone(already) {
@@ -756,7 +805,7 @@ function renderDone(already) {
   };
   if (current.source === 'shopify') chips.push(chip(wb.shopify.state, 'Shopify tagged “Checked”', wb.shopify.error));
   if (current.source === 'backoffice') chips.push(chip(wb.dbadmin.state, 'Checker saved in DB_Admin', wb.dbadmin.error));
-  const failed = (wb.shopify && wb.shopify.state === 'failed') || (wb.dbadmin && wb.dbadmin.state === 'failed');
+  const failed = writebackFailed();
   const failure = [wb.shopify && wb.shopify.state === 'failed' ? wb.shopify.error : '',
     wb.dbadmin && wb.dbadmin.state === 'failed' ? wb.dbadmin.error : ''].filter(Boolean).join(' · ');
   const ship = current.source === 'shopify' && current.shopify_order_id
@@ -773,12 +822,16 @@ function renderDone(already) {
       ${failed ? `<div class="vf-done-error">${esc(failure)} <button class="btn btn-text" id="vf-wb-retry">Retry</button></div>` : ''}
       <p class="vf-done-hint"><span class="vf-ready ready"><i aria-hidden="true"></i>Scan the next order</span></p>
       <div class="vf-done-actions">
-        <button class="btn btn-primary vf-big" id="vf-next">Next order</button>
+        <button class="btn btn-primary vf-big vf-next" id="vf-next"><span class="vf-next-fill" hidden></span><span class="vf-next-label">Next order</span></button>
         ${already ? '<button class="btn btn-outlined vf-big" id="vf-again">Verify again</button>' : ''}
         ${ship ? `<a class="btn btn-outlined vf-big vf-desktop-only" href="${ship}">Ship now</a>` : ''}
       </div>
+      <button class="btn btn-text vf-stay" id="vf-stay" hidden>Stay on this screen</button>
     </div>`;
+  if (failed) stopAutoNext();
+  renderAutoNext();
   document.getElementById('vf-next').addEventListener('click', showStart);
+  document.getElementById('vf-stay').addEventListener('click', stopAutoNext);
   const again = document.getElementById('vf-again');
   if (again) again.addEventListener('click', () => confirmSheet('Verify this order again?', 'Counts start from zero. The earlier verification stays in History.', 'Verify again', resetOrder));
   const retry = document.getElementById('vf-wb-retry');
