@@ -1118,7 +1118,7 @@ function instanceOptionText(p) {
 
 const PLATFORM_MARKS = {
   easyship: ['ES', '#0891b2'], easypost: ['EP', '#2563eb'], shippo: ['SH', '#16a34a'],
-  shipstation: ['SS', '#d97706'], endicia: ['EN', '#9333ea'],
+  shipstation: ['SS', '#d97706'], endicia: ['EN', '#9333ea'], speedee: ['SD', '#dc2626'],
 };
 
 function platformMark(p, cls = '') {
@@ -1480,7 +1480,7 @@ function fieldHtml(f) {
       .map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
     return `<div class="field">${label}<select id="${esc(f.key)}">${opts}</select>${hint}</div>`;
   }
-  return `<div class="field">${label}<input id="${esc(f.key)}">${hint}</div>`;
+  return `<div class="field"${f.mode ? ` data-mode="${esc(f.mode)}"` : ''}>${label}<input id="${esc(f.key)}">${hint}</div>`;
 }
 
 const MODE_TEXT = {
@@ -1590,7 +1590,9 @@ function wireProviderCard(p) {
       const mode = modeEl ? (modeEl.value || (p.modes[0] && p.modes[0].value)) : undefined;
       const tokenField = p.fields.find((f) => f.type === 'secret' && f.mode === mode);
       const token = tokenField ? document.getElementById(tokenField.key).value : undefined;
-      testResult(`test-result-${p.name}`, api(p.test_endpoint, { method: 'POST', body: { mode, token } }));
+      const userField = p.fields.find((f) => f.test_param === 'username' && f.mode === mode);
+      const username = userField ? document.getElementById(userField.key).value : undefined;
+      testResult(`test-result-${p.name}`, api(p.test_endpoint, { method: 'POST', body: { mode, token, username } }));
     });
   }
   if (p.supports && p.supports.service_exclusions) {

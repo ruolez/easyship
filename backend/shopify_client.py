@@ -801,6 +801,7 @@ SHOPIFY_TRACKING_COMPANIES = (
     ("canadapost", "Canada Post"),
     ("ontrac", "OnTrac"),
     ("lasership", "Lasership"),
+    ("speedee", "Spee-Dee Delivery"),  # not on Shopify's list — sent with tracking URLs
 )
 
 
@@ -813,7 +814,24 @@ def tracking_company(umbrella_name, courier_name):
     return courier_name or "Other"
 
 
-def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_numbers=None, umbrella_name=None):
+def _with_urls(tracking_info, tracking_url):
+    """Add tracking links for a carrier Shopify cannot link by name; the URL
+    list lines up with the numbers."""
+    if not tracking_url:
+        return tracking_info
+    numbers = tracking_info.get("numbers") or ([tracking_info["number"]] if tracking_info.get("number") else [])
+    urls = [tracking_url(n) for n in numbers]
+    if not numbers or not all(urls):
+        return tracking_info
+    if "numbers" in tracking_info:
+        return {**tracking_info, "urls": urls}
+    return {**tracking_info, "url": urls[0]}
+
+
+def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_numbers=None, umbrella_name=None,
+                  tracking_url=None):
+    """`tracking_url` maps a number to its public link, for carriers Shopify
+    cannot link by name (None otherwise)."""
     company = tracking_company(umbrella_name, courier_name)
     data = _graphql(store_id, FULFILLMENT_ORDERS_QUERY, {"id": order_gid})
     order = data.get("order")
@@ -831,6 +849,7 @@ def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_number
         tracking_info["numbers"] = all_numbers
     else:
         tracking_info["number"] = tracking_number
+    tracking_info = _with_urls(tracking_info, tracking_url)
     fulfillment = {
         "lineItemsByFulfillmentOrder": [{"fulfillmentOrderId": fo["id"]} for fo in open_fos],
         "trackingInfo": tracking_info,
@@ -849,7 +868,7 @@ def fulfill_order(store_id, order_gid, tracking_number, courier_name, all_number
         # lands in _append_tracking, which merges the missing numbers back in.
         _update_tracking(
             store_id, created["id"],
-            {"company": company, "numbers": list(all_numbers)},
+            _with_urls({"company": company, "numbers": list(all_numbers)}, tracking_url),
             notify=False,
         )
     return created

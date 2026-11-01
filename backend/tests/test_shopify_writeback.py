@@ -61,6 +61,7 @@ class TrackingCompanyTest(unittest.TestCase):
         ("DHL eCommerce", "DHL SmartMail Parcel", "DHL eCommerce"),
         ("Canada Post", "Expedited Parcel", "Canada Post"),
         ("OnTrac", "OnTrac Ground", "OnTrac"),
+        ("Spee-Dee", "Spee-Dee Parcel", "Spee-Dee Delivery"),
         ("Dummy", "Dummy - QrCode", "Dummy - QrCode"),
         (None, None, "Other"),
     ]
@@ -92,6 +93,26 @@ class FulfillOrderTest(unittest.TestCase):
             "trackingInfoInput": {"company": "UPS", "numbers": ["A", "B", "C"]},
             "notifyCustomer": False,
         })
+
+    def test_multi_box_sends_a_tracking_url_per_number_when_given(self):
+        fake = shopify_client._graphql = FakeGraphql()
+        link = "https://track.test/?n={}".format
+        shopify_client.fulfill_order(STORE, ORDER, "A", "Spee-Dee Parcel", all_numbers=["A", "B"],
+                                     umbrella_name="Spee-Dee", tracking_url=link)
+        expected = {"company": "Spee-Dee Delivery", "numbers": ["A", "B"], "urls": [link("A"), link("B")]}
+        (_, create_vars), = fake.named("fulfillmentCreate")
+        (_, update_vars), = fake.named("fulfillmentTrackingInfoUpdate")
+        self.assertEqual((create_vars["fulfillment"]["trackingInfo"], update_vars["trackingInfoInput"]),
+                         (expected, expected))
+
+    def test_single_box_sends_one_url_when_given(self):
+        fake = shopify_client._graphql = FakeGraphql()
+        link = "https://track.test/?n={}".format
+        shopify_client.fulfill_order(STORE, ORDER, "A", "Spee-Dee Parcel", all_numbers=["A"],
+                                     umbrella_name="Spee-Dee", tracking_url=link)
+        (_, create_vars), = fake.named("fulfillmentCreate")
+        self.assertEqual(create_vars["fulfillment"]["trackingInfo"],
+                         {"company": "Spee-Dee Delivery", "number": "A", "url": link("A")})
 
     def test_single_box_sends_one_number_and_skips_the_reassert(self):
         fake = shopify_client._graphql = FakeGraphql()

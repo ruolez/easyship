@@ -2,6 +2,28 @@ initNav('manifests');
 
 let eligibleRows = [];
 const selected = new Set();
+let carrier = 'USPS';
+
+// USPS issues one SCAN-form barcode; carriers without a manifest API get a
+// summary sheet this app prints for the driver to sign.
+function carrierText() {
+  if (carrier === 'USPS') {
+    return {
+      sub: 'USPS end-of-day SCAN forms — one barcode for the whole pickup',
+      confirm: 'USPS gets one barcode covering all of them — the driver scans it at pickup.',
+    };
+  }
+  return {
+    sub: `${carrier} pickup summary sheet — every package listed, signed by the driver`,
+    confirm: `A summary sheet lists every package and the total count — the ${carrier} driver checks it against the pickup and signs it.`,
+  };
+}
+
+function setCarrier(name) {
+  carrier = name || 'USPS';
+  document.getElementById('manifest-sub').textContent = carrierText().sub;
+  document.getElementById('eligible-title').textContent = `Today's ${carrier} parcels`;
+}
 
 function orderRef(s) {
   return s.shopify_order_name || s.backoffice_invoice_number || `#${s.id}`;
@@ -22,7 +44,7 @@ function renderEligible(message) {
   const empty = document.getElementById('eligible-empty');
   if (!eligibleRows.length) {
     tbody.innerHTML = '';
-    empty.textContent = message || 'No USPS parcels from today are waiting for a manifest.';
+    empty.textContent = message || `No ${carrier} parcels from today are waiting for a manifest.`;
     empty.style.display = '';
     updateToolbar();
     return;
@@ -55,11 +77,12 @@ async function loadEligible() {
   }
   try {
     const res = await api(`/api/manifests/eligible?provider=${encodeURIComponent(provider)}`);
+    setCarrier(res.carrier);
     eligibleRows = res.supported ? res.shipments : [];
     [...selected].forEach((id) => {
       if (!eligibleRows.some((s) => s.id === id)) selected.delete(id);
     });
-    renderEligible(res.supported ? '' : 'This shipping provider does not support USPS manifests.');
+    renderEligible(res.supported ? '' : 'This shipping provider does not support manifests.');
   } catch (err) {
     eligibleRows = [];
     selected.clear();
@@ -109,8 +132,8 @@ async function generate() {
   const backdrop = document.getElementById('modal-backdrop');
   document.getElementById('modal').innerHTML = `
     <h3>Generate manifest</h3>
-    <p>Create a USPS manifest for <strong>${ids.length}</strong> parcel${ids.length > 1 ? 's' : ''}?</p>
-    <p class="text-secondary" style="margin-top:8px">USPS gets one barcode covering all of them — the driver scans it at pickup. Parcels on a manifest cannot be added to another one.</p>
+    <p>Create a ${esc(carrier)} manifest for <strong>${ids.length}</strong> parcel${ids.length > 1 ? 's' : ''}?</p>
+    <p class="text-secondary" style="margin-top:8px">${esc(carrierText().confirm)} Parcels on a manifest cannot be added to another one.</p>
     <div class="actions">
       <button class="btn btn-text" id="m-cancel">Cancel</button>
       <button class="btn btn-primary" id="m-confirm">Generate</button>

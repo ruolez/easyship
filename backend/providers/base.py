@@ -190,6 +190,8 @@ class ShippingProvider(ABC):
     platform: str
     label: str
     modes: tuple = ()  # e.g. ("sandbox", "production"); empty if the provider has no environments
+    manifest_carrier = "USPS"  # carrier named on this platform's manifests
+    manifests_every_label = False  # True when every label is manifestable, not just USPS ones
 
     def __init__(self, key=None, label=None):
         self.name = key or self.platform
@@ -246,6 +248,11 @@ class ShippingProvider(ABC):
     def get_raw_shipment(self, provider_shipment_id):
         """Optional diagnostic: the raw provider payload for a shipment."""
         raise ProviderError("Raw shipment view not supported by this provider")
+
+    def tracking_url(self, number):
+        """Public tracking link for a number, for carriers Shopify cannot link
+        by name; None leaves it to Shopify."""
+        return None
 
     # ---- end-of-day manifests (USPS SCAN forms) ----
     def supports_manifests(self):

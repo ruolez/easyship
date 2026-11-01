@@ -9,10 +9,10 @@
 <body>
   <header id="appbar"></header>
   <div class="container wide">
-    <div class="page-head"><h1>Manifests</h1><span class="sub">USPS end-of-day SCAN forms — one barcode for the whole pickup</span></div>
+    <div class="page-head"><h1>Manifests</h1><span class="sub" id="manifest-sub">USPS end-of-day SCAN forms — one barcode for the whole pickup</span></div>
 
     <div class="card">
-      <h2>Today's USPS parcels
+      <h2><span id="eligible-title">Today's USPS parcels</span>
         <span class="text-secondary" id="selected-count" style="text-transform:none;letter-spacing:0"></span>
         <span style="margin-left:auto;display:inline-flex;gap:8px">
           <button class="btn btn-outlined btn-small" id="refresh-eligible">Refresh</button>

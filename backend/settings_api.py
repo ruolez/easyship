@@ -583,8 +583,11 @@ def provider_test(name):
     if not provider:
         return api_error("Unknown provider", 404)
     data = request.get_json(silent=True) or {}
+    # Extra test params only for providers whose fields declare them, so the
+    # others keep their (mode, token) signature.
+    extra = {"username": data["username"]} if data.get("username") else {}
     try:
-        return jsonify(provider.test_connection(mode=data.get("mode"), token=data.get("token")))
+        return jsonify(provider.test_connection(mode=data.get("mode"), token=data.get("token"), **extra))
     except ProviderError as e:
         return api_error(str(e))
 

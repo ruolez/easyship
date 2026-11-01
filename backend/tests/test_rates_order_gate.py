@@ -33,8 +33,10 @@ ECON = profit.compute_economics(
 class FakeProvider:
     name = "fake"
     label = "Fake"
+    seen_options = []
 
     def create_draft_shipments(self, destination, parcels, items, options=None):
+        FakeProvider.seen_options.append(options)
         return [DraftShipment("fake-draft")], [Rate(
             provider="fake", provider_service_id="svc-1", courier_name="Fake Ground",
             umbrella_name="Fake", total_charge=5.0, currency="USD", min_delivery_time=None,
@@ -124,6 +126,20 @@ class RatesOrderGateTest(unittest.TestCase):
             with self.subTest(source=source):
                 status, body = self._rates(source=source, order_id=None, invoice_id=7, db_id=1)
                 self.assertEqual((status, self.fetched, body["order_gate"]), (200, [], None))
+
+    def test_provider_gets_the_order_reference_but_it_is_not_stored(self):
+        FakeProvider.seen_options.clear()
+        status, body = self._rates(options={"signature": "adult"})
+        stored = [json.loads(params[13]) for sql, params in self.executed if "INSERT INTO shipments" in sql]
+        self.assertEqual((status, FakeProvider.seen_options, stored, body["options"]), (
+            200, [{"signature": "adult", "reference": "#1001"}],
+            [{"signature": "adult"}, {"signature": "adult"}], {"signature": "adult"}))
+
+    def test_backoffice_reference_is_the_invoice_number(self):
+        FakeProvider.seen_options.clear()
+        self._rates(source="backoffice", order_id=None, order_name=None, invoice_id=7, db_id=1,
+                    invoice_number="INV-55")
+        self.assertEqual(FakeProvider.seen_options[0]["reference"], "INV-55")
 
 
 if __name__ == "__main__":

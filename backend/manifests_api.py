@@ -1,4 +1,4 @@
-"""End-of-day manifests (USPS SCAN forms).
+"""End-of-day manifests (USPS SCAN forms, Spee-Dee pickup summary sheets).
 
 A manifest covers already-purchased labels: the packer selects today's USPS
 parcels, the provider issues one barcode document for the whole pickup, and
@@ -22,16 +22,19 @@ from util import api_error, audit, central_time
 
 bp = Blueprint("manifests", __name__, url_prefix="/api/manifests")
 
-# Which labeled shipments may go on a USPS manifest: today's (Central) USPS
-# labels for the chosen instance, not yet on a manifest. 'stamps' covers
-# ShipStation accounts whose USPS connection is named Stamps.com; 'endicia'
-# the Endicia-via-ShipStation instances, whose labels carry the alias.
+# Which labeled shipments may go on a manifest: today's (Central) labels for
+# the chosen instance, not yet on a manifest — USPS labels only, unless the
+# platform manifests every label (the second parameter, e.g. Spee-Dee).
+# 'stamps' covers ShipStation accounts whose USPS connection is named
+# Stamps.com; 'endicia' the Endicia-via-ShipStation instances, whose labels
+# carry the alias.
 ELIGIBLE_WHERE = """
     s.provider = %s
     AND s.status IN ('label_created', 'fulfilled')
     AND s.manifest_id IS NULL
     AND s.easyship_shipment_id IS NOT NULL
-    AND (s.courier_umbrella_name ILIKE '%%usps%%'
+    AND (%s
+         OR s.courier_umbrella_name ILIKE '%%usps%%'
          OR s.courier_umbrella_name ILIKE '%%stamps%%'
          OR s.courier_umbrella_name ILIKE '%%endicia%%'
          OR s.courier_name ILIKE '%%usps%%')
@@ -85,13 +88,14 @@ def eligible():
     if err:
         return err
     if not provider.supports_manifests():
-        return jsonify({"supported": False, "shipments": []})
+        return jsonify({"supported": False, "carrier": provider.manifest_carrier, "shipments": []})
     rows = db.query(
         LIST_SELECT + " WHERE " + ELIGIBLE_WHERE
         + " ORDER BY s.label_created_at DESC, s.box_number ASC",
-        (name,),
+        (name, provider.manifests_every_label),
     )
-    return jsonify({"supported": True, "shipments": [_row_to_json(r) for r in rows]})
+    return jsonify({"supported": True, "carrier": provider.manifest_carrier,
+                    "shipments": [_row_to_json(r) for r in rows]})
 
 
 @bp.get("")
@@ -111,7 +115,7 @@ def create_manifest():
     if err:
         return err
     if not provider.supports_manifests():
-        return api_error(f"{provider.label} does not support USPS manifests")
+        return api_error(f"{provider.label} does not support manifests")
     try:
         requested = sorted({int(i) for i in data.get("shipment_ids") or []})
     except (TypeError, ValueError):
@@ -121,29 +125,31 @@ def create_manifest():
 
     rows = db.query(
         "SELECT id, easyship_shipment_id FROM shipments s WHERE s.id = ANY(%s) AND " + ELIGIBLE_WHERE,
-        (requested, name),
+        (requested, name, provider.manifests_every_label),
     )
     found = {r["id"] for r in rows}
     missing = [f"#{i}" for i in requested if i not in found]
     if missing:
         return api_error(
-            "Not eligible for a manifest (already manifested, not USPS, no label, "
-            "or not from today): " + ", ".join(missing)
+            f"Not eligible for a manifest (already manifested, not {provider.manifest_carrier}, "
+            "no label, or not from today): " + ", ".join(missing)
         )
 
-    # A multi-box ShipStation group shares one label id across its rows — pull
-    # in every sibling so a label is never half-manifested.
-    provider_ids = sorted({r["easyship_shipment_id"] for r in rows})
+    # A multi-box group can share one provider object across its rows — one
+    # ShipStation label id, or one Spee-Dee order ('<order>#<box>') — so pull
+    # in every labeled sibling and a label/order is never half-manifested.
+    base_ids = sorted({r["easyship_shipment_id"].partition("#")[0] for r in rows})
     claim_ids = sorted({r["id"] for r in db.query(
         """SELECT id FROM shipments
-           WHERE provider = %s AND easyship_shipment_id = ANY(%s) AND manifest_id IS NULL""",
-        (name, provider_ids),
+           WHERE provider = %s AND split_part(easyship_shipment_id, '#', 1) = ANY(%s)
+             AND status IN ('label_created', 'fulfilled') AND manifest_id IS NULL""",
+        (name, base_ids),
     )})
 
     mrow = db.execute(
         """INSERT INTO manifests (provider, provider_label, carrier, shipment_count, status, created_by)
-           VALUES (%s, %s, 'USPS', %s, 'creating', %s) RETURNING id""",
-        (name, provider.label, len(claim_ids), session["user_id"]),
+           VALUES (%s, %s, %s, %s, 'creating', %s) RETURNING id""",
+        (name, provider.label, provider.manifest_carrier, len(claim_ids), session["user_id"]),
         returning=True,
     )
     mid = mrow["id"]
@@ -174,7 +180,7 @@ def create_manifest():
             (str(e), mid))
         return api_error(str(e), 502)
 
-    manifest_ids = _store_results(mid, name, provider.label, results, claimed)
+    manifest_ids = _store_results(mid, name, provider.label, provider.manifest_carrier, results, claimed)
     audit("manifest.create", {
         "manifest_ids": manifest_ids,
         "provider": name,
@@ -191,7 +197,7 @@ def _rollback_manifest(mid):
     db.execute("DELETE FROM manifests WHERE id = %s", (mid,))
 
 
-def _store_results(mid, name, provider_label, results, claimed):
+def _store_results(mid, name, provider_label, carrier, results, claimed):
     """Persist the provider's manifest(s): the first fills the pre-created row;
     extras (a platform splitting by carrier account) get their own rows, with
     the covered shipments re-pointed at them."""
@@ -205,8 +211,8 @@ def _store_results(mid, name, provider_label, results, claimed):
         else:
             row = db.execute(
                 """INSERT INTO manifests (provider, provider_label, carrier, status, created_by)
-                   VALUES (%s, %s, 'USPS', 'creating', %s) RETURNING id""",
-                (name, provider_label, session["user_id"]),
+                   VALUES (%s, %s, %s, 'creating', %s) RETURNING id""",
+                (name, provider_label, carrier, session["user_id"]),
                 returning=True,
             )
             row_id = row["id"]

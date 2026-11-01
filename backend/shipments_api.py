@@ -228,6 +228,10 @@ def get_rates():
                 f"Selected shipping provider '{requested_provider}' is not enabled for your account")
         active_providers = chosen
 
+    # The order number rides to the provider (Spee-Dee prints it on the label)
+    # but is not part of the stored shipment options.
+    provider_options = {**options, "reference": str(
+        data.get("order_name") or data.get("invoice_number") or "").strip()}
     draft_ids_by_provider = {}
     all_rates = []
     had_rates = False
@@ -236,7 +240,7 @@ def get_rates():
     for provider in active_providers:
         try:
             drafts, rates, provider_warnings = provider.create_draft_shipments(
-                destination, parcels, items, options)
+                destination, parcels, items, provider_options)
         except ProviderError as e:
             provider_errors.append(f"{provider.label}: {e}")
             continue
@@ -897,6 +901,19 @@ def _ensure_shopify_order(rows):
     return order["id"]
 
 
+def _tracking_url_fn(provider_key):
+    """The provider's number -> tracking link mapping, for carriers Shopify
+    cannot link by name; None otherwise. A lookup problem only loses the link,
+    never the writeback."""
+    try:
+        provider = providers.get_provider(provider_key)
+        if provider is None or not provider.tracking_url("0"):
+            return None
+        return provider.tracking_url
+    except Exception:
+        return None
+
+
 def run_group_writebacks(group_id):
     """Write tracking for the WHOLE group once: box 1's number to the order's
     tracking field, the rest appended (BackOffice Notes / Shopify numbers)."""
@@ -919,11 +936,13 @@ def run_group_writebacks(group_id):
         try:
             import shopify_client
             order_gid = _ensure_shopify_order(rows)
+            tracking_url = _tracking_url_fn(primary.get("provider"))
             fulfillment = shopify_client.fulfill_order(
                 primary["shopify_store_id"], order_gid,
                 numbers[0], primary["courier_name"],
                 all_numbers=numbers,
                 umbrella_name=primary["courier_umbrella_name"],
+                **({"tracking_url": tracking_url} if tracking_url else {}),
             )
             for r in rows:
                 db.execute(
