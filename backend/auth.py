@@ -9,10 +9,26 @@ from util import api_error, audit
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
 
+def _signed_in():
+    """A remembered sign-in outlives the browser, so it is checked against
+    the users table: it ends once the user is deactivated and follows role
+    changes. A browser-session sign-in ends when the browser closes."""
+    if "user_id" not in session:
+        return False
+    if session.permanent:
+        row = db.query("SELECT role FROM users WHERE id = %s AND is_active", (session["user_id"],), one=True)
+        if not row:
+            session.clear()
+            return False
+        if session.get("role") != row["role"]:
+            session["role"] = row["role"]
+    return True
+
+
 def login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if "user_id" not in session:
+        if not _signed_in():
             return api_error("Not authenticated", 401)
         return f(*args, **kwargs)
 
@@ -22,7 +38,7 @@ def login_required(f):
 def admin_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if "user_id" not in session:
+        if not _signed_in():
             return api_error("Not authenticated", 401)
         if session.get("role") != "admin":
             return api_error("Admin access required", 403)
@@ -74,7 +90,7 @@ def home_page(ships, sections):
 def ship_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if "user_id" not in session:
+        if not _signed_in():
             return api_error("Not authenticated", 401)
         if not user_ships(session["user_id"], session.get("role")):
             return api_error("You don't have access to shipping", 403)
@@ -87,7 +103,7 @@ def section_required(section):
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
-            if "user_id" not in session:
+            if not _signed_in():
                 return api_error("Not authenticated", 401)
             if section not in user_sections(session["user_id"], session.get("role")):
                 return api_error(f"You don't have access to {SECTIONS[section]}", 403)
@@ -108,10 +124,12 @@ def login():
     )
     if not user or not check_password_hash(user["password_hash"], password):
         return api_error("Invalid username or password", 401)
+    session.clear()
+    session.permanent = bool(data.get("remember"))
     session["user_id"] = user["id"]
     session["username"] = user["username"]
     session["role"] = user["role"]
-    audit("auth.login")
+    audit("auth.login", {"remember": session.permanent})
     ships = user_ships(user["id"], user["role"])
     return jsonify({"id": user["id"], "username": user["username"], "role": user["role"],
                     "home": home_page(ships, user_sections(user["id"], user["role"]))})

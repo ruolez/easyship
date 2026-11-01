@@ -776,6 +776,16 @@ td { font-variant-numeric: tabular-nums; }
 .login-card .sub { text-align: center; color: var(--text-secondary); margin-bottom: 26px; font-size: 13px; }
 .login-card .field { margin-bottom: 14px; }
 .login-card .btn { width: 100%; margin-top: 10px; height: 40px; }
+.login-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.login-remember input { width: 15px; height: 15px; accent-color: var(--primary); margin: 0; }
 .login-error {
   background: var(--error-light);
   color: var(--error);

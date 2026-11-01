@@ -15,15 +15,16 @@
       <h1>EasyShip</h1>
       <div class="sub">Shipping label management</div>
       <div class="login-error" id="login-error"></div>
-      <form id="login-form">
+      <form id="login-form" method="post" action="/api/auth/login">
         <div class="field">
           <label for="username">Username</label>
-          <input type="text" id="username" autocomplete="username" required autofocus>
+          <input type="text" id="username" name="username" autocomplete="username" required autofocus>
         </div>
         <div class="field">
           <label for="password">Password</label>
-          <input type="password" id="password" autocomplete="current-password" required>
+          <input type="password" id="password" name="password" autocomplete="current-password" required>
         </div>
+        <label class="login-remember"><input type="checkbox" id="remember" checked> Keep me signed in</label>
         <button type="submit" class="btn btn-primary" id="login-btn">Sign in</button>
       </form>
     </div>

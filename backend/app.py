@@ -10,7 +10,8 @@ def create_app():
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
-        PERMANENT_SESSION_LIFETIME=60 * 60 * 12,
+        # "Keep me signed in"; each request pushes the expiry out again.
+        PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30,
     )
 
     db.run_migrations()
