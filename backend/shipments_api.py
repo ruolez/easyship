@@ -3,6 +3,7 @@ import os
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, current_app, jsonify, request, send_file, session
 from werkzeug.security import check_password_hash
@@ -24,6 +25,39 @@ from util import api_error, audit, central_time
 bp = Blueprint("shipments", __name__, url_prefix="/api/shipments")
 
 LABEL_MIMETYPES = {"pdf": "application/pdf", "png": "image/png", "zpl": "text/plain"}
+
+# Reads that overlap the provider's rating call (the Shopify order, Auto
+# Mode's verification check).
+_READS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="rates-read")
+
+
+def _ms(since):
+    return round((time.monotonic() - since) * 1000)
+
+
+def _background(fn, *args):
+    """Start fn(*args) on a worker thread with its own app context (so its own
+    db connection). The future's result is (value, ms)."""
+    app = current_app._get_current_object()
+
+    def run():
+        started = time.monotonic()
+        with app.app_context():
+            return fn(*args), _ms(started)
+    return _READS.submit(run)
+
+
+def _verify_subject(source, data):
+    """The shipments-row fields verify_gate.check reads, from a rates request."""
+    return {
+        "source": source,
+        "shopify_store_id": data.get("store_id"),
+        "shopify_order_id": data.get("order_id"),
+        "shopify_order_name": data.get("order_name"),
+        "backoffice_db_id": data.get("db_id"),
+        "backoffice_invoice_id": data.get("invoice_id"),
+        "backoffice_invoice_number": data.get("invoice_number"),
+    }
 
 
 # Parcel dims are JSON strings straight from <input type=number>; the regex
@@ -232,6 +266,14 @@ def get_rates():
     # but is not part of the stored shipment options.
     provider_options = {**options, "reference": str(
         data.get("order_name") or data.get("invoice_number") or "").strip()}
+    # The Shopify order (and, for Auto Mode, the verification) are read while
+    # the provider rates instead of after it.
+    order_read = (_background(shopify_client.get_order, data.get("store_id"), data["order_id"])
+                  if source == "shopify" and data.get("order_id") else None)
+    auto_buy = bool(data.get("auto_buy"))
+    verify_read = _background(verify_gate.check, _verify_subject(source, data)) if auto_buy else None
+    timings = {}
+    rating_started = time.monotonic()
     draft_ids_by_provider = {}
     all_rates = []
     had_rates = False
@@ -244,6 +286,7 @@ def get_rates():
         except ProviderError as e:
             provider_errors.append(f"{provider.label}: {e}")
             continue
+        timings["rate"] = _ms(rating_started)
         warnings.extend(provider_warnings)
         draft_ids_by_provider[provider.name] = [d.provider_shipment_id for d in drafts]
         excluded = provider.get_excluded_service_ids()
@@ -326,9 +369,9 @@ def get_rates():
     # not fully paid — rates are shown, the buy is refused) and the profit
     # check. The gate is snapshotted for a buy made while Shopify is down.
     order, order_error = None, None
-    if source == "shopify" and data.get("order_id"):
+    if order_read:
         try:
-            order = shopify_client.get_order(data.get("store_id"), data["order_id"])
+            order, timings["shopify"] = order_read.result()
         except Exception as e:
             order_error = str(e) or e.__class__.__name__
     gate = order["gate"] if order else None
@@ -353,7 +396,7 @@ def get_rates():
             "UPDATE shipments SET profit_check=%s, updated_at=now() WHERE id=%s",
             (json.dumps(profit.snapshot(economics, all_rates)), row_ids[0]),
         )
-    return jsonify({
+    body = {
         "group_id": group_id,
         "shipment_id": row_ids[0],
         "shipment_ids": row_ids,
@@ -364,7 +407,41 @@ def get_rates():
         "economics": economics,
         "order_gate": gate,
         "po_box": to_po_box,
-    })
+    }
+    if auto_buy:
+        body["auto_buy"] = _auto_buy(group_id, active_providers, all_rates, gate, verify_read, timings)
+        current_app.logger.info("auto ship %s timings ms: %s -> %s", group_id, timings,
+                                "bought" if body["auto_buy"]["started"] else body["auto_buy"].get("code"))
+    return jsonify(body)
+
+
+def _auto_buy(group_id, active_providers, all_rates, fresh_gate, verify_read, timings):
+    """Auto Mode: buy the preferred rate in the same request when nothing
+    needs the packer. The gates are a Buy click's, fed the order gate and
+    verification just read. A refusal leaves the rates to the normal flow."""
+    rate = next((r for r in all_rates if r["preferred"]), None)  # the cheapest, as the UI picks
+    if rate is None:
+        return {"started": False, "code": "no_preferred"}
+    if (rate.get("profit") or {}).get("below_threshold"):
+        return {"started": False, "code": "profit_gate"}  # the packer enters the bypass password
+    if fresh_gate and not fresh_gate["shippable"]:
+        return {"started": False, "code": "order_gate"}
+    verify_result = None
+    if verify_read:
+        try:
+            verify_result, timings["verify"] = verify_read.result()
+        except Exception:
+            verify_result = None  # checked again by the buy, which reports the error
+    provider = next(p for p in active_providers if p.name == rate["provider"])
+    started = time.monotonic()
+    payload, status = _start_group_buy(
+        group_id, _group_rows(group_id), {}, provider.name, provider.label,
+        rate["courier_service_id"], {k: v for k, v in rate.items() if k != "profit"},
+        fresh_gate=fresh_gate, verify_result=verify_result)
+    timings["buy_start"] = _ms(started)
+    if status != 200:
+        return {"started": False, **payload}
+    return {"started": True, "rate": rate}
 
 
 # ============================================================ group buy
@@ -431,27 +508,36 @@ def group_buy(group_id):
     if not chosen:
         return api_error(
             f"Shipping provider '{provider_name}' is not enabled for your account", 403)
-    provider_label = chosen[0].label
+    payload, status = _start_group_buy(group_id, rows, data, provider_name, chosen[0].label,
+                                       courier_service_id, rate)
+    return jsonify(payload), status
 
+
+def _start_group_buy(group_id, rows, data, provider_name, provider_label, courier_service_id, rate,
+                     fresh_gate=None, verify_result=None):
+    """Run the buy gates and start the purchase thread. Returns (payload,
+    status). Auto Mode passes the order gate and verification it read moments
+    ago while rating (`fresh_gate`, `verify_result`) instead of reading again."""
+    primary = rows[0]
     progress = primary["progress"] or {}
     if progress.get("state") == "buying":
         from datetime import datetime, timedelta, timezone
         if datetime.now(timezone.utc) - primary["updated_at"] < timedelta(minutes=5):
-            return api_error("Label purchase already in progress", 409)
+            return {"error": "Label purchase already in progress"}, 409
 
     def _draft_id(row):
         return (row["provider_drafts"] or {}).get(provider_name) or row["easyship_shipment_id"]
 
     targets = [r for r in rows if r["status"] in ("rated", "error") and _draft_id(r)]
     if not targets:
-        return api_error("Nothing to purchase — all boxes already have labels or were voided")
+        return {"error": "Nothing to purchase — all boxes already have labels or were voided"}, 400
 
     # Order gate (Shopify only): on hold or not fully paid cannot be bought —
     # no bypass, and a Resume is checked again. Shopify's live answer, the
     # rate-time snapshot when Shopify is down; a draft that never loaded its
     # order (the outage flow) is not gated.
     if primary["source"] == "shopify":
-        gate, live = order_gate.for_buy(primary)
+        gate, live = (fresh_gate, True) if fresh_gate else order_gate.for_buy(primary)
         if gate and not gate["shippable"]:
             audit("order_gate.refused", {
                 "group_id": group_id, "order": primary["shopify_order_name"],
@@ -459,23 +545,23 @@ def group_buy(group_id):
                 "live": live, "label": gate["label"], "reasons": gate["reasons"],
                 "financial_status": gate["financial_status"], "on_hold": gate["on_hold"],
             })
-            return jsonify({
+            return {
                 "error": "A label cannot be bought for this order — " + "; ".join(gate["reasons"]),
                 "code": "order_gate", "gate": gate, "live": live,
-            }), 403
+            }, 403
 
     # Verification gate: the order must be verified in EasyShip or checked in
     # Shipper. A user with Verify override may buy anyway; that is recorded on
     # box 1 so a Resume is not asked again.
     if not (primary.get("verify_gate") or {}).get("overridden_by"):
-        check = verify_gate.check(primary)
+        check = verify_result or verify_gate.check(primary)
         if not check["verified"]:
             can_override = "verify_override" in user_sections(session["user_id"], session.get("role"))
             if not (data.get("verify_override") and can_override):
-                return jsonify({
+                return {
                     "error": check["message"], "code": "verify_gate", "verify": check,
                     "can_override": can_override,
-                }), 403
+                }, 403
             record = {"overridden_by": session["user_id"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                       "message": check["message"], "unverified": check["unverified"]}
             db.execute("UPDATE shipments SET verify_gate=%s, updated_at=now() WHERE id=%s",
@@ -494,20 +580,20 @@ def group_buy(group_id):
         if gate["below_threshold"]:
             supplied = data.get("bypass_password") or ""
             if not supplied:
-                return jsonify({
+                return {
                     "error": "This order is below the profit threshold — the bypass password is required",
                     "code": "profit_gate", "bypass": "required", "profit": gate,
-                }), 403
+                }, 403
             stored = db.get_setting(profit.SETTING_PASSWORD) or ""
             if not stored or not check_password_hash(stored, supplied):
                 audit("profit.bypass_denied", {
                     "group_id": group_id, "provider": provider_name,
                     "courier_service_id": courier_service_id,
                 })
-                return jsonify({
+                return {
                     "error": "Bypass password is incorrect",
                     "code": "profit_gate", "bypass": "wrong_password", "profit": gate,
-                }), 403
+                }, 403
             audit("profit.bypass", {
                 "group_id": group_id, "source": primary["source"],
                 "order": primary["shopify_order_name"] or primary["backoffice_invoice_number"],
@@ -549,7 +635,7 @@ def group_buy(group_id):
         args=(app, group_id, provider_name, courier_service_id, rate, session["user_id"]),
         daemon=True,
     ).start()
-    return jsonify({"started": True, "box_count": len(rows)})
+    return {"started": True, "box_count": len(rows)}, 200
 
 
 def _cancel_other_drafts(rows, chosen_provider):
@@ -674,7 +760,10 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
         elif res.label_status != LabelStatus.FAILED:
             box_errors.pop(sid, None)
 
+    timings = {}
+    started = time.monotonic()
     results = provider.buy_labels(sids, courier_service_id)
+    timings["buy"] = _ms(started)
     for sid in sids:
         res = results.get(sid)
         if isinstance(res, ProviderError):
@@ -718,12 +807,18 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
     deadline = time.monotonic() + max(timeout_s, 30)
     rebuy_next = {}
 
+    finalize_started = time.monotonic()
     maybe_finalize()
+    timings["label"] = _ms(finalize_started)
     _set_group_progress(primary_id, "buying",
                         boxes=_group_boxes_snapshot(_group_rows(group_id), state, box_errors))
 
+    polls = 0
     while pending() and time.monotonic() < deadline:
-        time.sleep(3)
+        # Most labels are ready within a second or two: look again soon,
+        # then settle into the 3 s rhythm.
+        polls += 1
+        time.sleep(min(polls, 3))
         refreshed = provider.poll_shipments(pending(), courier_service_id)
         for sid, res in refreshed.items():
             if isinstance(res, ProviderError):
@@ -781,7 +876,7 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
                             message=message)
         return
 
-    # Every box has its label — now (and only now) update the order and print.
+    # Every box has its label — now (and only now) print and update the order.
     audit("label.buy", {
         "group_id": group_id,
         "boxes": box_total,
@@ -790,11 +885,18 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
     _set_group_progress(primary_id, "finalizing",
                         boxes=_group_boxes_snapshot(rows, state),
                         message="All labels ready — updating order and printing…")
-    writebacks = run_group_writebacks(group_id)
+    # The label prints while the order is updated — it is bought either way.
+    step = time.monotonic()
     printed = _print_group(group_id)
+    timings["print"] = _ms(step)
+    step = time.monotonic()
+    writebacks = run_group_writebacks(group_id)
+    timings["writebacks"] = _ms(step)
     _set_group_progress(primary_id, "done",
                         boxes=_group_boxes_snapshot(_group_rows(group_id), state),
                         extra={"printed": printed, "writebacks": writebacks})
+    timings["total"] = _ms(started)
+    current_app.logger.info("label buy %s timings ms (polls %d): %s", group_id, polls, timings)
 
 
 # ============================================================ group status / label / print

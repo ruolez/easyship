@@ -1,3 +1,5 @@
+import logging
+
 from flask import Flask, jsonify
 
 import config
@@ -7,6 +9,7 @@ import db
 def create_app():
     app = Flask(__name__)
     app.secret_key = config.SECRET_KEY
+    app.logger.setLevel(logging.INFO)  # rate/buy timing lines
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",

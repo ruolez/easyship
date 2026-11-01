@@ -725,11 +725,16 @@ class ShipStationProvider(ShippingProvider):
                 purchases[base] = (base, None, bids)
 
         def work(external_id):
-            existing = self._existing_label(external_id, auth)
-            if existing is not None:
-                return existing
             base, index, _ = purchases[external_id]
-            draft = _request("GET", f"/v2/shipments/{base}", auth=auth)
+            # The idempotency check and the draft read run side by side; the
+            # draft is simply unused when a label already exists.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                existing_call = pool.submit(self._existing_label, external_id, auth)
+                draft_call = pool.submit(_request, "GET", f"/v2/shipments/{base}", auth=auth)
+                existing = existing_call.result()
+                if existing is not None:
+                    return existing
+                draft = draft_call.result()
             body = {
                 "shipment": _inline_shipment(draft, carrier_id, service_code, external_id, origin, index),
                 "test_label": test_label,

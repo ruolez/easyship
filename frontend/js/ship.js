@@ -466,9 +466,10 @@ document.getElementById('get-rates').addEventListener('click', () => {
   getRates();
 });
 
-/* Rate the shipment as entered. Resolves true when rates rendered, false on
-   any error (already shown to the user). Shared by the button and Auto Mode. */
-async function getRates() {
+/* Rate the shipment as entered. Resolves the rates response once rendered,
+   null on any error (already shown to the user). `extra` joins the request
+   body (Auto Mode's auto_buy). Shared by the button and Auto Mode. */
+async function getRates(extra = {}) {
   const btn = document.getElementById('get-rates');
   const spinner = document.getElementById('rates-spinner');
   btn.disabled = true;
@@ -486,6 +487,7 @@ async function getRates() {
         options: { signature: document.getElementById('signature').value },
         preferred_service: preferredService,
         preferred_service_id: preferredServiceId,
+        ...extra,
       },
     });
     localShipmentId = res.shipment_id;
@@ -500,11 +502,11 @@ async function getRates() {
     if (res.order_gate) applyOrderGate(res.order_gate);
     document.getElementById('panel-rates').style.display = '';
     document.getElementById('panel-rates').scrollIntoView({ behavior: 'smooth' });
-    return true;
+    return res;
   } catch (err) {
     snackbar(err.message, 'error');
     setStep(2);
-    return false;
+    return null;
   } finally {
     btn.disabled = false;
     spinner.style.display = 'none';
@@ -607,6 +609,7 @@ function renderBuyProgress(progress) {
 }
 
 let buyPollTimer = null;
+let earlyPrint = null; // followPurchase's print, started before the result shows
 
 document.getElementById('buy-label').addEventListener('click', () => { buyLabel(); });
 
@@ -673,6 +676,18 @@ async function buyLabel() {
       return out;
     }
   }
+  return followPurchase();
+}
+
+/* Follow a started purchase to its end, with the same result as buyLabel().
+   The labels print as soon as they are all stored; the result (writebacks,
+   countdown) waits for the server's 'done'. */
+function followPurchase() {
+  const btn = document.getElementById('buy-label');
+  const spinner = document.getElementById('buy-spinner');
+  btn.disabled = true;
+  spinner.style.display = '';
+  earlyPrint = null;
   return new Promise((resolve) => {
     buyPollTimer = setInterval(async () => {
       let g;
@@ -682,6 +697,10 @@ async function buyLabel() {
       const progress = g.progress || {};
       renderBuyProgress(progress);
       const allDone = g.shipments.every((r) => ['label_created', 'fulfilled'].includes(r.status));
+      if (allDone && !earlyPrint && progress.printed == null
+          && ['finalizing', 'done'].includes(progress.state) && g.shipments.some((r) => r.has_label)) {
+        earlyPrint = startPrint(`/api/shipments/group/${g.group_id}/label`);
+      }
       if (progress.state === 'done' && allDone) {
         clearInterval(buyPollTimer);
         spinner.style.display = 'none';
@@ -696,7 +715,7 @@ async function buyLabel() {
         if (progress.state === 'retry') btn.disabled = false;
         resolve({ state: progress.state, message });
       }
-    }, 1500);
+    }, 750);
   });
 }
 
@@ -753,15 +772,12 @@ function showResult(s) {
     const url = s.label_url || `/api/shipments/${s.id}/label`;
     lastLabelUrl = url;
     document.getElementById('r-download').href = url;
-    if (clientSettings.print_mode === 'browserprint') {
-      if (s.printed == null) sendToZebra(url); // ZPL has no visual preview; Open label still works
-    } else if (s.printed == null && clientSettings.print_mode === 'browser') {
-      // Local printer: pop the browser print dialog with every page (one per box)
-      printPdfUrl(url).catch((err) => { cancelAutoAdvance(); snackbar(err.message, 'error'); });
-    }
+    const print = s.printed == null ? (earlyPrint || startPrint(url)) : null;
+    if (print) print.then(showPrintOutcome); // after the countdown below starts, so a failure stops it
   } else {
     document.getElementById('r-download').style.display = 'none';
   }
+  earlyPrint = null;
   const nextBtn = document.getElementById('r-next');
   if (nextBtn) nextBtn.focus();
   panel.scrollIntoView({ behavior: 'smooth' });
@@ -770,6 +786,38 @@ function showResult(s) {
   const printFailed = typeof s.printed === 'string' && s.printed.startsWith('error');
   if (s.has_label && !printFailed) startAutoAdvance();
   Auto.onResult(s, printFailed);
+}
+
+/* Print from the browser (Zebra agent or the print dialog); network printing
+   is the server's (null). Resolves the print error, or null when it went out. */
+function startPrint(url) {
+  lastLabelUrl = url;
+  if (clientSettings.print_mode === 'browserprint') {
+    // ZPL has no visual preview; Open label still works
+    return ZebraPrint.printLabelUrl(url).then(() => null, (err) => err);
+  }
+  if (clientSettings.print_mode === 'browser') {
+    // Local printer: pop the browser print dialog with every page (one per box)
+    return printPdfUrl(url).then(() => null, (err) => err);
+  }
+  return null;
+}
+
+function showPrintOutcome(err) {
+  if (err) cancelAutoAdvance(); // print failed — let the packer reprint before advancing
+  if (clientSettings.print_mode !== 'browserprint') {
+    if (err) snackbar(err.message, 'error');
+    return;
+  }
+  const wb = document.getElementById('r-writebacks');
+  if (!err) {
+    wb.innerHTML += ` <span class="chip static ok">${ICON_PRINTER} Sent to printer</span>`;
+    snackbar('Label sent to Zebra printer', 'success');
+    return;
+  }
+  wb.innerHTML += ` <span class="chip static err">${ICON_PRINTER} ${esc(err.message)}</span>
+    <button class="btn btn-text btn-small" onclick="printAgain()">Print again</button>`;
+  snackbar(err.message, 'error');
 }
 
 /* ---------- Auto-advance countdown ---------- */
@@ -802,20 +850,6 @@ function cancelAutoAdvance() {
   }
   const btn = document.getElementById('r-next');
   if (btn) btn.textContent = 'Next order (Enter)';
-}
-
-async function sendToZebra(url) {
-  const wb = document.getElementById('r-writebacks');
-  try {
-    await ZebraPrint.printLabelUrl(url);
-    wb.innerHTML += ` <span class="chip static ok">${ICON_PRINTER} Sent to printer</span>`;
-    snackbar('Label sent to Zebra printer', 'success');
-  } catch (err) {
-    cancelAutoAdvance(); // print failed — let the packer reprint before advancing
-    wb.innerHTML += ` <span class="chip static err">${ICON_PRINTER} ${esc(err.message)}</span>
-      <button class="btn btn-text btn-small" onclick="printAgain()">Print again</button>`;
-    snackbar(err.message, 'error');
-  }
 }
 
 window.printAgain = async (id) => {
@@ -994,9 +1028,17 @@ const Auto = (() => {
     if (!(lb > 0)) { setDetail('Weight must be greater than 0'); return; }
     stopScale();
     setStage('rating', 'Auto Mode — getting rates', `Using ${lb.toFixed(1)} lb · ${preset.service_name || 'preset service'}`);
-    const ok = await getRates();
+    // The server buys the preferred rate in the same request when no gate
+    // needs the packer; otherwise the rates come back for the steps below.
+    const res = await getRates({ auto_buy: true });
+    if (res && res.auto_buy && res.auto_buy.started) {
+      // Bought from here on — Cancel no longer applies.
+      setStage('buying', 'Auto Mode — buying label',
+        `${res.auto_buy.rate.courier_name} · ${money(res.auto_buy.rate.total_charge)}`);
+      return finishBuy(await followPurchase());
+    }
     if (stage !== 'rating') return; // cancelled while the request was in flight
-    if (!ok) return fail('Could not get rates — finish manually');
+    if (!res) return fail('Could not get rates — finish manually');
     if (orderBlocked()) {
       return fail(`${orderGate.label} — a label cannot be bought: ${orderGate.reasons.join('; ')}`);
     }
@@ -1012,7 +1054,10 @@ const Auto = (() => {
       setStage('buying', 'Auto Mode — buying label',
         `${selectedRate.courier_name} · ${money(selectedRate.total_charge)}`);
     }
-    const result = await buyLabel();
+    finishBuy(await buyLabel());
+  }
+
+  function finishBuy(result) {
     if (result.state === 'done') {
       setStage('done', 'Auto Mode — label bought', 'Printing…', 'ok');
       applyPrintOutcome();
