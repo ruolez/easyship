@@ -52,6 +52,12 @@ function signatureChip(options) {
   return '';
 }
 
+function codChip(options) {
+  const amount = ((options || {}).cod || {}).amount;
+  if (!amount) return '';
+  return ` <span class="chip static warn" title="Collect on delivery">COD $${Number(amount).toFixed(2)}</span>`;
+}
+
 function formatAddress(d) {
   if (!d) return '';
   const parts = [
@@ -421,7 +427,7 @@ function render() {
         <td class="col-narrow col-size">${esc(s.box_size)}</td>
         <td class="num col-narrow">${s.total_weight_lb ?? ''}</td>
         <td class="ellip account" title="${esc(s.provider_label || '')}">${esc(s.provider_label || '')}</td>
-        <td class="ellip service" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}${signatureChip(s.options)}</td>
+        <td class="ellip service" title="${esc(s.courier_name || '')}">${esc(s.courier_name || '')}${signatureChip(s.options)}${codChip(s.options)}</td>
         <td>${esc(s.courier_umbrella_name || '')}</td>
         <td class="num">${money(s.shipping_cost)}</td>
         <td title="${esc(numbers.join(', '))}">${trackingCell}</td>

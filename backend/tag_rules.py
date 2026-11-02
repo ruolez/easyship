@@ -5,6 +5,7 @@ signature requirement. Pure functions over plain data so they're testable
 without the database; `load_rules` is the only DB touchpoint.
 """
 import json
+import math
 import re
 
 import db
@@ -18,6 +19,21 @@ _NAME_NOISE = re.compile(r"[®™©]|\s+")
 def normalize_signature(value):
     value = (value or "none").strip().lower()
     return value if value in SIGNATURES else "none"
+
+
+def normalize_cod(raw):
+    """The collect-on-delivery option from the Ship page → None when off, else
+    {"amount", "allow_partial"}. Raises ValueError when it is on without a
+    positive amount, so a label never goes out collecting nothing."""
+    if not isinstance(raw, dict) or not raw.get("enabled"):
+        return None
+    try:
+        amount = float(str(raw.get("amount") or "").strip())
+    except ValueError:
+        raise ValueError("COD amount is not a number")
+    if not math.isfinite(amount) or amount <= 0:
+        raise ValueError("COD amount must be greater than 0")
+    return {"amount": round(amount, 2), "allow_partial": bool(raw.get("allow_partial"))}
 
 
 def parse_rules(raw):

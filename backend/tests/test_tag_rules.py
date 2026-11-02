@@ -20,6 +20,22 @@ class ParseRulesTest(unittest.TestCase):
         self.assertEqual(tag_rules.parse_rules(None), [])
 
 
+class NormalizeCodTest(unittest.TestCase):
+    def test_off_or_missing_is_none(self):
+        for raw in (None, {}, {"enabled": False, "amount": 50}, "yes"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(tag_rules.normalize_cod(raw))
+
+    def test_on_keeps_the_amount_in_cents_and_the_partial_flag(self):
+        self.assertEqual(tag_rules.normalize_cod({"enabled": True, "amount": " 125.404 ", "allow_partial": 1}),
+                         {"amount": 125.4, "allow_partial": True})
+
+    def test_on_without_a_positive_amount_is_refused(self):
+        for amount in (None, "", "abc", 0, "-3", "nan", "inf"):
+            with self.subTest(amount=amount), self.assertRaises(ValueError):
+                tag_rules.normalize_cod({"enabled": True, "amount": amount})
+
+
 class ServiceMatchTest(unittest.TestCase):
     def test_matches_across_provider_name_styles(self):
         self.assertTrue(tag_rules.service_matches("UPS Ground", "UPS® Ground"))

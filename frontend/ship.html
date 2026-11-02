@@ -80,6 +80,17 @@
           <option value="adult">Adult signature (21+)</option>
         </select>
       </div>
+      <div class="field fixed" id="cod-field" style="display:none">
+        <label for="cod-on">Collect on delivery</label>
+        <div class="cod-controls">
+          <label class="switch" title="Spee-Dee collects this amount from the recipient">
+            <input type="checkbox" id="cod-on" aria-label="Collect on delivery">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+          <input type="number" id="cod-amount" min="0.01" step="0.01" placeholder="Amount $" aria-label="Amount to collect" disabled>
+          <label class="cod-partial" id="cod-partial-wrap" style="display:none"><input type="checkbox" id="cod-partial"> Allow partial</label>
+        </div>
+      </div>
       <div class="fixed" id="rates-spinner" style="display:none"><span class="spinner"></span> Getting rates…</div>
     </div>
 

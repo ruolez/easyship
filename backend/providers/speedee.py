@@ -54,6 +54,7 @@ UMBRELLA_NAME = "Spee-Dee"
 DEFAULT_LABEL_TEMPLATE = "STANDARD"
 LABEL_FORMAT_ZPL = 0
 SIGNATURE_FEES = {"signature": "AOD", "adult": "AODSIGNATURE"}
+COD_FEE = "COD"
 CANCELLED_STATUSES = {91, "91", "cancelled", "canceled"}
 TRACKING_URL = "https://speedeedelivery.com/track-a-shipment/?barcodes={number}"
 DRAFT_PREFIX = "spd_"
@@ -223,9 +224,16 @@ def _order_body(origin, dest, parcels, options, token):
         "referenceNumber3": token,
         "items": _build_items(parcels),
     }
-    fee = SIGNATURE_FEES.get((options or {}).get("signature") or "none")
-    if fee:
-        body["extraFees"] = [{"extraFeeId": fee, "quantity": 1}]
+    options = options or {}
+    fees = [SIGNATURE_FEES.get(options.get("signature") or "none")]
+    cod = options.get("cod")
+    if cod:
+        fees.append(COD_FEE)
+        # One order per group, so the amount is collected once for every box.
+        body["collectOnDelivery"] = cod["amount"]
+        body["allowPartialCollectOnDelivery"] = bool(cod.get("allow_partial"))
+    if any(fees):
+        body["extraFees"] = [{"extraFeeId": fee, "quantity": 1} for fee in fees if fee]
     return body
 
 
@@ -304,6 +312,7 @@ class SpeedeeProvider(ShippingProvider):
     modes = ("sandbox", "production")
     manifest_carrier = "Spee-Dee"
     manifests_every_label = True
+    supports_cod = True
 
     def _label_template(self):
         return (self.setting("label_template") or "").strip() or DEFAULT_LABEL_TEMPLATE
@@ -577,7 +586,7 @@ class SpeedeeProvider(ShippingProvider):
             raise ProviderError("No shipments to manifest")
         rows = db.query(
             """SELECT easyship_shipment_id, box_number, box_total, tracking_number, destination,
-                      total_weight_lb, label_created_at
+                      total_weight_lb, label_created_at, options
                FROM shipments WHERE provider = %s AND easyship_shipment_id = ANY(%s)
                ORDER BY label_created_at, group_id, box_number""",
             (self.name, ids),

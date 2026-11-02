@@ -204,7 +204,14 @@ def get_rates():
     for i, p in enumerate(parcels):
         if not p.get("weight") or float(p["weight"]) <= 0:
             return api_error(f"Box {i + 1} needs a weight greater than 0")
-    options = {"signature": tag_rules.normalize_signature((data.get("options") or {}).get("signature"))}
+    raw_options = data.get("options") or {}
+    options = {"signature": tag_rules.normalize_signature(raw_options.get("signature"))}
+    try:
+        cod = tag_rules.normalize_cod(raw_options.get("cod"))
+    except ValueError:
+        return api_error("Enter the amount to collect on delivery")
+    if cod:
+        options["cod"] = cod
     preferred_service = (data.get("preferred_service") or "").strip()
     preferred_service_id = str(data.get("preferred_service_id") or "").strip()
 
@@ -261,6 +268,13 @@ def get_rates():
             return _rates_refused(
                 f"Selected shipping provider '{requested_provider}' is not enabled for your account")
         active_providers = chosen
+    # Only a provider that collects may ship a COD order — any other label
+    # would deliver without collecting the money.
+    cod_skipped = [p for p in active_providers if cod and not p.supports_cod]
+    if cod_skipped:
+        active_providers = [p for p in active_providers if p.supports_cod]
+        if not active_providers:
+            return _rates_refused("COD is only available with Spee-Dee — choose Spee-Dee in 'Shipping with'")
 
     # The order number rides to the provider (Spee-Dee prints it on the label)
     # but is not part of the stored shipment options.
@@ -278,7 +292,8 @@ def get_rates():
     all_rates = []
     had_rates = False
     provider_errors = []
-    warnings = []
+    warnings = [f"COD is on — {p.label} was not rated (only Spee-Dee collects on delivery)"
+                for p in cod_skipped]
     for provider in active_providers:
         try:
             drafts, rates, provider_warnings = provider.create_draft_shipments(

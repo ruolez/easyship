@@ -22,9 +22,10 @@ COLUMNS = (
     ("Order", MARGIN + 24, 12),
     ("Box", MARGIN + 92, 7),
     ("Tracking barcode", MARGIN + 130, 26),
-    ("Recipient", MARGIN + 282, 24),
-    ("City, State", MARGIN + 410, 20),
-    ("Weight lb", MARGIN + 492, 9),
+    ("Recipient", MARGIN + 282, 20),
+    ("City, State", MARGIN + 378, 16),
+    ("Weight lb", MARGIN + 450, 9),
+    ("COD", MARGIN + 497, 9),
 )
 
 
@@ -37,6 +38,8 @@ def sheet_row(row, order_id):
     dest = row.get("destination") or {}
     city = ", ".join(x for x in ((dest.get("city") or "").strip(), (dest.get("state") or "").strip()) if x)
     weight = row.get("total_weight_lb")
+    # COD is per order: the driver collects it once, at the first box.
+    cod = ((row.get("options") or {}).get("cod") or {}).get("amount")
     return {
         "order": order_id or "",
         "box": f"{row.get('box_number') or 1}/{row.get('box_total') or 1}",
@@ -44,6 +47,7 @@ def sheet_row(row, order_id):
         "recipient": dest.get("company") or dest.get("contact") or "",
         "city": city,
         "weight": float(weight) if weight is not None else None,
+        "cod": float(cod) if cod and (row.get("box_number") or 1) == 1 else None,
     }
 
 
@@ -106,6 +110,7 @@ def summary_sheet_pdf(title, ship_date, origin, rows):
     """The sheet as PDF bytes. `rows` come from sheet_row()."""
     total_weight = round(sum(r["weight"] or 0 for r in rows), 2)
     orders = len({r["order"] for r in rows if r["order"]})
+    cod_amounts = [r["cod"] for r in rows if r.get("cod")]
     chunks = _layout(rows)
     pages = []
     number = 0
@@ -127,7 +132,8 @@ def summary_sheet_pdf(title, ship_date, origin, rows):
         for r in chunk:
             number += 1
             values = (number, r["order"], r["box"], r["tracking"], r["recipient"], r["city"],
-                      "" if r["weight"] is None else f"{r['weight']:g}")
+                      "" if r["weight"] is None else f"{r['weight']:g}",
+                      f"{r['cod']:.2f}" if r.get("cod") else "")
             for (_, x, width), value in zip(COLUMNS, values):
                 page.text(x, y, _clip(value, width))
             y -= ROW_H
@@ -135,7 +141,10 @@ def summary_sheet_pdf(title, ship_date, origin, rows):
             y -= 8
             page.line(MARGIN, y + 6, PAGE_W - MARGIN, y + 6, 0.8)
             page.text(MARGIN, y - 8, f"Total packages: {len(rows)}", size=11, bold=True)
-            page.text(MARGIN + 220, y - 8, f"Total weight: {total_weight:g} lb", size=11, bold=True)
+            page.text(MARGIN + 160, y - 8, f"Total weight: {total_weight:g} lb", size=11, bold=True)
+            if cod_amounts:
+                page.text(MARGIN + 310, y - 8, f"COD to collect: ${sum(cod_amounts):,.2f} "
+                          f"({len(cod_amounts)} order(s))", size=11, bold=True)
             y -= 52
             page.line(MARGIN, y, MARGIN + 260, y)
             page.line(MARGIN + 320, y, PAGE_W - MARGIN, y)

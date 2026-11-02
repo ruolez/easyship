@@ -192,6 +192,7 @@ class ShippingProvider(ABC):
     modes: tuple = ()  # e.g. ("sandbox", "production"); empty if the provider has no environments
     manifest_carrier = "USPS"  # carrier named on this platform's manifests
     manifests_every_label = False  # True when every label is manifestable, not just USPS ones
+    supports_cod = False  # True when the carrier collects on delivery (options["cod"])
 
     def __init__(self, key=None, label=None):
         self.name = key or self.platform
@@ -217,7 +218,9 @@ class ShippingProvider(ABC):
         box, list[str] warnings). Hides per-box shipment creation and cross-box
         rate intersection. `options` carries shipment-level choices such as
         {"signature": "none" | "signature" | "adult"}; a provider that cannot
-        honor one must say so in a warning rather than silently drop it."""
+        honor one must say so in a warning rather than silently drop it.
+        {"cod": {"amount", "allow_partial"}} only reaches providers whose
+        `supports_cod` is True — /rates skips the others."""
 
     @abstractmethod
     def get_excluded_service_ids(self):

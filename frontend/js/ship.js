@@ -11,6 +11,7 @@ let clientSettings = { placeholder_email: '', print_mode: 'browser', countdown_s
 let savedBoxes = [];
 let lastLabelUrl = null;
 let providerLabels = {};
+let providerCod = {}; // provider name → collects on delivery
 let preferredService = ''; // courier service a tag rule asked for
 let preferredServiceId = ''; // Auto Mode preset service id (when no tag rule names one)
 let orderGate = null; // Shopify hold / payment gate — rates only when not shippable
@@ -27,6 +28,8 @@ async function init() {
   clientSettings = settings;
   savedBoxes = boxes;
   providerLabels = Object.fromEntries(providers.map((p) => [p.name, p.label]));
+  providerCod = Object.fromEntries(providers.map((p) => [p.name, !!p.cod]));
+  navReady.then(syncCodField);
   addParcelRow();
   const loaded = await prefill();
   applyPlaceholderEmail();
@@ -120,6 +123,7 @@ async function prefill() {
       };
       fillDestination(inv.destination);
       orderItems = inv.items || [];
+      if (inv.invoice_total > 0) document.getElementById('cod-amount').value = inv.invoice_total.toFixed(2);
       const economics = economicsHtml(inv.economics);
       showOrderSummary(
         `BackOffice invoice <strong>${esc(inv.invoice_number)}</strong> — ${esc(inv.business_name || '')}`,
@@ -350,6 +354,61 @@ function applyTagRules(rules) {
   if (sel && rules.signature) sel.value = rules.signature;
 }
 
+/* ---------- COD ----------
+   Shown only for a provider that collects on delivery; always starts off.
+   Hiding it turns it off, so a COD can never ride to another carrier. */
+function syncCodField() {
+  const name = (window.activeProvider && window.activeProvider()) || '';
+  const show = name ? !!providerCod[name] : Object.values(providerCod).some(Boolean);
+  document.getElementById('cod-field').style.display = show ? '' : 'none';
+  if (!show) setCod(false);
+}
+
+function setCod(on) {
+  document.getElementById('cod-on').checked = on;
+  const amount = document.getElementById('cod-amount');
+  amount.disabled = !on;
+  amount.classList.remove('invalid');
+  document.getElementById('cod-partial-wrap').style.display = on ? '' : 'none';
+  if (!on) document.getElementById('cod-partial').checked = false;
+}
+
+document.getElementById('cod-on').addEventListener('change', (e) => {
+  setCod(e.target.checked);
+  if (e.target.checked) document.getElementById('cod-amount').select();
+  dropRatesForCod();
+});
+['cod-amount', 'cod-partial'].forEach((id) =>
+  document.getElementById(id).addEventListener('change', dropRatesForCod));
+
+/* Spee-Dee's draft holds the COD it was rated with, so a COD change after
+   rating must not be bought with the old draft. */
+function dropRatesForCod() {
+  if (!rates.length) return;
+  rates = [];
+  renderRates();
+  document.getElementById('panel-rates').style.display = 'none';
+  snackbar('COD changed — get rates again');
+}
+window.addEventListener('easyship:provider', syncCodField);
+
+/* The shipment options as the API takes them; null (after saying why) when
+   COD is on without an amount. */
+function collectOptions() {
+  const options = { signature: document.getElementById('signature').value };
+  if (!document.getElementById('cod-on').checked) return options;
+  const amount = document.getElementById('cod-amount');
+  if (!(parseFloat(amount.value) > 0)) {
+    amount.classList.add('invalid');
+    amount.focus();
+    snackbar('Enter the amount to collect on delivery', 'error');
+    return null;
+  }
+  amount.classList.remove('invalid');
+  options.cod = { enabled: true, amount: amount.value, allow_partial: document.getElementById('cod-partial').checked };
+  return options;
+}
+
 /* ---------- Parcels ---------- */
 function addParcelRow(weight = '', length = '', width = '', height = '') {
   const div = document.createElement('div');
@@ -470,6 +529,8 @@ document.getElementById('get-rates').addEventListener('click', () => {
    null on any error (already shown to the user). `extra` joins the request
    body (Auto Mode's auto_buy). Shared by the button and Auto Mode. */
 async function getRates(extra = {}) {
+  const options = collectOptions();
+  if (!options) return null;
   const btn = document.getElementById('get-rates');
   const spinner = document.getElementById('rates-spinner');
   btn.disabled = true;
@@ -484,7 +545,7 @@ async function getRates(extra = {}) {
         destination: collectDestination(),
         parcels: collectParcels(),
         items: orderItems,
-        options: { signature: document.getElementById('signature').value },
+        options,
         preferred_service: preferredService,
         preferred_service_id: preferredServiceId,
         ...extra,

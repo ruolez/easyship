@@ -44,6 +44,17 @@ class SummarySheetTest(unittest.TestCase):
         self.assertEqual([p["tracking"] in text for p in packages], [True] * len(packages))
         self.assertIn("Page 3 of 3", text)
 
+    def test_cod_amounts_are_listed_and_totalled(self):
+        packages = rows(3, 3)
+        packages[0]["cod"] = 125.4
+        packages[1]["cod"] = None
+        _, text = pdf_text(manifest_sheet.summary_sheet_pdf("T", "11/02/2026", ORIGIN, packages))
+        self.assertEqual(("125.40" in text, "COD to collect: $125.40 (1 order(s))" in text), (True, True))
+
+    def test_no_cod_total_without_cod_orders(self):
+        _, text = pdf_text(manifest_sheet.summary_sheet_pdf("T", "11/02/2026", ORIGIN, rows(3, 3)))
+        self.assertNotIn("COD to collect", text)
+
     def test_footer_moves_to_its_own_page_when_the_last_page_is_full(self):
         full = manifest_sheet.ROWS_FIRST_PAGE
         pages, text = pdf_text(manifest_sheet.summary_sheet_pdf("T", "11/02/2026", ORIGIN, rows(full)))
@@ -56,7 +67,13 @@ class SheetRowTest(unittest.TestCase):
                "destination": {"contact": "Jane", "company": "", "city": "Fargo", "state": "ND"}}
         self.assertEqual(manifest_sheet.sheet_row(row, "SD9"), {
             "order": "SD9", "box": "2/3", "tracking": "SPX2", "recipient": "Jane",
-            "city": "Fargo, ND", "weight": 4.25})
+            "city": "Fargo, ND", "weight": 4.25, "cod": None})
+
+    def test_cod_is_on_the_first_box_of_the_order_only(self):
+        row = {"box_number": 1, "box_total": 2, "tracking_number": "SPX1", "total_weight_lb": 1,
+               "destination": {}, "options": {"cod": {"amount": 80.0, "allow_partial": False}}}
+        self.assertEqual([manifest_sheet.sheet_row({**row, "box_number": n}, "SD9")["cod"] for n in (1, 2)],
+                         [80.0, None])
 
     def test_central_date(self):
         self.assertEqual(manifest_sheet.central_date(datetime(2026, 11, 2, 3, 0, tzinfo=timezone.utc)),

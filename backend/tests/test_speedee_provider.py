@@ -27,6 +27,7 @@ DEST = {"contact": "Jane Roe", "company": "", "address1": "123 2nd Ave S", "addr
         "city": "Minneapolis", "state": "mn", "zip": "55401", "phone": "6125550100", "email": "j@x.test"}
 BOX = {"weight": "10", "length": "12", "width": "10", "height": "8"}
 ORDER_ID = "SD3041"
+COD_AMOUNT = 125.4
 
 
 class FakeDb:
@@ -172,6 +173,20 @@ class OrderBodyTests(unittest.TestCase):
             with self.subTest(option=option):
                 body = sd._order_body(ORIGIN, DEST, [BOX], {"signature": option}, "tok")
                 self.assertEqual(body.get("extraFees"), expected)
+
+    def test_cod_adds_its_fee_and_the_amount_to_collect(self):
+        body = sd._order_body(ORIGIN, DEST, [BOX], {"cod": {"amount": COD_AMOUNT, "allow_partial": True}}, "tok")
+        self.assertEqual((body["extraFees"], body["collectOnDelivery"], body["allowPartialCollectOnDelivery"]),
+                         ([{"extraFeeId": "COD", "quantity": 1}], COD_AMOUNT, True))
+
+    def test_cod_with_an_adult_signature_carries_both_fees(self):
+        body = sd._order_body(ORIGIN, DEST, [BOX], {"signature": "adult", "cod": {"amount": COD_AMOUNT}}, "tok")
+        self.assertEqual((body["extraFees"], body["allowPartialCollectOnDelivery"]), (
+            [{"extraFeeId": "AODSIGNATURE", "quantity": 1}, {"extraFeeId": "COD", "quantity": 1}], False))
+
+    def test_without_cod_no_collection_is_sent(self):
+        body = sd._order_body(ORIGIN, DEST, [BOX], {"signature": "none", "cod": None}, "tok")
+        self.assertEqual({"extraFees", "collectOnDelivery", "allowPartialCollectOnDelivery"} & body.keys(), set())
 
     def test_incomplete_origin_names_missing_fields(self):
         with self.assertRaisesRegex(ProviderError, "Phone"):

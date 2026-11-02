@@ -110,6 +110,7 @@ class EnabledRouteTest(unittest.TestCase):
     def test_user_sees_subset_and_admin_sees_all(self):
         class FakeFull(FakeProvider):
             label = "X"
+            supports_cod = False
             def is_test_mode(self):
                 return False
         orig = (providers.instance_keys, providers.enabled_providers, providers.db.query)
