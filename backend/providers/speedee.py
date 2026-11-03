@@ -38,7 +38,6 @@ from providers.base import (
     ShippingProvider,
     missing_origin_fields,
     origin_descriptor,
-    parcel_dimensions,
 )
 
 BASE_URLS = {
@@ -191,16 +190,16 @@ def _dest_parts(dest):
 
 
 def _build_items(parcels):
-    """One BOX item per parcel, weight in lb (Spee-Dee's unit); dimensions only
-    when every side is given — a 0×0×0 box is priced by weight alone."""
+    """One BOX item per parcel, weight in lb (Spee-Dee's unit). Dimensions are
+    never sent, so the quote matches the ShipIt app, which prices by weight
+    alone."""
     items = []
     for p in parcels:
         try:
             weight = float(str(p.get("weight") or "0").strip())
         except ValueError:
             weight = 0.0
-        items.append({"parcelTypeId": PARCEL_TYPE, "weight": round(weight, 2),
-                      **parcel_dimensions(p), "userFields": []})
+        items.append({"parcelTypeId": PARCEL_TYPE, "weight": round(weight, 2), "userFields": []})
     return items
 
 

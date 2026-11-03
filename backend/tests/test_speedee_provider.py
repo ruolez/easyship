@@ -156,7 +156,7 @@ class OrderBodyTests(unittest.TestCase):
         self.assertEqual(body["pickupContactInfo"],
                          {"name": "Bob", "phoneNumber": "3205550100", "email": "ship@acme.test"})
         self.assertEqual(body["items"], [
-            {"parcelTypeId": "BOX", "weight": 10.0, "length": 12.0, "width": 10.0, "height": 8.0, "userFields": []},
+            {"parcelTypeId": "BOX", "weight": 10.0, "userFields": []},
             {"parcelTypeId": "BOX", "weight": 3.0, "userFields": []},
         ])
         self.assertEqual((body["serviceLevelId"], body["vehicleTypeId"], body["referenceNumber1"],
