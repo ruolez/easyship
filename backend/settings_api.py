@@ -1,7 +1,12 @@
+import hmac
 import json
+import re
+import secrets
+import time
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, redirect, request, session
 from werkzeug.security import generate_password_hash
 
 import config
@@ -590,6 +595,105 @@ def provider_test(name):
         return jsonify(provider.test_connection(mode=data.get("mode"), token=data.get("token"), **extra))
     except ProviderError as e:
         return api_error(str(e))
+
+
+# ---------- OAuth sign-in (providers with authorize_url, e.g. Endicia direct) ----------
+# The provider's sign-in page redirects the admin's browser back to a callback
+# URL registered with the provider in advance; the pending sign-in (state,
+# instance, mode, redirect URI) waits in the admin's session meanwhile.
+
+OAUTH_SESSION_KEY = "oauth_pending"
+OAUTH_STATE_TTL_S = 15 * 60
+PAGE_ORIGIN_RE = re.compile(r"https?://[A-Za-z0-9.\-]+(:\d{1,5})?")
+
+
+def _oauth_provider(name):
+    provider = _provider_or_404(name)
+    return provider if provider is not None and hasattr(provider, "authorize_url") else None
+
+
+@bp.post("/providers/<name>/oauth/start")
+@admin_required
+def provider_oauth_start(name):
+    provider = _oauth_provider(name)
+    if not provider:
+        return api_error("Unknown provider", 404)
+    data = request.get_json(silent=True) or {}
+    origin = str(data.get("origin") or "").rstrip("/")
+    if not PAGE_ORIGIN_RE.fullmatch(origin):
+        return api_error("Open Settings from the app's own address and try again")
+    mode = data.get("mode") if data.get("mode") in provider.modes else provider.active_mode()
+    redirect_uri = origin + provider.oauth_callback_path
+    state = secrets.token_urlsafe(24)
+    try:
+        url = provider.authorize_url(mode, redirect_uri, state)
+    except ProviderError as e:
+        return api_error(str(e))
+    session[OAUTH_SESSION_KEY] = {"state": state, "provider": name, "mode": mode,
+                                  "redirect_uri": redirect_uri, "at": time.time()}
+    return jsonify({"url": url, "redirect_uri": redirect_uri})
+
+
+def _finish_oauth(params, name=None):
+    """Complete the pending sign-in from the callback's query parameters.
+    Returns (provider, mode, account); raises ValueError / ProviderError."""
+    pending = session.pop(OAUTH_SESSION_KEY, None)
+    state = params.get("state") or ""
+    if (not pending or not state or not hmac.compare_digest(pending["state"], state)
+            or time.time() - pending["at"] > OAUTH_STATE_TTL_S):
+        raise ValueError("This sign-in is stale or was started elsewhere — click Connect again")
+    if name and pending["provider"] != name:
+        raise ValueError("That sign-in belongs to a different shipping account")
+    if params.get("error"):
+        raise ValueError(f"Sign-in was not completed: {params.get('error_description') or params['error']}")
+    if not params.get("code"):
+        raise ValueError("The sign-in page returned no authorization code")
+    provider = _oauth_provider(pending["provider"])
+    if not provider:
+        raise ValueError("That shipping account no longer exists")
+    account = provider.complete_sign_in(pending["mode"], params["code"], pending["redirect_uri"])
+    audit("settings.oauth_connected", {"provider": provider.name, "mode": pending["mode"], "account": account})
+    return provider, pending["mode"], account
+
+
+@bp.get("/oauth/<platform>/callback")
+def provider_oauth_callback(platform):
+    if session.get("role") != "admin":
+        return redirect("/login.html")
+    params = {k: request.args.get(k) for k in ("code", "state", "error", "error_description")}
+    try:
+        provider, _, account = _finish_oauth(params)
+        query = {"oauth": "connected", "provider": provider.label, "account": account}
+    except (ValueError, ProviderError) as e:
+        query = {"oauth_error": str(e)}
+    return redirect(f"/settings.html?{urlencode(query)}#providers")
+
+
+@bp.post("/providers/<name>/oauth/complete")
+@admin_required
+def provider_oauth_complete(name):
+    """Fallback when the callback URL is not reachable from the browser: the
+    admin pastes the address the sign-in page landed on."""
+    query = parse_qs(urlparse(str((request.get_json(silent=True) or {}).get("url") or "").strip()).query)
+    params = {k: (query.get(k) or [None])[0] for k in ("code", "state", "error", "error_description")}
+    try:
+        _, mode, account = _finish_oauth(params, name)
+    except (ValueError, ProviderError) as e:
+        return api_error(str(e))
+    return jsonify({"ok": True, "mode": mode, "account": account})
+
+
+@bp.post("/providers/<name>/oauth/disconnect")
+@admin_required
+def provider_oauth_disconnect(name):
+    provider = _oauth_provider(name)
+    if not provider:
+        return api_error("Unknown provider", 404)
+    mode = (request.get_json(silent=True) or {}).get("mode")
+    mode = mode if mode in provider.modes else provider.active_mode()
+    provider.disconnect(mode)
+    audit("settings.oauth_disconnected", {"provider": name, "mode": mode})
+    return jsonify({"ok": True})
 
 
 # ---------- Back-compat aliases (Easyship) ----------

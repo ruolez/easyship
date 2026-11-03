@@ -2697,6 +2697,14 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .pv-inuse { display: none; margin-left: 8px; padding: 0 6px; border-radius: 999px; line-height: 16px; font-size: 10px; letter-spacing: 0.4px; background: var(--primary-light); color: var(--primary); }
 .field.in-use .pv-inuse { display: inline-block; }
 .pv-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.pv-oauth { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+.pv-oauth .pr-panel-title { margin-bottom: 0; }
+.pv-oauth-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.pv-oauth-env { min-width: 92px; font-size: 13px; font-weight: 600; }
+.pv-oauth code { font-size: 12px; word-break: break-all; }
+.pv-oauth-paste summary { cursor: pointer; }
+.pv-oauth-paste .pr-inline { margin-top: 8px; }
+.pv-oauth-paste input { flex: 1; min-width: 220px; }
 .pv-row .pr-panel-title { margin-bottom: 2px; }
 .pv-users { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
 .pv-user {

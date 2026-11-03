@@ -20,6 +20,7 @@ initNav('settings').then(async () => {
   initTabs(isAdmin);
   renderAccount();
   if (!isAdmin) return;
+  reportOAuthReturn();
   await renderProviders();
   await loadPicklistOptions();
   await loadSettings();
@@ -1119,6 +1120,7 @@ function instanceOptionText(p) {
 const PLATFORM_MARKS = {
   easyship: ['ES', '#0891b2'], easypost: ['EP', '#2563eb'], shippo: ['SH', '#16a34a'],
   shipstation: ['SS', '#d97706'], endicia: ['EN', '#9333ea'], speedee: ['SD', '#dc2626'],
+  stamps: ['ED', '#7e22ce'],
 };
 
 function platformMark(p, cls = '') {
@@ -1494,6 +1496,79 @@ const PV_ICONS = {
   search: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
 };
 
+/* Providers that sign in on their own page (OAuth): one row per mode, plus a
+   paste-the-address fallback for when the callback URL is not reachable. */
+function oauthHtml(p) {
+  const o = p.oauth;
+  if (!o) return '';
+  const rows = p.modes.map((m) => {
+    const [title] = MODE_TEXT[m.value] || [m.label];
+    const account = o.accounts[m.value];
+    return `
+      <div class="pv-oauth-row">
+        <span class="pv-oauth-env">${esc(title)}</span>
+        <span class="us-status${account ? ' on' : ''}">${account ? `Connected as ${esc(account)}` : 'Not connected'}</span>
+        <button class="btn btn-outlined btn-small" data-oauth-connect="${esc(m.value)}">${account ? 'Reconnect' : esc(o.connect_label)}</button>
+        ${account ? `<button class="btn btn-text btn-small" data-oauth-disconnect="${esc(m.value)}">Disconnect</button>` : ''}
+      </div>`;
+  }).join('');
+  return `
+    <div class="pv-oauth">
+      <div class="pr-panel-title">${esc(o.service)} sign-in</div>
+      ${rows}
+      <span class="hint">Save the client ID first. Callback URL registered with ${esc(o.service)}: <code>${esc(location.origin + o.callback_path)}</code></span>
+      <details class="pv-oauth-paste">
+        <summary class="hint">The sign-in page did not come back here?</summary>
+        <div class="pr-inline">
+          <input id="oauth-paste-${esc(p.name)}" placeholder="Paste the address the browser landed on" autocomplete="off">
+          <button class="btn btn-outlined btn-small" data-oauth-paste>Finish sign-in</button>
+        </div>
+      </details>
+    </div>`;
+}
+
+async function onOAuthClick(p, e) {
+  const connect = e.target.closest('[data-oauth-connect]');
+  const disconnect = e.target.closest('[data-oauth-disconnect]');
+  const paste = e.target.closest('[data-oauth-paste]');
+  if (!connect && !disconnect && !paste) return;
+  if (!settingsClean()) return;
+  try {
+    if (connect) {
+      const r = await api(p.oauth.start_endpoint, {
+        method: 'POST', body: { mode: connect.dataset.oauthConnect, origin: location.origin },
+      });
+      location.href = r.url;
+      return;
+    }
+    if (disconnect) {
+      await api(p.oauth.disconnect_endpoint, { method: 'POST', body: { mode: disconnect.dataset.oauthDisconnect } });
+      snackbar(`${p.label}: signed out`, 'success');
+    } else {
+      const url = document.getElementById(`oauth-paste-${p.name}`).value.trim();
+      if (!url) return;
+      const r = await api(p.oauth.complete_endpoint, { method: 'POST', body: { url } });
+      snackbar(`${p.label}: connected as ${r.account}`, 'success');
+    }
+    await refreshProviders(p.name);
+  } catch (err) {
+    snackbar(err.message, 'error');
+  }
+}
+
+/* Back from a provider's sign-in page: say how it went, then drop the query. */
+function reportOAuthReturn() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('oauth') === 'connected') {
+    snackbar(`${params.get('provider')}: connected as ${params.get('account')}`, 'success');
+  } else if (params.has('oauth_error')) {
+    snackbar(params.get('oauth_error'), 'error');
+  } else {
+    return;
+  }
+  history.replaceState(null, '', location.pathname + location.hash);
+}
+
 function providerCardHtml(p) {
   const modes = p.modes && p.modes.length ? `
     <select id="${esc(p.mode_key)}" class="pr-native" aria-hidden="true" tabindex="-1">
@@ -1562,6 +1637,7 @@ function providerCardHtml(p) {
           <div class="pr-panel-title">Connection</div>
           ${modes}
           <div class="pr-grid">${p.fields.map(fieldHtml).join('')}</div>
+          ${oauthHtml(p)}
           ${test}
         </div>
         ${origin}
@@ -1583,6 +1659,10 @@ function wireProviderCard(p) {
   });
   document.querySelector(`[data-rename="${p.name}"]`).addEventListener('click', () => renameInstance(p));
   document.querySelector(`[data-delete="${p.name}"]`).addEventListener('click', () => deleteInstance(p));
+  if (p.oauth) {
+    document.querySelector(`[data-provider="${p.name}"] .pv-oauth`)
+      .addEventListener('click', (e) => onOAuthClick(p, e));
+  }
   if (p.test_endpoint) {
     const btn = document.querySelector(`[data-test="${p.name}"]`);
     btn.addEventListener('click', () => {
