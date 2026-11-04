@@ -218,7 +218,7 @@ def easyship_mode():
 
 
 @bp.get("/settings/client")
-@ship_required
+@login_required
 def client_settings():
     """Non-secret settings any logged-in user's UI needs. The print_* /
     printer_* values are the shared printing setup from before it moved to each
@@ -417,10 +417,10 @@ def enabled_providers():
 
 
 @bp.post("/settings/test/printer")
-@ship_required
+@login_required
 def test_printer():
-    """A test label to the network printer the station names — any packer can
-    check their own station's printer."""
+    """A test label to the network printer the station names — printing is
+    set up per computer, so any signed-in user can check their own printer."""
     import printer
     data = request.get_json(silent=True) or {}
     cfg = printer.station_config({"host": data.get("host"), "port": data.get("port")})
