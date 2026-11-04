@@ -52,7 +52,8 @@
   // The server renders the stored label (PDF, PNG or native ZPL) as ZPL, so
   // any provider/label-format combination prints on the Zebra.
   async function printLabelUrl(url) {
-    const zplUrl = url + (url.includes('?') ? '&' : '?') + 'format=zpl';
+    const dpi = encodeURIComponent(StationPrint.get().dpi);
+    const zplUrl = url + (url.includes('?') ? '&' : '?') + `format=zpl&dpi=${dpi}`;
     const res = await fetch(zplUrl, { credentials: 'same-origin' });
     if (!res.ok) {
       let detail = '';

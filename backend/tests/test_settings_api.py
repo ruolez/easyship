@@ -104,12 +104,25 @@ class ProfitSettingsTest(unittest.TestCase):
     def test_the_audit_names_only_the_settings_that_changed(self):
         audits = []
         settings_api.audit = lambda action, detail=None, **k: audits.append((action, detail))
-        self.stored.update({"printer_host": "10.0.0.5", "printer_port": "9100"})
-        self._put({"printer_host": "10.0.0.9", "printer_port": "9100", "label_timeout_seconds": "",
+        self.stored.update({"origin_city": "Austin", "origin_zip": "78701"})
+        self._put({"origin_city": "Dallas", "origin_zip": "78701", "label_timeout_seconds": "",
                    "profit_bypass_password": PASSWORD})
-        self._put({"printer_host": "10.0.0.9", "profit_bypass_password": settings_api.MASK})
-        self.assertEqual(audits, [("settings.update", {"keys": ["printer_host", "profit_bypass_password"]}),
+        self._put({"origin_city": "Dallas", "profit_bypass_password": settings_api.MASK})
+        self.assertEqual(audits, [("settings.update", {"keys": ["origin_city", "profit_bypass_password"]}),
                                   ("settings.update", {"keys": []})])
+
+    def test_printing_is_no_longer_saved_on_the_server(self):
+        self.stored["printer_host"] = "10.0.0.5"
+        self._put({"print_mode": "network", "printer_host": "10.0.0.9"})
+        self.assertEqual(self.stored, {"printer_host": "10.0.0.5"})
+
+    def test_client_settings_carry_the_old_shared_printer_for_stations_that_never_set_one(self):
+        self.stored.update({"print_mode": "network", "printer_host": "10.0.0.5", "printer_port": "9101",
+                            "printer_dpi": "300"})
+        out = json.loads(self.client.get("/api/settings/client").get_data())
+        self.assertEqual({k: out[k] for k in ("print_mode", "printer_host", "printer_port", "printer_dpi")},
+                         {"print_mode": "network", "printer_host": "10.0.0.5", "printer_port": "9101",
+                          "printer_dpi": "300"})
 
     def test_a_threshold_without_a_password_is_refused(self):
         self.assertEqual(self._put({"profit_min_amount": "5"}),
@@ -149,6 +162,28 @@ class ProfitSettingsTest(unittest.TestCase):
         self.assertFalse(enabled())
         self.stored["profit_min_margin_pct"] = "20"
         self.assertTrue(enabled())
+
+
+class StationPrinterTestTest(unittest.TestCase):
+    """Any packer can send a test label to their own station's printer."""
+
+    def setUp(self):
+        self.addCleanup(setattr, auth, "user_ships", auth.user_ships)
+        auth.user_ships = lambda user_id, role: True
+        import printer
+        self.addCleanup(setattr, printer, "network_print", printer.network_print)
+        self.sent = []
+        printer.network_print = lambda data, host, port: self.sent.append((host, port))
+        app = Flask(__name__)
+        app.secret_key = "test"
+        app.register_blueprint(settings_api.bp)
+        self.client = app.test_client()
+        with self.client.session_transaction() as sess:
+            sess["user_id"], sess["role"] = 2, "user"
+
+    def test_a_packer_tests_the_printer_their_station_names(self):
+        res = self.client.post("/api/settings/test/printer", json={"host": "10.0.0.9", "port": "9105"})
+        self.assertEqual((res.status_code, self.sent), (200, [("10.0.0.9", 9105)]))
 
 
 class PicklistRulesSettingsTest(unittest.TestCase):

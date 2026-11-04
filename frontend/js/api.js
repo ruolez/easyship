@@ -71,6 +71,46 @@ function pct(v) {
   return Number(v).toFixed(1) + '%';
 }
 
+/* How labels print on THIS computer (Settings → Printing), kept in this
+   browser: {mode, host, port, dpi}. A station that never saved its own prints
+   with the shared setup that used to live on the server (useServerDefaults,
+   fed from /api/settings/client). Requests that print on the server carry
+   payload() so the server uses this station's printer. */
+const StationPrint = (() => {
+  const KEY = 'easyship.print';
+  let fallback = { mode: 'browser', host: '', port: '', dpi: '203' };
+
+  function saved() {
+    try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { return null; }
+  }
+
+  return {
+    useServerDefaults(s) {
+      if (!s) return;
+      fallback = {
+        mode: s.print_mode || 'browser',
+        host: s.printer_host || '',
+        port: s.printer_port || '',
+        dpi: s.printer_dpi || '203',
+      };
+    },
+    get() { return { ...fallback, ...(saved() || {}) }; },
+    isSaved() { return saved() !== null; },
+    set(cfg) {
+      try {
+        localStorage.setItem(KEY, JSON.stringify(cfg));
+        return true;
+      } catch {
+        return false; // private mode / storage blocked
+      }
+    },
+    payload() {
+      const { mode, host, port, dpi } = this.get();
+      return { mode, host, port, dpi };
+    },
+  };
+})();
+
 // Print a PDF (often multi-page — one page per box on a multi-box shipment)
 // through the browser print dialog, printing EVERY page. Pointing an iframe's
 // src at the label URL and calling contentWindow.print() only prints the first

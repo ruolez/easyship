@@ -4,7 +4,7 @@
 const BASE_SETTING_IDS = [
   'origin_company', 'origin_contact', 'origin_address1', 'origin_address2',
   'origin_city', 'origin_state', 'origin_zip', 'origin_phone', 'origin_email',
-  'placeholder_email', 'print_mode', 'printer_host', 'printer_port', 'printer_dpi',
+  'placeholder_email',
   'label_timeout_seconds', 'countdown_seconds', 'order_tag_rules',
   'profit_min_amount', 'profit_min_margin_pct', 'profit_bypass_password',
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
@@ -17,8 +17,10 @@ let SETTING_IDS = [...BASE_SETTING_IDS];
 
 initNav('settings').then(async () => {
   const isAdmin = window.currentUser && window.currentUser.role === 'admin';
-  initTabs(isAdmin);
+  const ships = isAdmin || !!(window.currentUser && window.currentUser.ships);
+  initTabs(isAdmin, ships);
   renderAccount();
+  if (ships) initStationPrinting(isAdmin);
   if (!isAdmin) return;
   reportOAuthReturn();
   await renderProviders();
@@ -26,7 +28,6 @@ initNav('settings').then(async () => {
   await loadSettings();
   plcReady = true;
   plcMaybeStart();
-  updatePrintModeUI();
   renderTagRules();
   loadServiceNames();
   watchDirty();
@@ -39,16 +40,18 @@ initNav('settings').then(async () => {
 });
 
 /* ---------- Tabs ---------- */
-const ADMIN_TABS = ['providers', 'shipping', 'printing', 'boxes', 'integrations', 'picklists', 'verify', 'users', 'audit'];
+const ADMIN_TABS = ['providers', 'shipping', 'boxes', 'integrations', 'picklists', 'verify', 'users', 'audit'];
+// Printing is set up per computer, so everyone who ships can open it.
+const SHIP_TABS = ['printing'];
 
-function initTabs(isAdmin) {
+function initTabs(isAdmin, ships) {
   const buttons = [...document.querySelectorAll('#settings-tabs .tab')];
+  const visible = (t) => isAdmin || (!ADMIN_TABS.includes(t) && (ships || !SHIP_TABS.includes(t)));
   buttons.forEach((b) => {
-    if (!isAdmin && ADMIN_TABS.includes(b.dataset.tab)) b.style.display = 'none';
+    if (!visible(b.dataset.tab)) b.style.display = 'none';
     b.addEventListener('click', () => showTab(b.dataset.tab));
   });
-  const allowed = buttons.map((b) => b.dataset.tab)
-    .filter((t) => isAdmin || !ADMIN_TABS.includes(t));
+  const allowed = buttons.map((b) => b.dataset.tab).filter(visible);
   const fromHash = location.hash.replace('#', '');
   showTab(allowed.includes(fromHash) ? fromHash : allowed[0]);
 }
@@ -86,7 +89,6 @@ window.addEventListener('beforeunload', (e) => {
 
 document.getElementById('discard-settings').addEventListener('click', async () => {
   await loadSettings();
-  updatePrintModeUI();
   renderTagRules();
   setDirty(false);
 });
@@ -1002,9 +1004,53 @@ async function loadServiceNames() {
 /* ---------- Print mode: show only what the selected mode needs ---------- */
 const PRINT_HINTS = {
   browser: 'After purchase the label opens in this browser’s print dialog — works with any printer, one click per label.',
-  network: 'The server sends labels straight to a Zebra (ZPL) printer on the network — no dialog. Any provider label format works: PDF and PNG labels are converted to 4x6 ZPL at the printer DPI; native ZPL is sent as-is.',
+  network: 'The server sends this computer’s labels straight to its Zebra (ZPL) printer on the network — no dialog. Any provider label format works: PDF and PNG labels are converted to 4x6 ZPL at the printer DPI; native ZPL is sent as-is.',
   browserprint: 'Labels print silently through the Zebra Browser Print app on each packing station. The app must be running with the Zebra set as its default printer; the first print asks to accept this website inside the app. Any provider label format works — labels are converted to 4x6 ZPL at the printer DPI. Test from the packing station, not the server.',
 };
+
+/* Printing is this computer's own setup (StationPrint, in this browser), so the
+   card saves as it changes instead of riding the server Save / Discard bar.
+   The Packing workflow card on the same tab stays a server setting (admins). */
+const STATION_PRINT_FIELDS = { host: 'printer_host', port: 'printer_port', dpi: 'printer_dpi' };
+
+async function initStationPrinting(isAdmin) {
+  if (!isAdmin) document.getElementById('card-workflow').style.display = 'none';
+  StationPrint.useServerDefaults(await api('/api/settings/client').catch(() => null));
+  const cfg = StationPrint.get();
+  document.getElementById('print_mode').value = cfg.mode;
+  Object.entries(STATION_PRINT_FIELDS).forEach(([key, id]) => {
+    document.getElementById(id).value = cfg[key] || '';
+  });
+  if (!document.getElementById('printer_dpi').value) document.getElementById('printer_dpi').selectedIndex = 0;
+  updatePrintModeUI();
+  const save = () => {
+    const next = { mode: document.getElementById('print_mode').value || 'browser' };
+    Object.entries(STATION_PRINT_FIELDS).forEach(([key, id]) => {
+      next[key] = document.getElementById(id).value.trim();
+    });
+    showStationSaved(StationPrint.set(next));
+  };
+  ['print_mode', ...Object.values(STATION_PRINT_FIELDS)].forEach((id) => {
+    document.getElementById(id).addEventListener('change', save);
+  });
+  showStationSaved(null);
+}
+
+function showStationSaved(ok) {
+  const el = document.getElementById('print-station-status');
+  if (ok === false) {
+    el.className = 'hint';
+    el.style.color = 'var(--error)';
+    el.textContent = 'This browser blocks saving settings — printing uses the shared setup';
+  } else {
+    el.className = 'hint';
+    el.style.color = '';
+    el.textContent = StationPrint.isSaved()
+      ? 'Saved on this computer only — other stations keep their own setup'
+      : 'Not set up on this computer yet — using the shared setup. Any change is saved here only';
+  }
+  if (ok) snackbar('Printing saved on this computer', 'success');
+}
 
 function updatePrintModeUI() {
   const mode = document.getElementById('print_mode').value || 'browser';

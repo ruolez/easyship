@@ -1,7 +1,6 @@
 initNav('parcels');
 
-let clientSettings = { print_mode: 'browser' };
-api('/api/settings/client').then((s) => { clientSettings = s; }).catch(() => {});
+api('/api/settings/client').then((s) => StationPrint.useServerDefaults(s)).catch(() => {});
 
 const COPY_ICON = '<svg viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 
@@ -473,11 +472,12 @@ function printDialog(url) {
 
 window.reprint = async (id) => {
   try {
-    if (clientSettings.print_mode === 'browserprint') {
+    const mode = StationPrint.get().mode;
+    if (mode === 'browserprint') {
       await ZebraPrint.printLabelUrl(`/api/shipments/${id}/label`);
       snackbar('Label sent to Zebra printer', 'success');
-    } else if (clientSettings.print_mode === 'network') {
-      await api(`/api/shipments/${id}/print`, { method: 'POST' });
+    } else if (mode === 'network') {
+      await api(`/api/shipments/${id}/print`, { method: 'POST', body: StationPrint.payload() });
       snackbar('Sent to printer', 'success');
     } else {
       printDialog(`/api/shipments/${id}/label`);

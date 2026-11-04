@@ -424,13 +424,14 @@ def get_rates():
         "po_box": to_po_box,
     }
     if auto_buy:
-        body["auto_buy"] = _auto_buy(group_id, active_providers, all_rates, gate, verify_read, timings)
+        body["auto_buy"] = _auto_buy(group_id, active_providers, all_rates, gate, verify_read, timings,
+                                     data.get("print"))
         current_app.logger.info("auto ship %s timings ms: %s -> %s", group_id, timings,
                                 "bought" if body["auto_buy"]["started"] else body["auto_buy"].get("code"))
     return jsonify(body)
 
 
-def _auto_buy(group_id, active_providers, all_rates, fresh_gate, verify_read, timings):
+def _auto_buy(group_id, active_providers, all_rates, fresh_gate, verify_read, timings, station_print=None):
     """Auto Mode: buy the preferred rate in the same request when nothing
     needs the packer. The gates are a Buy click's, fed the order gate and
     verification just read. A refusal leaves the rates to the normal flow."""
@@ -450,7 +451,7 @@ def _auto_buy(group_id, active_providers, all_rates, fresh_gate, verify_read, ti
     provider = next(p for p in active_providers if p.name == rate["provider"])
     started = time.monotonic()
     payload, status = _start_group_buy(
-        group_id, _group_rows(group_id), {}, provider.name, provider.label,
+        group_id, _group_rows(group_id), {"print": station_print}, provider.name, provider.label,
         rate["courier_service_id"], {k: v for k, v in rate.items() if k != "profit"},
         fresh_gate=fresh_gate, verify_result=verify_result)
     timings["buy_start"] = _ms(started)
@@ -644,10 +645,12 @@ def _start_group_buy(group_id, rows, data, provider_name, provider_label, courie
     rows = _group_rows(group_id)
     _set_group_progress(primary["id"], "buying", boxes=_group_boxes_snapshot(rows))
 
+    import printer
     app = current_app._get_current_object()
     threading.Thread(
         target=_group_buy_worker,
-        args=(app, group_id, provider_name, courier_service_id, rate, session["user_id"]),
+        args=(app, group_id, provider_name, courier_service_id, rate, session["user_id"],
+              printer.station_config(data.get("print"))),
         daemon=True,
     ).start()
     return {"started": True, "box_count": len(rows)}, 200
@@ -679,13 +682,13 @@ def _cancel_other_drafts(rows, chosen_provider):
     threading.Thread(target=worker, daemon=True).start()
 
 
-def _group_buy_worker(app, group_id, provider_name, courier_service_id, rate, user_id):
+def _group_buy_worker(app, group_id, provider_name, courier_service_id, rate, user_id, print_cfg):
     with app.app_context():
         primary_id = None
         try:
             rows = _group_rows(group_id)
             primary_id = rows[0]["id"]
-            _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id)
+            _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id, print_cfg)
         except Exception as e:  # never leave the group stuck in 'buying'
             if primary_id:
                 _set_group_progress(primary_id, "error", message=str(e))
@@ -744,7 +747,7 @@ def _finalize_row(provider, row, state, rate, box_total):
     )
 
 
-def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
+def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id, print_cfg):
     provider = providers.get_provider(provider_name)
     rows = _group_rows(group_id)
     primary_id = rows[0]["id"]
@@ -902,7 +905,7 @@ def _group_buy_impl(group_id, provider_name, courier_service_id, rate, user_id):
                         message="All labels ready — updating order and printing…")
     # The label prints while the order is updated — it is bought either way.
     step = time.monotonic()
-    printed = _print_group(group_id)
+    printed = _print_group(group_id, print_cfg)
     timings["print"] = _ms(step)
     step = time.monotonic()
     writebacks = run_group_writebacks(group_id)
@@ -959,17 +962,18 @@ def group_label(group_id):
     return response
 
 
-def _print_group(group_id):
-    """Network-print all labels of the group as one job when configured.
-    Returns 'ok', an error string, or None in browser mode."""
-    if (db.get_setting("print_mode") or "browser") != "network":
+def _print_group(group_id, print_cfg):
+    """Network-print all labels of the group as one job on the buying
+    station's printer. Returns 'ok', an error string, or None when that
+    station prints from the browser."""
+    if print_cfg["mode"] != "network":
         return None
     try:
         import printer
         data, fmt = _group_label_bytes(group_id)
         if not data:
             return "error: no label files stored"
-        printer.print_label(data, fmt)
+        printer.print_label(data, fmt, print_cfg)
         return "ok"
     except Exception as e:
         return f"error: {e}"
@@ -983,7 +987,7 @@ def group_print(group_id):
         data, fmt = _group_label_bytes(group_id)
         if not data:
             return api_error("No labels stored for this shipment", 404)
-        printer.print_label(data, fmt)
+        printer.print_label(data, fmt, printer.station_config(request.get_json(silent=True)))
     except Exception as e:
         return api_error(str(e))
     audit("label.print", {"group_id": group_id})
@@ -1347,11 +1351,13 @@ def get_shipment(shipment_id):
 
 
 def _zpl_response(data, fmt, name):
-    """The label rendered as ZPL (any source format), for Zebra Browser Print."""
+    """The label rendered as ZPL (any source format), for Zebra Browser Print,
+    at the resolution of the station's printer (`dpi` query arg)."""
     import io
     import printer
+    station = {"dpi": request.args["dpi"]} if "dpi" in request.args else {}
     try:
-        zpl = labels.to_zpl(data, fmt, dpi=printer.printer_dpi())
+        zpl = labels.to_zpl(data, fmt, dpi=printer.station_config(station)["dpi"])
     except Exception as e:
         return api_error(f"Could not convert {fmt.upper()} label to ZPL — {e}", 500)
     response = send_file(io.BytesIO(zpl), mimetype="text/plain",
@@ -1410,7 +1416,7 @@ def print_label(shipment_id):
         return api_error("Shipment not found", 404)
     try:
         import printer
-        printer.print_shipment_label(row)
+        printer.print_shipment_label(row, printer.station_config(request.get_json(silent=True)))
     except Exception as e:
         return api_error(str(e))
     audit("label.print", {"shipment_id": shipment_id})

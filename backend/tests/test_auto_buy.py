@@ -118,14 +118,15 @@ class AutoBuyTest(unittest.TestCase):
         return res.status_code, json.loads(res.get_data())
 
     def test_preferred_rate_with_every_gate_passing_is_bought_in_the_same_request(self):
-        status, body = self._rates()
+        status, body = self._rates(print={"mode": "network", "host": "10.0.0.9", "port": "9105", "dpi": "300"})
         worker_args = [args[1:] for args in self.threads]  # args[0] is the Flask app
         self.assertEqual((status, body["auto_buy"]["started"], worker_args), (200, True, [(
             body["group_id"], "fake", "svc-1", {
                 "provider": "fake", "courier_service_id": "svc-1", "courier_name": "Fake Ground",
                 "umbrella_name": "Fake", "total_charge": LABEL_COST, "currency": "USD",
                 "min_delivery_time": None, "max_delivery_time": None, "value_for_money_rank": None,
-                "preferred": True, "preferred_by": "preset"}, 1)]))
+                "preferred": True, "preferred_by": "preset"}, 1,
+            {"mode": "network", "host": "10.0.0.9", "port": 9105, "dpi": 300})]))
 
     def test_the_order_gate_just_read_replaces_the_live_buy_time_read(self):
         self._rates()

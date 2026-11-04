@@ -7,7 +7,7 @@ let boxCount = 1;
 let rates = [];
 let selectedRate = null;
 let orderItems = [];
-let clientSettings = { placeholder_email: '', print_mode: 'browser', countdown_seconds: 5 };
+let clientSettings = { placeholder_email: '', countdown_seconds: 5 };
 let savedBoxes = [];
 let lastLabelUrl = null;
 let providerLabels = {};
@@ -26,6 +26,7 @@ async function init() {
     api('/api/providers/enabled').catch(() => []),
   ]);
   clientSettings = settings;
+  StationPrint.useServerDefaults(settings);
   savedBoxes = boxes;
   providerLabels = Object.fromEntries(providers.map((p) => [p.name, p.label]));
   providerCod = Object.fromEntries(providers.map((p) => [p.name, !!p.cod]));
@@ -710,6 +711,7 @@ async function buyLabel() {
           provider: selectedRate.provider,
           courier_service_id: selectedRate.courier_service_id,
           rate: { ...selectedRate, profit: undefined },
+          print: StationPrint.payload(),
           ...(bypassPassword != null ? { bypass_password: bypassPassword } : {}),
           ...(verifyOverride ? { verify_override: true } : {}),
         },
@@ -853,11 +855,12 @@ function showResult(s) {
    is the server's (null). Resolves the print error, or null when it went out. */
 function startPrint(url) {
   lastLabelUrl = url;
-  if (clientSettings.print_mode === 'browserprint') {
+  const mode = StationPrint.get().mode;
+  if (mode === 'browserprint') {
     // ZPL has no visual preview; Open label still works
     return ZebraPrint.printLabelUrl(url).then(() => null, (err) => err);
   }
-  if (clientSettings.print_mode === 'browser') {
+  if (mode === 'browser') {
     // Local printer: pop the browser print dialog with every page (one per box)
     return printPdfUrl(url).then(() => null, (err) => err);
   }
@@ -866,7 +869,7 @@ function startPrint(url) {
 
 function showPrintOutcome(err) {
   if (err) cancelAutoAdvance(); // print failed — let the packer reprint before advancing
-  if (clientSettings.print_mode !== 'browserprint') {
+  if (StationPrint.get().mode !== 'browserprint') {
     if (err) snackbar(err.message, 'error');
     return;
   }
@@ -915,7 +918,7 @@ function cancelAutoAdvance() {
 
 window.printAgain = async (id) => {
   cancelAutoAdvance(); // packer is acting on this order — don't yank them away
-  if (clientSettings.print_mode === 'browserprint') {
+  if (StationPrint.get().mode === 'browserprint') {
     const url = lastLabelUrl || (id ? `/api/shipments/${id}/label` : null);
     if (!url) return;
     try {
@@ -927,7 +930,7 @@ window.printAgain = async (id) => {
     return;
   }
   try {
-    await api(`/api/shipments/${id}/print`, { method: 'POST' });
+    await api(`/api/shipments/${id}/print`, { method: 'POST', body: StationPrint.payload() });
     snackbar('Sent to printer', 'success');
   } catch (err) {
     snackbar(err.message, 'error');
@@ -1091,7 +1094,7 @@ const Auto = (() => {
     setStage('rating', 'Auto Mode — getting rates', `Using ${lb.toFixed(1)} lb · ${preset.service_name || 'preset service'}`);
     // The server buys the preferred rate in the same request when no gate
     // needs the packer; otherwise the rates come back for the steps below.
-    const res = await getRates({ auto_buy: true });
+    const res = await getRates({ auto_buy: true, print: StationPrint.payload() });
     if (res && res.auto_buy && res.auto_buy.started) {
       // Bought from here on — Cancel no longer applies.
       setStage('buying', 'Auto Mode — buying label',
@@ -1137,7 +1140,7 @@ const Auto = (() => {
   function applyPrintOutcome() {
     if (!printOutcome) return;
     if (printOutcome.printFailed) setStage('done', 'Auto Mode — label bought', 'Print failed — use Print again', 'err');
-    else setDetail(clientSettings.print_mode === 'browser' ? 'Confirm the print dialog' : 'Printed — returning to Scan');
+    else setDetail(StationPrint.get().mode === 'browser' ? 'Confirm the print dialog' : 'Printed — returning to Scan');
   }
 
   function cancel() {

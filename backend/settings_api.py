@@ -38,10 +38,6 @@ BASE_SETTING_KEYS = [
     "origin_phone",
     "origin_email",
     "placeholder_email",
-    "print_mode",
-    "printer_host",
-    "printer_port",
-    "printer_dpi",
     "label_timeout_seconds",
     "countdown_seconds",
     "order_tag_rules",
@@ -130,8 +126,6 @@ def get_settings():
     for d in providers.descriptors():
         if d.get("modes") and not out.get(d["mode_key"]):
             out[d["mode_key"]] = d["modes"][0]["value"]
-    if not out.get("print_mode"):
-        out["print_mode"] = "browser"
     return jsonify(out)
 
 
@@ -226,11 +220,16 @@ def easyship_mode():
 @bp.get("/settings/client")
 @ship_required
 def client_settings():
-    """Non-secret settings any logged-in user's UI needs."""
+    """Non-secret settings any logged-in user's UI needs. The print_* /
+    printer_* values are the shared printing setup from before it moved to each
+    station: a station that never saved its own prints this way."""
     return jsonify({
         "mode": _aggregate_mode(),
         "placeholder_email": db.get_setting("placeholder_email") or "",
         "print_mode": db.get_setting("print_mode") or "browser",
+        "printer_host": db.get_setting("printer_host") or "",
+        "printer_port": db.get_setting("printer_port") or "",
+        "printer_dpi": db.get_setting("printer_dpi") or "",
         "countdown_seconds": int(db.get_setting("countdown_seconds") or 5),
         "profit_gate_enabled": profit.load_thresholds()["enabled"],
     })
@@ -417,16 +416,15 @@ def enabled_providers():
 
 
 @bp.post("/settings/test/printer")
-@admin_required
+@ship_required
 def test_printer():
+    """A test label to the network printer the station names — any packer can
+    check their own station's printer."""
     import printer
     data = request.get_json(silent=True) or {}
+    cfg = printer.station_config({"host": data.get("host"), "port": data.get("port")})
     try:
-        printer.network_print(
-            printer.TEST_ZPL,
-            host=(data.get("host") or "").strip() or None,
-            port=(data.get("port") or "").strip() or None,
-        )
+        printer.network_print(printer.TEST_ZPL, cfg["host"], cfg["port"])
     except printer.PrinterError as e:
         return api_error(str(e))
     return jsonify({"ok": True})
