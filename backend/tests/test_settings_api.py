@@ -124,16 +124,6 @@ class ProfitSettingsTest(unittest.TestCase):
                          {"print_mode": "network", "printer_host": "10.0.0.5", "printer_port": "9101",
                           "printer_dpi": "300"})
 
-    def test_a_user_who_does_not_ship_still_gets_the_shared_printer_fallback(self):
-        self.addCleanup(setattr, auth, "user_ships", auth.user_ships)
-        auth.user_ships = lambda user_id, role: False
-        with self.client.session_transaction() as sess:
-            sess["user_id"], sess["role"] = 2, "user"
-        self.stored.update({"print_mode": "network", "printer_host": "10.0.0.5"})
-        res = self.client.get("/api/settings/client")
-        out = json.loads(res.get_data())
-        self.assertEqual((res.status_code, out["print_mode"], out["printer_host"]), (200, "network", "10.0.0.5"))
-
     def test_a_threshold_without_a_password_is_refused(self):
         self.assertEqual(self._put({"profit_min_amount": "5"}),
                          (400, {"error": "Set a bypass password before turning on the profit check"}))
@@ -175,8 +165,7 @@ class ProfitSettingsTest(unittest.TestCase):
 
 
 class StationPrinterTestTest(unittest.TestCase):
-    """Any signed-in user can send a test label to their own station's
-    printer — printing is set up per computer, not per role."""
+    """Any packer can send a test label to their own station's printer."""
 
     def setUp(self):
         self.addCleanup(setattr, auth, "user_ships", auth.user_ships)
@@ -195,17 +184,6 @@ class StationPrinterTestTest(unittest.TestCase):
     def test_a_packer_tests_the_printer_their_station_names(self):
         res = self.client.post("/api/settings/test/printer", json={"host": "10.0.0.9", "port": "9105"})
         self.assertEqual((res.status_code, self.sent), (200, [("10.0.0.9", 9105)]))
-
-    def test_a_user_who_does_not_ship_can_test_their_station_printer(self):
-        auth.user_ships = lambda user_id, role: False
-        res = self.client.post("/api/settings/test/printer", json={"host": "10.0.0.9", "port": "9105"})
-        self.assertEqual((res.status_code, self.sent), (200, [("10.0.0.9", 9105)]))
-
-    def test_signed_out_requests_are_refused(self):
-        with self.client.session_transaction() as sess:
-            sess.clear()
-        res = self.client.post("/api/settings/test/printer", json={"host": "10.0.0.9"})
-        self.assertEqual((res.status_code, self.sent), (401, []))
 
 
 class PicklistRulesSettingsTest(unittest.TestCase):

@@ -17,9 +17,10 @@ let SETTING_IDS = [...BASE_SETTING_IDS];
 
 initNav('settings').then(async () => {
   const isAdmin = window.currentUser && window.currentUser.role === 'admin';
-  initTabs(isAdmin);
+  const ships = isAdmin || !!(window.currentUser && window.currentUser.ships);
+  initTabs(isAdmin, ships);
   renderAccount();
-  initStationPrinting(isAdmin);
+  if (ships) initStationPrinting(isAdmin);
   if (!isAdmin) return;
   reportOAuthReturn();
   await renderProviders();
@@ -39,13 +40,13 @@ initNav('settings').then(async () => {
 });
 
 /* ---------- Tabs ---------- */
-// Printing is set up per computer (saved in this browser), so every
-// signed-in user can open it; these tabs change shared settings.
 const ADMIN_TABS = ['providers', 'shipping', 'boxes', 'integrations', 'picklists', 'verify', 'users', 'audit'];
+// Printing is set up per computer, so everyone who ships can open it.
+const SHIP_TABS = ['printing'];
 
-function initTabs(isAdmin) {
+function initTabs(isAdmin, ships) {
   const buttons = [...document.querySelectorAll('#settings-tabs .tab')];
-  const visible = (t) => isAdmin || !ADMIN_TABS.includes(t);
+  const visible = (t) => isAdmin || (!ADMIN_TABS.includes(t) && (ships || !SHIP_TABS.includes(t)));
   buttons.forEach((b) => {
     if (!visible(b.dataset.tab)) b.style.display = 'none';
     b.addEventListener('click', () => showTab(b.dataset.tab));
