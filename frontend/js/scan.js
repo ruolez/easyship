@@ -163,8 +163,16 @@ function currentServicePreset() {
   return readAutoPreset().byProvider[provider] || null;
 }
 
+/* Providers Auto Mode never buys with (UDS ships manually). */
+let manualProviders = new Set();
+
+function manualProvider() {
+  const provider = window.activeProvider ? window.activeProvider() : '';
+  return Boolean(provider) && manualProviders.has(provider);
+}
+
 function autoReady() {
-  if (!autoToggle.checked) return false;
+  if (!autoToggle.checked || manualProvider()) return false;
   const p = readAutoPreset();
   const svc = currentServicePreset();
   return Boolean(p.box_id && svc && (svc.service_id || svc.service_name));
@@ -172,6 +180,8 @@ function autoReady() {
 
 async function initAutoMode() {
   autoToggle.checked = localStorage.getItem(AUTO_MODE_KEY) === '1';
+  const enabled = await api('/api/providers/enabled').catch(() => []);
+  manualProviders = new Set(enabled.filter((p) => p.auto === false).map((p) => p.name));
   autoToggle.addEventListener('change', async () => {
     localStorage.setItem(AUTO_MODE_KEY, autoToggle.checked ? '1' : '0');
     // Opening straight into the editor only when something still needs choosing.
@@ -275,6 +285,11 @@ function renderAutoStatus() {
     autoSummary.className = 'station-summary err';
     autoSummary.textContent = 'Select a provider';
     status.innerHTML = '<span class="chip static err">Select a shipping provider in the sidebar</span>';
+  } else if (manualProvider()) {
+    autoSummary.className = 'station-summary warn';
+    autoSummary.textContent = 'Manual provider';
+    status.innerHTML = '<span class="chip static warn">This provider ships manually</span>'
+      + '<span class="auto-hint">Scanned orders open the Ship page to rate and buy by hand. Auto Mode works again with another provider.</span>';
   } else if (autoReady()) {
     autoSummary.className = 'station-summary ok';
     autoSummary.textContent = `${svc.service_name || 'service'} · ${box ? `${box.length}×${box.width}×${box.height} in` : 'box'}`;

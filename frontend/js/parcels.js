@@ -57,6 +57,24 @@ function codChip(options) {
   return ` <span class="chip static warn" title="Collect on delivery">COD $${Number(amount).toFixed(2)}</span>`;
 }
 
+/* Carrier delivery status (UDS reports it), next to the shipment status. */
+const TRACKING_STATUS = {
+  info_received: ['Label sent', ''],
+  in_transit: ['In transit', ''],
+  out_for_delivery: ['Out for delivery', 'warn'],
+  delivered: ['Delivered', 'ok'],
+  exception: ['Exception', 'err'],
+  returning: ['Returning', 'err'],
+  will_call: ['Will call', 'warn'],
+};
+
+function trackingChip(s) {
+  if (!s.tracking_status) return '';
+  const [text, cls] = TRACKING_STATUS[s.tracking_status] || [s.tracking_status.replace(/_/g, ' '), ''];
+  const when = s.tracking_status === 'delivered' ? s.delivered_at : s.tracking_status_at;
+  return ` <span class="chip static ${cls}" title="${esc(when ? `${text} · ${when}` : text)}">${esc(text)}</span>`;
+}
+
 function formatAddress(d) {
   if (!d) return '';
   const parts = [
@@ -309,6 +327,8 @@ const MENU_ICONS = {
   retry: '<svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
   undo: '<svg viewBox="0 0 24 24"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>',
   error: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+  track: '<svg viewBox="0 0 24 24"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62L18.3 9.38a1 1 0 0 0-.78-.38H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>',
+  edit: '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
 };
 const ICON_KEBAB = '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>';
 
@@ -327,6 +347,13 @@ function rowActions(s) {
   if (s.has_label) items.push({ label: 'Print label', icon: MENU_ICONS.print, run: () => reprint(s.id) });
   if (needsShopifyPush) items.push({ label: 'Send to Shopify', icon: MENU_ICONS.retry, run: () => sendToShopify(s) });
   if (needsRetry) items.push({ label: 'Retry writeback', icon: MENU_ICONS.retry, run: () => retryWb(s.id) });
+  const bought = ['label_created', 'fulfilled'].includes(s.status);
+  if (s.can_track && (bought || s.status === 'voided') && s.tracking_number) {
+    items.push({ label: 'Tracking', icon: MENU_ICONS.track, run: () => showTracking(s, ref) });
+  }
+  if (s.can_edit_delivery && bought) {
+    items.push({ label: 'Edit delivery', icon: MENU_ICONS.edit, run: () => editDelivery(s, ref) });
+  }
   if (['label_created', 'fulfilled'].includes(s.status)) {
     items.push({ label: 'Undo shipment', icon: MENU_ICONS.undo, danger: true, run: () => voidShipment(s.id, ref, s.source, s.box_total) });
   }
@@ -430,7 +457,7 @@ function render() {
         <td>${esc(s.courier_umbrella_name || '')}</td>
         <td class="num">${money(s.shipping_cost)}</td>
         <td title="${esc(numbers.join(', '))}">${trackingCell}</td>
-        <td><span class="status status-${esc(s.status)}" title="${esc(s.error_message || '')}">${esc(s.status.replace('_', ' '))}</span></td>
+        <td><span class="status status-${esc(s.status)}" title="${esc(s.error_message || '')}">${esc(s.status.replace('_', ' '))}</span>${trackingChip(s)}</td>
         <td class="created">${esc(s.created_at)}</td>
         <td class="actions">${rowActions(s).length
           ? `<button class="row-menu-btn" data-row="${rowIndex}" title="Actions" aria-label="Row actions" aria-haspopup="menu">${ICON_KEBAB}</button>`
@@ -548,6 +575,172 @@ async function linkShopifyOrder(s) {
   };
   document.getElementById('m-send').addEventListener('click', submit);
   number.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') submit(); });
+}
+
+/* ---------- Carrier tracking & delivery edits (UDS) ---------- */
+function openModal(html, wide) {
+  const modal = document.getElementById('modal');
+  modal.classList.toggle('modal-wide', !!wide);
+  modal.innerHTML = html;
+  document.getElementById('modal-backdrop').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('modal-backdrop').classList.remove('show');
+  document.getElementById('modal').classList.remove('modal-wide');
+}
+
+const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '');
+const fmtTime = (iso) => {
+  const d = iso ? new Date(iso) : null;
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+};
+const titleCase = (code) => String(code || '').toLowerCase().replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+
+function trackingEventHtml(e, multiBox) {
+  const [, cls] = TRACKING_STATUS[e.status] || ['', ''];
+  const links = [
+    safeUrl(e.vpod_url) && `<a href="${esc(e.vpod_url)}" target="_blank" rel="noopener">Delivery photo</a>`,
+    ...(e.photos || []).filter((ph) => safeUrl(ph.url))
+      .map((ph) => `<a href="${esc(ph.url)}" target="_blank" rel="noopener">${esc(ph.label || 'Photo')}</a>`),
+  ].filter(Boolean);
+  const facts = [
+    e.location,
+    e.signed_by && `Signed by ${e.signed_by}`,
+    e.left_at && `Left at ${titleCase(e.left_at)}`,
+    e.raw && e.raw.rescheduled_for && `Next attempt ${fmtTime(e.raw.rescheduled_for)}`,
+  ].filter(Boolean);
+  const signature = /^[A-Za-z0-9+/=]+$/.test(e.signature_png || '')
+    ? `<img class="trk-signature" alt="Signature" src="data:image/png;base64,${e.signature_png}">` : '';
+  return `<li class="trk-event">
+    <div class="trk-when">${esc(fmtTime(e.event_at))}</div>
+    <div class="trk-what">
+      <div><span class="chip static ${cls}">${esc(e.description || titleCase(e.status))}</span>
+        ${multiBox ? `<span class="mono text-secondary">${esc(e.tracking_number)}</span>` : ''}</div>
+      ${e.detail ? `<div>${esc(e.detail)}</div>` : ''}
+      ${e.exception_detail ? `<div class="trk-exception">${esc(e.exception_detail)}</div>` : ''}
+      ${facts.length ? `<div class="text-secondary">${esc(facts.join(' · '))}</div>` : ''}
+      ${links.length ? `<div class="trk-links">${links.join(' ')}</div>` : ''}
+      ${signature}
+    </div>
+  </li>`;
+}
+
+function trackingOrderHtml(t) {
+  if (t.order_error) return `<div class="error-note">UDS order details unavailable: ${esc(t.order_error)}</div>`;
+  const o = t.order;
+  if (!o) return '';
+  const billed = o.price_total != null ? money(o.price_total) : '—';
+  const differs = o.price_total != null && t.cost != null && Math.abs(o.price_total - t.cost) >= 0.01;
+  const parts = (o.price_breakdown || []).filter((p) => p.included && p.amount != null)
+    .map((p) => `${esc(p.name)} ${money(p.amount)}`).join(' · ');
+  const pods = (o.pods || []).flatMap((pod) => (pod.images || [])
+    .filter((img) => (img.type || '').toUpperCase() === 'URL' && safeUrl(img.value))
+    .map((img) => `<a href="${esc(img.value)}" target="_blank" rel="noopener">${esc(pod.type || 'Proof')} ${esc(pod.name || '')}</a>`));
+  const rows = [
+    ['UDS order', `${esc(String(o.order_id || ''))}${o.order_ref ? ` <span class="text-secondary">${esc(o.order_ref)}</span>` : ''}`],
+    ['Order status', esc(o.status || '—')],
+    ['Price', `${billed} <span class="text-secondary">${esc(o.price_status || '')}</span>${differs ? ` <span class="chip static warn" title="Charged at purchase: ${money(t.cost)}">was ${money(t.cost)}</span>` : ''}${parts ? `<div class="text-secondary">${parts}</div>` : ''}`],
+    o.invoice_id && ['Invoice', esc(String(o.invoice_id))],
+    o.delivery_by && ['Deliver by', esc(o.delivery_by)],
+    o.instructions && ['Instructions', esc(o.instructions)],
+    pods.length && ['Proof of delivery', pods.join(' ')],
+  ].filter(Boolean);
+  return `<dl class="trk-order">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+}
+
+function trackingHtml(t, ref) {
+  const multiBox = t.boxes.length > 1;
+  const [statusText, statusCls] = TRACKING_STATUS[t.tracking_status] || [t.tracking_status ? titleCase(t.tracking_status) : 'No events yet', ''];
+  const boxes = t.boxes.map((b) => `<span class="trk-box">${multiBox ? `Box ${b.box_number} · ` : ''}${safeUrl(b.url)
+    ? `<a class="mono" href="${esc(b.url)}" target="_blank" rel="noopener">${esc(b.tracking_number)}</a>`
+    : `<span class="mono">${esc(b.tracking_number)}</span>`}</span>`).join('');
+  const events = t.events.length
+    ? `<ul class="trk-events">${t.events.map((e) => trackingEventHtml(e, multiBox)).join('')}</ul>`
+    : '<p class="text-secondary">No tracking events yet. UDS reports the first one when the package is received.</p>';
+  const misses = (t.refresh_errors || []).length
+    ? `<div class="error-note">${t.refresh_errors.map(esc).join('<br>')}</div>` : '';
+  return `
+    <h3>Tracking · ${esc(ref)} <span class="chip static ${statusCls}">${esc(statusText)}</span></h3>
+    <div class="trk-boxes">${boxes}</div>
+    ${t.delivered_at ? `<p class="text-secondary">Delivered ${esc(t.delivered_at)}</p>` : ''}
+    ${trackingOrderHtml(t)}
+    ${misses}
+    ${events}
+    <div class="actions">
+      ${t.can_edit_delivery ? '<button class="btn btn-text" id="m-edit">Edit delivery</button>' : ''}
+      <button class="btn btn-outlined" id="m-refresh">Refresh from ${esc(t.provider_label || 'carrier')}</button>
+      <button class="btn btn-primary" id="m-close">Close</button>
+    </div>`;
+}
+
+async function showTracking(s, ref, refresh = false) {
+  openModal(`<h3>Tracking · ${esc(ref)}</h3><p><span class="spinner"></span> ${refresh ? 'Asking UDS…' : 'Loading…'}</p>`, true);
+  let t;
+  try {
+    t = refresh
+      ? await api(`/api/shipments/${s.id}/tracking/refresh`, { method: 'POST' })
+      : await api(`/api/shipments/${s.id}/tracking`);
+  } catch (err) {
+    closeModal();
+    snackbar(err.message, 'error');
+    return;
+  }
+  openModal(trackingHtml(t, ref), true);
+  document.getElementById('m-close').addEventListener('click', () => {
+    closeModal();
+    if (refresh) load();
+  });
+  document.getElementById('m-refresh').addEventListener('click', () => showTracking(s, ref, true));
+  const edit = document.getElementById('m-edit');
+  if (edit) edit.addEventListener('click', () => editDelivery({ ...s, destination: t.destination, options: t.options }, ref));
+}
+
+const DELIVERY_FIELDS = [
+  ['company', 'Company', 35], ['contact', 'Contact name', 35], ['address1', 'Address 1', 40],
+  ['address2', 'Address 2', 40], ['city', 'City', 30], ['state', 'State', 2], ['zip', 'ZIP', 10],
+  ['phone', 'Phone', 20],
+];
+
+function editDelivery(s, ref) {
+  const d = s.destination || {};
+  const instructions = ((s.options || {}).provider || {}).instructions || '';
+  const field = ([key, label, max]) => `<div class="field"><label for="d-${key}">${label}</label>
+    <input id="d-${key}" maxlength="${max}" value="${esc(d[key] || '')}"></div>`;
+  openModal(`
+    <h3>Edit delivery · ${esc(ref)}</h3>
+    <p class="text-secondary">Changes the order at ${esc(s.provider_label || 'the carrier')} before the driver delivers it. The printed label keeps the old address; UDS routes by its order. The Shopify / BackOffice order is not changed.</p>
+    <div class="row mb-16" style="margin-top:12px">${DELIVERY_FIELDS.slice(0, 2).map(field).join('')}</div>
+    <div class="row mb-16">${DELIVERY_FIELDS.slice(2, 4).map(field).join('')}</div>
+    <div class="row mb-16">${DELIVERY_FIELDS.slice(4).map(field).join('')}</div>
+    <div class="field"><label for="d-instructions">Driver instructions</label>
+      <input id="d-instructions" maxlength="100" value="${esc(instructions)}"></div>
+    <div class="actions">
+      <button class="btn btn-text" id="m-cancel">Cancel</button>
+      <button class="btn btn-primary" id="m-save">Save at ${esc(s.provider_label || 'carrier')}</button>
+    </div>`, true);
+  document.getElementById('m-cancel').addEventListener('click', closeModal);
+  document.getElementById('m-save').addEventListener('click', async () => {
+    const changes = {};
+    DELIVERY_FIELDS.forEach(([key]) => {
+      const value = document.getElementById(`d-${key}`).value.trim();
+      if (value !== (d[key] || '').trim()) changes[key] = key === 'state' ? value.toUpperCase() : value;
+    });
+    const newInstructions = document.getElementById('d-instructions').value.trim();
+    if (newInstructions !== instructions) changes.instructions = newInstructions;
+    if (!Object.keys(changes).length) { closeModal(); return; }
+    const btn = document.getElementById('m-save');
+    btn.disabled = true;
+    try {
+      await api(`/api/shipments/${s.id}/delivery`, { method: 'PATCH', body: changes });
+      closeModal();
+      snackbar(`Delivery updated at ${s.provider_label || 'the carrier'}`, 'success');
+      load();
+    } catch (err) {
+      btn.disabled = false;
+      snackbar(err.message, 'error');
+    }
+  });
 }
 
 function showError(s, ref) {

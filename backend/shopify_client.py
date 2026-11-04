@@ -802,6 +802,8 @@ SHOPIFY_TRACKING_COMPANIES = (
     ("ontrac", "OnTrac"),
     ("lasership", "Lasership"),
     ("speedee", "Spee-Dee Delivery"),  # not on Shopify's list — sent with tracking URLs
+    ("uniteddelivery", "United Delivery Service"),  # not on Shopify's list either
+    ("uds", "United Delivery Service"),
 )
 
 

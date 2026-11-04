@@ -3238,3 +3238,23 @@ body.with-sidebar .vf-actions { left: var(--sidebar-rail-w); }
 .vh-lines { width: 100%; font-size: 13px; }
 .vh-lines td { white-space: normal; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .vh-events li { grid-template-columns: 1fr; gap: 0; } }
+.rate-breakdown { white-space: normal; }
+
+/* Carrier tracking (Parcels › Tracking) */
+.modal.modal-wide { max-width: 720px; }
+.trk-boxes { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 10px; font-size: 13px; }
+.trk-order { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 12px 0;
+  padding: 12px 14px; border: 1px solid var(--outline); border-radius: 10px; font-size: 13px; }
+.trk-order dt { color: var(--text-secondary); }
+.trk-order dd { margin: 0; }
+.trk-events { list-style: none; margin: 14px 0 0; padding: 0; border-left: 2px solid var(--outline); }
+.trk-event { display: grid; grid-template-columns: 150px 1fr; gap: 12px; padding: 8px 0 10px 14px; position: relative; font-size: 13px; }
+.trk-event::before { content: ''; position: absolute; left: -6px; top: 13px; width: 10px; height: 10px;
+  border-radius: 50%; background: var(--surface); border: 2px solid var(--primary); }
+.trk-when { color: var(--text-secondary); font-size: 12px; padding-top: 3px; }
+.trk-what { display: flex; flex-direction: column; gap: 3px; }
+.trk-exception { color: var(--error); }
+.trk-links { display: flex; flex-wrap: wrap; gap: 10px; }
+.trk-signature { max-width: 220px; max-height: 90px; margin-top: 4px; border: 1px solid var(--outline);
+  border-radius: 6px; background: #fff; }
+@media (max-width: 560px) { .trk-event { grid-template-columns: 1fr; gap: 2px; } }

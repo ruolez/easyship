@@ -45,6 +45,9 @@ def create_app():
 
     app.teardown_appcontext(db.close_db)
 
+    import tracking_sync
+    tracking_sync.start(app)
+
     @app.after_request
     def no_cache(response):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"

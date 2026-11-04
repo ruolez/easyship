@@ -12,6 +12,8 @@ let savedBoxes = [];
 let lastLabelUrl = null;
 let providerLabels = {};
 let providerCod = {}; // provider name → collects on delivery
+let providerPlatform = {}; // provider name → platform ("uds", "shippo"...)
+let providerAuto = {}; // provider name → Auto Mode allowed (UDS ships manually)
 let preferredService = ''; // courier service a tag rule asked for
 let preferredServiceId = ''; // Auto Mode preset service id (when no tag rule names one)
 let orderGate = null; // Shopify hold / payment gate — rates only when not shippable
@@ -30,7 +32,10 @@ async function init() {
   savedBoxes = boxes;
   providerLabels = Object.fromEntries(providers.map((p) => [p.name, p.label]));
   providerCod = Object.fromEntries(providers.map((p) => [p.name, !!p.cod]));
+  providerPlatform = Object.fromEntries(providers.map((p) => [p.name, p.platform]));
+  providerAuto = Object.fromEntries(providers.map((p) => [p.name, p.auto !== false]));
   navReady.then(syncCodField);
+  navReady.then(syncUdsPanel);
   addParcelRow();
   const loaded = await prefill();
   applyPlaceholderEmail();
@@ -385,18 +390,62 @@ document.getElementById('cod-on').addEventListener('change', (e) => {
 /* Spee-Dee's draft holds the COD it was rated with, so a COD change after
    rating must not be bought with the old draft. */
 function dropRatesForCod() {
+  dropRates('COD changed — get rates again');
+}
+
+function dropRates(message) {
   if (!rates.length) return;
   rates = [];
   renderRates();
   document.getElementById('panel-rates').style.display = 'none';
-  snackbar('COD changed — get rates again');
+  snackbar(message);
 }
 window.addEventListener('easyship:provider', syncCodField);
+
+/* ---------- UDS delivery options ----------
+   Shown while UDS is the provider (or, with none chosen, when UDS is one of
+   them). UDS quotes and creates the order with these, so a change after
+   rating drops the rates, as COD does. */
+const UDS_FIELDS = {
+  delivery_date: 'uds-date', drop_location: 'uds-drop', description: 'uds-description',
+  instructions: 'uds-instructions', access_code: 'uds-access-code', door_code: 'uds-door-code',
+  parking: 'uds-parking', notes: 'uds-notes',
+};
+
+function udsActive() {
+  const name = (window.activeProvider && window.activeProvider()) || '';
+  return name ? providerPlatform[name] === 'uds' : Object.values(providerPlatform).includes('uds');
+}
+
+function syncUdsPanel() {
+  document.getElementById('panel-uds').style.display = udsActive() ? '' : 'none';
+  const date = document.getElementById('uds-date');
+  const today = new Date();
+  date.min = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+window.addEventListener('easyship:provider', syncUdsPanel);
+Object.values(UDS_FIELDS).forEach((id) =>
+  document.getElementById(id).addEventListener('change', () => {
+    if (rates.some((r) => providerPlatform[r.provider] === 'uds')) dropRates('UDS delivery changed — get rates again');
+  }));
+
+function udsOptions() {
+  const out = {};
+  Object.entries(UDS_FIELDS).forEach(([key, id]) => {
+    const value = document.getElementById(id).value.trim();
+    if (value) out[key] = value;
+  });
+  return out;
+}
 
 /* The shipment options as the API takes them; null (after saying why) when
    COD is on without an amount. */
 function collectOptions() {
   const options = { signature: document.getElementById('signature').value };
+  if (udsActive()) {
+    const uds = udsOptions();
+    if (Object.keys(uds).length) options.provider = uds;
+  }
   if (!document.getElementById('cod-on').checked) return options;
   const amount = document.getElementById('cod-amount');
   if (!(parseFloat(amount.value) > 0)) {
@@ -575,6 +624,16 @@ async function getRates(extra = {}) {
   }
 }
 
+/* The carrier's itemized price (UDS: base rate, fuel surcharge...) — only
+   the parts that add up to the total. */
+function rateBreakdownHtml(parts) {
+  const shown = (parts || []).filter((p) => p.included && p.amount != null);
+  if (!shown.length) return '';
+  const text = shown.map((p) => `${p.name} ${money(p.amount)}`).join(' · ');
+  const title = shown.map((p) => `${p.name}: ${p.description || ''}`).join('\n');
+  return `<span class="rate-days rate-breakdown" title="${esc(title)}">${esc(text)}</span>`;
+}
+
 function providerLabel(name) {
   if (!name) return '';
   return providerLabels[name] || name.charAt(0).toUpperCase() + name.slice(1);
@@ -592,6 +651,7 @@ function renderRates() {
       <span class="rate-info">
         <span class="rate-courier">${esc(r.courier_name)}${r.preferred ? (r.preferred_by === 'preset' ? ' <span class="chip static warn rate-best" title="Your Auto Mode preset service">Auto preset</span>' : ' <span class="chip static warn rate-best" title="Chosen by an order tag rule">Tag rule</span>') : ''}${r.value_for_money_rank === 1 ? ' <span class="chip static ok rate-best">Best value</span>' : ''}${multiProvider && r.provider ? ` <span class="chip static rate-provider">${esc(providerLabel(r.provider))}</span>` : ''}</span>
         <span class="rate-days">${r.min_delivery_time ?? '?'}–${r.max_delivery_time ?? '?'} business days</span>
+        ${rateBreakdownHtml(r.breakdown)}
       </span>
       ${rateProfitHtml(r.profit)}
       <span class="rate-price">${money(r.total_charge)} <small>${esc(r.currency || 'USD')}</small></span>
@@ -1015,6 +1075,9 @@ const Auto = (() => {
     preset = loadPreset(provider);
     if (!orderLoaded) return fail('Order could not be loaded — finish manually');
     if (!provider) return fail('No shipping provider selected — finish manually');
+    if (providerAuto[provider] === false) {
+      return fail(`${providerLabel(provider)} ships manually — choose the rate and buy`);
+    }
     if (!preset) return fail('No Auto Mode preset for this provider on this station — set it on the Scan page');
     if (firstMissingDestinationField()) return fail('Destination is incomplete — finish manually');
     const rows = document.querySelectorAll('.parcel-row');
@@ -1103,6 +1166,9 @@ const Auto = (() => {
     }
     if (stage !== 'rating') return; // cancelled while the request was in flight
     if (!res) return fail('Could not get rates — finish manually');
+    if (res.auto_buy && res.auto_buy.code === 'manual_only') {
+      return fail('This provider ships manually — choose the rate and buy');
+    }
     if (orderBlocked()) {
       return fail(`${orderGate.label} — a label cannot be bought: ${orderGate.reasons.join('; ')}`);
     }

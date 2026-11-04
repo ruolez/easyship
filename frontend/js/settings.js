@@ -1166,7 +1166,7 @@ function instanceOptionText(p) {
 const PLATFORM_MARKS = {
   easyship: ['ES', '#0891b2'], easypost: ['EP', '#2563eb'], shippo: ['SH', '#16a34a'],
   shipstation: ['SS', '#d97706'], endicia: ['EN', '#9333ea'], speedee: ['SD', '#dc2626'],
-  stamps: ['ED', '#7e22ce'],
+  stamps: ['ED', '#7e22ce'], uds: ['UD', '#0284c7'],
 };
 
 function platformMark(p, cls = '') {
@@ -1685,6 +1685,7 @@ function providerCardHtml(p) {
           <div class="pr-grid">${p.fields.map(fieldHtml).join('')}</div>
           ${oauthHtml(p)}
           ${test}
+          ${p.notice ? `<p class="hint mt-16">${esc(p.notice)}</p>` : ''}
         </div>
         ${origin}
         <div class="pr-panel-row" data-inst-users="${esc(p.name)}">

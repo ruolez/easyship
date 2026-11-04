@@ -68,6 +68,52 @@
       <button class="btn btn-text" id="add-parcel">+ Add another box</button>
     </div>
 
+    <div class="card" id="panel-uds" style="display:none">
+      <h2>UDS delivery</h2>
+      <p class="hint mb-16">Sent with the UDS order. Changing these after rating needs new rates.</p>
+      <div class="row mb-16">
+        <div class="field">
+          <label for="uds-date">Delivery date</label>
+          <input type="date" id="uds-date">
+          <span class="hint">Blank = next available day</span>
+        </div>
+        <div class="field">
+          <label for="uds-drop">Preferred drop location</label>
+          <select id="uds-drop">
+            <option value="">No preference</option>
+            <option value="Front Door">Front Door</option>
+            <option value="Between Doors">Between Doors</option>
+            <option value="Porch">Porch</option>
+            <option value="Side Door">Side Door</option>
+            <option value="Back Door">Back Door</option>
+            <option value="Leasing Office">Leasing Office</option>
+            <option value="Left at front desk">Left at front desk</option>
+            <option value="Left in mailroom">Left in mailroom</option>
+            <option value="Left in mail slot">Left in mail slot</option>
+            <option value="Under door">Under door</option>
+            <option value="Under mat">Under mat</option>
+            <option value="Under garage door">Under garage door</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="uds-description">Package contents</label>
+          <input id="uds-description" maxlength="100" placeholder="Box">
+        </div>
+      </div>
+      <div class="row mb-16">
+        <div class="field">
+          <label for="uds-instructions">Driver instructions</label>
+          <input id="uds-instructions" maxlength="100" placeholder="Blank = the order number">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field"><label for="uds-access-code">Access code</label><input id="uds-access-code" maxlength="100"></div>
+        <div class="field"><label for="uds-door-code">Door code</label><input id="uds-door-code" maxlength="100"></div>
+        <div class="field"><label for="uds-parking">Parking instructions</label><input id="uds-parking" maxlength="100"></div>
+        <div class="field"><label for="uds-notes">General notes</label><input id="uds-notes" maxlength="100"></div>
+      </div>
+    </div>
+
     <div class="row mb-16" id="rates-actions">
       <div class="fixed">
         <button class="btn btn-primary" id="get-rates">Get rates</button>

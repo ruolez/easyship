@@ -43,6 +43,7 @@ def _load_registry():
         from .endicia import EndiciaProvider
         from .speedee import SpeedeeProvider
         from .stamps import StampsProvider
+        from .uds import UdsProvider
         _REGISTRY["easyship"] = EasyshipProvider
         _REGISTRY["shippo"] = ShippoProvider
         _REGISTRY["easypost"] = EasyPostProvider
@@ -50,6 +51,7 @@ def _load_registry():
         _REGISTRY["endicia"] = EndiciaProvider
         _REGISTRY["speedee"] = SpeedeeProvider
         _REGISTRY["stamps"] = StampsProvider
+        _REGISTRY["uds"] = UdsProvider
     return _REGISTRY
 
 

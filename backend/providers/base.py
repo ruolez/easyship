@@ -50,10 +50,13 @@ class Rate:
     min_delivery_time: int | None
     max_delivery_time: int | None
     value_for_money_rank: int | None
+    # Optional price components ({name, amount, description, included}), for
+    # carriers that itemize a quote (base rate, fuel surcharge...).
+    breakdown: list | None = None
 
     def to_ui(self):
         """The exact rate shape the frontend consumes, plus `provider`."""
-        return {
+        ui = {
             "provider": self.provider,
             "courier_service_id": self.provider_service_id,
             "courier_name": self.courier_name,
@@ -64,6 +67,9 @@ class Rate:
             "max_delivery_time": self.max_delivery_time,
             "value_for_money_rank": self.value_for_money_rank,
         }
+        if self.breakdown:
+            ui["breakdown"] = self.breakdown
+        return ui
 
 
 @dataclass
@@ -193,6 +199,9 @@ class ShippingProvider(ABC):
     manifest_carrier = "USPS"  # carrier named on this platform's manifests
     manifests_every_label = False  # True when every label is manifestable, not just USPS ones
     supports_cod = False  # True when the carrier collects on delivery (options["cod"])
+    auto_mode = True  # False keeps the platform out of Auto Mode (rate and buy by hand only)
+    tracks_parcels = False  # True when track()/pull_tracking() report carrier events
+    edits_orders = False  # True when update_order() can change a bought order
 
     def __init__(self, key=None, label=None):
         self.name = key or self.platform
@@ -256,6 +265,37 @@ class ShippingProvider(ABC):
         """Public tracking link for a number, for carriers Shopify cannot link
         by name; None leaves it to Shopify."""
         return None
+
+    def clean_ship_options(self, raw):
+        """This platform's own Ship-page options (`options.provider`),
+        validated; {} for a platform that has none. Raises ValueError with a
+        message for the packer."""
+        return {}
+
+    # ---- after the purchase: carrier order details, edits, tracking ----
+    def order_details(self, provider_shipment_id):
+        """The carrier's view of a bought order (status, billed price, proof
+        of delivery), normalized for the Tracking view."""
+        raise ProviderError(f"{self.label} does not provide order details")
+
+    def update_order(self, provider_shipment_id, changes):
+        """Change delivery details on a bought order. `changes` holds
+        destination fields (address1, city, zip, contact, phone...) plus
+        `instructions`. Returns order_details()."""
+        raise ProviderError(f"{self.label} does not allow changing an order after purchase")
+
+    def supports_tracking(self):
+        """Whether track()/pull_tracking() work on this platform."""
+        return self.tracks_parcels
+
+    def track(self, numbers):
+        """Every carrier event for these tracking numbers, as
+        tracking_store event dicts. Returns (events, errors)."""
+        raise ProviderError(f"{self.label} does not provide tracking")
+
+    def pull_tracking(self):
+        """Events that arrived since the last pull (background job)."""
+        return []
 
     # ---- end-of-day manifests (USPS SCAN forms) ----
     def supports_manifests(self):

@@ -410,7 +410,8 @@ def enabled_providers():
     """The shipping platforms this user may ship with — drives the nav
     'Shipping with' selector and its environment badge."""
     return jsonify([
-        {"name": p.name, "label": p.label, "test": p.is_test_mode(), "cod": p.supports_cod}
+        {"name": p.name, "label": p.label, "test": p.is_test_mode(), "cod": p.supports_cod,
+         "platform": p.platform, "auto": p.auto_mode}
         for p in providers.enabled_for_user(session["user_id"], session.get("role"))
     ])
 

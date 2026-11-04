@@ -16,6 +16,7 @@ import profit
 import providers
 import shopify_client
 import tag_rules
+import tracking_store
 import verify_gate
 from auth import admin_required, ship_required, user_sections
 from providers import labels
@@ -91,7 +92,7 @@ BOX_SIZE_SQL = ("CASE WHEN d.l > 0 AND d.w > 0 AND d.h > 0 "
 LIST_SELECT = f"""
     SELECT s.*, u.username AS created_by_username,
            ss.name AS store_name, bd.name AS db_name,
-           pi.label AS provider_current_label,
+           pi.label AS provider_current_label, pi.platform AS provider_platform,
            {BOX_SIZE_SQL} AS box_size
     {LIST_FROM}
 """
@@ -174,7 +175,18 @@ def _row_to_json(row):
         "writeback_backoffice_at": central_time(row["writeback_backoffice_at"]),
         "created_by": row.get("created_by_username") or row["created_by"],
         "created_at": central_time(row["created_at"]),
+        "tracking_status": row.get("tracking_status"),
+        "tracking_status_at": central_time(row.get("tracking_status_at")),
+        "delivered_at": central_time(row.get("delivered_at")),
+        **_carrier_features(row.get("provider_platform")),
     }
+
+
+def _carrier_features(platform):
+    """What the Parcels page may offer for a parcel bought on `platform`."""
+    cls = providers.platform_class(platform) if platform else None
+    return {"can_track": bool(cls and cls.tracks_parcels),
+            "can_edit_delivery": bool(cls and cls.edits_orders)}
 
 
 def _get_with_username(shipment_id):
@@ -276,9 +288,25 @@ def get_rates():
         if not active_providers:
             return _rates_refused("COD is only available with Spee-Dee — choose Spee-Dee in 'Shipping with'")
 
+    # A platform's own Ship-page options (UDS delivery date, driver notes...),
+    # validated by that platform and stored with the shipment options.
+    ship_options = {}
+    for p in active_providers:
+        try:
+            cleaned = p.clean_ship_options(raw_options.get("provider")) \
+                if hasattr(p, "clean_ship_options") else {}
+        except ValueError as e:
+            return _rates_refused(str(e))
+        if cleaned:
+            ship_options[p.name] = cleaned
+    if ship_options:
+        options["provider"] = next(iter(ship_options.values()))
+        for rid in row_ids:
+            db.execute("UPDATE shipments SET options=%s WHERE id=%s", (json.dumps(options), rid))
+
     # The order number rides to the provider (Spee-Dee prints it on the label)
     # but is not part of the stored shipment options.
-    provider_options = {**options, "reference": str(
+    provider_options = {**{k: v for k, v in options.items() if k != "provider"}, "reference": str(
         data.get("order_name") or data.get("invoice_number") or "").strip()}
     # The Shopify order (and, for Auto Mode, the verification) are read while
     # the provider rates instead of after it.
@@ -296,8 +324,9 @@ def get_rates():
                 for p in cod_skipped]
     for provider in active_providers:
         try:
+            own = ship_options.get(provider.name)
             drafts, rates, provider_warnings = provider.create_draft_shipments(
-                destination, parcels, items, provider_options)
+                destination, parcels, items, {**provider_options, "provider": own} if own else provider_options)
         except ProviderError as e:
             provider_errors.append(f"{provider.label}: {e}")
             continue
@@ -424,8 +453,12 @@ def get_rates():
         "po_box": to_po_box,
     }
     if auto_buy:
-        body["auto_buy"] = _auto_buy(group_id, active_providers, all_rates, gate, verify_read, timings,
-                                     data.get("print"))
+        # A manual-only platform (UDS) is rated but never bought by Auto Mode.
+        manual = {p.name for p in active_providers if not getattr(p, "auto_mode", True)}
+        auto_rates = [r for r in all_rates if r["provider"] not in manual]
+        body["auto_buy"] = (_auto_buy(group_id, active_providers, auto_rates, gate, verify_read, timings,
+                                      data.get("print"))
+                            if auto_rates else {"started": False, "code": "manual_only"})
         current_app.logger.info("auto ship %s timings ms: %s -> %s", group_id, timings,
                                 "bought" if body["auto_buy"]["started"] else body["auto_buy"].get("code"))
     return jsonify(body)
@@ -1513,3 +1546,144 @@ def void(shipment_id):
         "undo": undo,
     })
     return jsonify({"ok": not errors, "undo": undo, "errors": errors, "boxes": len(rows)})
+
+
+# ============================================================ carrier tracking / delivery edits
+
+def _group_of(row):
+    if row["group_id"]:
+        return db.query("SELECT * FROM shipments WHERE group_id = %s ORDER BY box_number",
+                        (row["group_id"],)) or [row]
+    return [row]
+
+
+def _boxes(rows):
+    """[{shipment_id, box_number, tracking_number}] for every number in the group."""
+    out = []
+    for r in rows:
+        numbers = r.get("tracking_numbers") or ([r["tracking_number"]] if r["tracking_number"] else [])
+        for n in numbers:
+            out.append({"shipment_id": r["id"], "box_number": r.get("box_number") or 1, "tracking_number": n})
+    return out
+
+
+def _tracking_payload(row, rows, provider, refresh_errors=None):
+    boxes = _boxes(rows)
+    numbers = [b["tracking_number"] for b in boxes]
+    order, order_error = None, None
+    if provider is not None and row["easyship_shipment_id"] and row["status"] in ("label_created", "fulfilled", "voided"):
+        try:
+            order = provider.order_details(row["easyship_shipment_id"])
+        except ProviderError as e:
+            order_error = str(e)
+    fresh = db.query("SELECT tracking_status, tracking_status_at, delivered_at FROM shipments WHERE id = %s",
+                     (row["id"],), one=True) or row
+    for b in boxes:
+        b["url"] = provider.tracking_url(b["tracking_number"]) if provider is not None else None
+    return {
+        "shipment_id": row["id"],
+        "provider": row.get("provider"),
+        "provider_label": provider.label if provider is not None else row.get("provider_label"),
+        "status": row["status"],
+        "boxes": boxes,
+        "tracking_status": fresh.get("tracking_status"),
+        "tracking_status_at": central_time(fresh.get("tracking_status_at")),
+        "delivered_at": central_time(fresh.get("delivered_at")),
+        "events": tracking_store.events_for(row.get("provider"), numbers),
+        "order": order,
+        "order_error": order_error,
+        "quoted": (row.get("rate") or {}).get("total_charge"),
+        "cost": float(sum(float(r["shipping_cost"] or 0) for r in rows)) if any(
+            r["shipping_cost"] is not None for r in rows) else None,
+        "options": row.get("options") or {},
+        "destination": row["destination"],
+        "can_edit_delivery": bool(provider is not None and provider.edits_orders
+                                  and row["status"] in ("label_created", "fulfilled")),
+        "refresh_errors": refresh_errors or [],
+    }
+
+
+def _tracked_row(shipment_id):
+    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
+    if not row:
+        return None, None, api_error("Shipment not found", 404)
+    provider = providers.get_provider(row.get("provider"))
+    if provider is None:
+        return row, None, api_error(REMOVED_PROVIDER, 409)
+    if not provider.supports_tracking():
+        return row, provider, api_error(f"{provider.label} does not report tracking here", 400)
+    return row, provider, None
+
+
+@bp.get("/<int:shipment_id>/tracking")
+@ship_required
+def get_tracking(shipment_id):
+    """Stored carrier events for the parcel's group, plus the carrier's
+    live view of the order (status, billed price, proof of delivery)."""
+    row, provider, error = _tracked_row(shipment_id)
+    if error:
+        return error
+    return jsonify(_tracking_payload(row, _group_of(row), provider))
+
+
+@bp.post("/<int:shipment_id>/tracking/refresh")
+@ship_required
+def refresh_tracking(shipment_id):
+    """Read every event the carrier holds for the group's numbers now."""
+    row, provider, error = _tracked_row(shipment_id)
+    if error:
+        return error
+    rows = _group_of(row)
+    numbers = [b["tracking_number"] for b in _boxes(rows)]
+    if not numbers:
+        return api_error("This parcel has no tracking number yet")
+    try:
+        events, errors = provider.track(numbers)
+    except ProviderError as e:
+        return api_error(str(e), 502)
+    tracking_store.save(provider.name, events)
+    return jsonify(_tracking_payload(row, rows, provider, errors))
+
+
+DELIVERY_FIELDS = ("company", "contact", "address1", "address2", "city", "state", "zip", "phone")
+
+
+@bp.patch("/<int:shipment_id>/delivery")
+@ship_required
+def update_delivery(shipment_id):
+    """Change the delivery address, contact or driver instructions on a
+    bought order, at the carrier first, then in the stored snapshot."""
+    data = request.get_json(silent=True) or {}
+    row = db.query("SELECT * FROM shipments WHERE id = %s", (shipment_id,), one=True)
+    if not row:
+        return api_error("Shipment not found", 404)
+    provider = providers.get_provider(row.get("provider"))
+    if provider is None:
+        return api_error(REMOVED_PROVIDER, 409)
+    if not provider.edits_orders:
+        return api_error(f"{provider.label} orders cannot be changed after purchase")
+    if row["status"] not in ("label_created", "fulfilled") or not row["easyship_shipment_id"]:
+        return api_error(f"Shipment is {row['status']} — only a bought label can be changed")
+    changes = {k: str(data[k]).strip() for k in (*DELIVERY_FIELDS, "instructions") if k in data}
+    for field in ("address1", "city", "state", "zip"):
+        if field in changes and not changes[field]:
+            return api_error(f"Destination {field} is required")
+    if "instructions" in changes and len(changes["instructions"]) > 100:
+        return api_error("Driver instructions are limited to 100 characters")
+    if not changes:
+        return api_error("Nothing to change")
+    try:
+        order = provider.update_order(row["easyship_shipment_id"], changes)
+    except ProviderError as e:
+        return api_error(str(e), e.status if e.status in (400, 409, 422) else 502)
+    rows = _group_of(row)
+    destination = {**(row["destination"] or {}), **{k: v for k, v in changes.items() if k in DELIVERY_FIELDS}}
+    options = dict(row.get("options") or {})
+    if "instructions" in changes:
+        options["provider"] = {**(options.get("provider") or {}), "instructions": changes["instructions"]}
+    for r in rows:
+        db.execute("UPDATE shipments SET destination=%s, options=%s, updated_at=now() WHERE id=%s",
+                   (json.dumps(destination), json.dumps(options), r["id"]))
+    audit("shipment.delivery_updated", {"shipment_id": shipment_id, "group_id": row["group_id"],
+                                        "provider": provider.name, "changes": changes})
+    return jsonify({"ok": True, "destination": destination, "order": order})
