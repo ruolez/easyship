@@ -149,18 +149,28 @@ class SpeedeeCase(unittest.TestCase):
 
 class OrderBodyTests(unittest.TestCase):
     def test_body_carries_addresses_items_and_references(self):
-        body = sd._order_body(ORIGIN, DEST, [BOX, {"weight": "3"}], {"reference": "#1001"}, "tok")
+        small = {"weight": "3", "length": "6", "width": "4", "height": "2.5"}
+        body = sd._order_body(ORIGIN, DEST, [BOX, small], {"reference": "#1001"}, "tok")
         self.assertEqual(body["dropoffAddress"], {
             "addressLine1": "123 2nd Ave S", "addressLine2": None, "company": "Jane Roe",
             "city": "Minneapolis", "stateProvince": "MN", "postalCode": "55401", "country": "US"})
         self.assertEqual(body["pickupContactInfo"],
                          {"name": "Bob", "phoneNumber": "3205550100", "email": "ship@acme.test"})
         self.assertEqual(body["items"], [
-            {"parcelTypeId": "BOX", "weight": 10.0, "userFields": []},
-            {"parcelTypeId": "BOX", "weight": 3.0, "userFields": []},
+            {"parcelTypeId": "BOX", "weight": 10.0, "length": 12.0, "width": 10.0, "height": 8.0,
+             "userFields": []},
+            {"parcelTypeId": "BOX", "weight": 3.0, "length": 6.0, "width": 4.0, "height": 2.5,
+             "userFields": []},
         ])
         self.assertEqual((body["serviceLevelId"], body["vehicleTypeId"], body["referenceNumber1"],
                           body["referenceNumber3"]), ("PACKAGE_PARCEL", "STEPVAN", "#1001", "tok"))
+
+    def test_boxes_without_dimensions_or_weight_are_refused_by_number(self):
+        boxes = [BOX, {"weight": "3"}, {**BOX, "weight": "0"}, {**BOX, "height": "0"}]
+        with self.assertRaises(ProviderError) as ctx:
+            sd._order_body(ORIGIN, DEST, boxes, {}, "tok")
+        self.assertEqual(str(ctx.exception),
+                         "Spee-Dee needs the weight and L × W × H of every box — missing on box 2, 3, 4")
 
     def test_reference_number_2_is_never_sent(self):
         body = sd._order_body(ORIGIN, DEST, [BOX], {"reference": "R"}, "tok")
