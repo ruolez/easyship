@@ -355,10 +355,10 @@ function rowActions(s) {
     items.push({ label: 'Edit delivery', icon: MENU_ICONS.edit, run: () => editDelivery(s, ref) });
   }
   if (['label_created', 'fulfilled'].includes(s.status)) {
-    items.push({ label: 'Undo shipment', icon: MENU_ICONS.undo, danger: true, run: () => voidShipment(s.id, ref, s.source, s.box_total) });
+    items.push({ label: 'Void', icon: MENU_ICONS.undo, danger: true, run: () => voidShipment(s.id, ref, s.source, s.box_total) });
   }
   if (s.status === 'voided' && s.error_message) {
-    items.push({ label: 'Retry undo', icon: MENU_ICONS.undo, danger: true, run: () => retryUndo(s.id) });
+    items.push({ label: 'Retry void', icon: MENU_ICONS.undo, danger: true, run: () => retryUndo(s.id) });
   }
   return items;
 }
@@ -783,7 +783,7 @@ async function callVoid(id) {
     const details = Object.entries(res.undo || {}).map(([k, v]) => `${k}: ${v}`).join('; ');
     snackbar(details ? `Label voided — ${details}` : 'Label voided', 'success');
   } else {
-    snackbar(`Label voided at ${providerLabel(id)}, but: ${(res.errors || []).join('; ')} — use Retry undo`, 'error');
+    snackbar(`Label voided at ${providerLabel(id)}, but: ${(res.errors || []).join('; ')} — use Retry void`, 'error');
   }
   load();
 }
@@ -795,16 +795,16 @@ window.voidShipment = (id, ref, source, boxTotal) => {
       ? 'the tracking number and shipping cost are cleared from the BackOffice invoice'
       : 'no order updates to undo';
   const boxNote = boxTotal > 1
-    ? ` All ${boxTotal} boxes of this order are undone together.`
+    ? ` All ${boxTotal} boxes of this order are voided together.`
     : '';
   const backdrop = document.getElementById('modal-backdrop');
   document.getElementById('modal').innerHTML = `
-    <h3>Undo shipment</h3>
-    <p>Undo <strong>${ref}</strong>?</p>
+    <h3>Void</h3>
+    <p>Void <strong>${ref}</strong>?</p>
     <p class="text-secondary" style="margin-top:8px">The label is cancelled at ${esc(providerLabel(id))}, and ${undoNote}.${boxNote}</p>
     <div class="actions">
       <button class="btn btn-text" id="m-cancel">Cancel</button>
-      <button class="btn btn-danger" id="m-void">Undo shipment</button>
+      <button class="btn btn-danger" id="m-void">Void</button>
     </div>`;
   backdrop.classList.add('show');
   document.getElementById('m-cancel').addEventListener('click', () => backdrop.classList.remove('show'));
