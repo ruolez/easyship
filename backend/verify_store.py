@@ -10,7 +10,6 @@ import db
 import verify
 
 QTY_EVENTS = ("scan", "count", "check_all", "confirm", "force_line")
-HISTORY_LIMIT = 200
 
 
 class VerifyError(Exception):
@@ -347,47 +346,121 @@ def events(verification_id):
     ) or []
 
 
-def history(filters):
+HISTORY_FROM = """
+    FROM verifications v
+    LEFT JOIN users su ON su.id = v.started_by
+    LEFT JOIN users vu ON vu.id = v.verified_by
+    LEFT JOIN shopify_stores s ON s.id = v.shopify_store_id
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(l.qty_required) FILTER (WHERE l.skip_reason IS NULL), 0) AS units_required,
+               COALESCE(SUM(LEAST(l.qty_verified, l.qty_required)) FILTER (WHERE l.skip_reason IS NULL), 0)
+                   AS units_verified
+        FROM verification_lines l WHERE l.verification_id = v.id) un ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS errors FROM verification_events e
+        WHERE e.verification_id = v.id AND e.kind = 'scan' AND e.result IN ('wrong', 'over', 'case_over')) er ON TRUE"""
+HISTORY_SORT = {
+    "order": "LOWER(v.order_name)",
+    "source": "LOWER(COALESCE(s.name, v.source_db, v.source))",
+    "customer": "LOWER(COALESCE(v.customer, ''))",
+    "status": "v.status",
+    "units": "un.units_required",
+    "errors": "er.errors",
+    "verified_by": "LOWER(vu.username)",
+    "verified": "v.verified_at",
+    "started": "v.started_at",
+}
+# The id tiebreak keeps pages disjoint when rows share every sort value.
+HISTORY_DEFAULT_ORDER = "v.started_at DESC, v.id DESC"
+HISTORY_FLAGS = {
+    "forced": "v.forced",
+    "errors": "er.errors > 0",
+    "writeback_failed": "(v.shopify_tag_state = 'failed' OR v.dbadmin_state = 'failed')",
+}
+HISTORY_PAGE_DEFAULT = 50
+HISTORY_PAGE_MAX = 500
+
+
+def _source_match(value):
+    """`shopify:<store id>` or `backoffice:<source db>` → SQL + params."""
+    kind, _, key = value.partition(":")
+    if kind == "shopify" and key.isdigit():
+        return "(v.source = 'shopify' AND v.shopify_store_id = %s)", [int(key)]
+    if kind == "backoffice" and key:
+        return "(v.source = 'backoffice' AND v.source_db = %s)", [key]
+    return None, []
+
+
+def history_where(filters):
     where, params = [], []
     if filters.get("q"):
         where.append("(v.order_name ILIKE %s OR v.customer ILIKE %s)")
         params += [f"%{filters['q']}%"] * 2
-    if filters.get("status"):
-        where.append("v.status = %s")
-        params.append(filters["status"])
-    if filters.get("source"):
-        where.append("v.source = %s")
-        params.append(filters["source"])
-    if filters.get("user_id"):
-        where.append("(v.verified_by = %s OR v.started_by = %s)")
-        params += [filters["user_id"]] * 2
-    if filters.get("forced"):
-        where.append("v.forced")
+    if filters.get("statuses"):
+        where.append("v.status = ANY(%s)")
+        params.append(list(filters["statuses"]))
+    sources = [_source_match(v) for v in filters.get("sources") or []]
+    sources = [m for m in sources if m[0]]
+    if sources:
+        where.append("(" + " OR ".join(sql for sql, _ in sources) + ")")
+        params += [p for _, ps in sources for p in ps]
+    if filters.get("user_ids"):
+        where.append("(v.verified_by = ANY(%s) OR v.started_by = ANY(%s))")
+        params += [list(filters["user_ids"])] * 2
+    where += [HISTORY_FLAGS[f] for f in filters.get("flags") or [] if f in HISTORY_FLAGS]
     if filters.get("since"):
         where.append("v.started_at >= %s")
         params.append(filters["since"])
     if filters.get("until"):
         where.append("v.started_at < %s")
         params.append(filters["until"])
-    sql = f"""
-        SELECT v.id, v.order_name, v.source, v.source_db, v.shopify_store_id, s.name AS store_name, v.customer,
-               v.status, v.forced, v.started_at, v.verified_at, v.shopify_tag_state, v.dbadmin_state,
-               su.username AS started_by_name, vu.username AS verified_by_name,
-               COALESCE(SUM(l.qty_required) FILTER (WHERE l.skip_reason IS NULL), 0) AS units_required,
-               COALESCE(SUM(LEAST(l.qty_verified, l.qty_required)) FILTER (WHERE l.skip_reason IS NULL), 0)
-                   AS units_verified,
-               (SELECT COUNT(*) FROM verification_events e WHERE e.verification_id = v.id AND e.kind = 'scan'
-                    AND e.result IN ('wrong', 'over', 'case_over')) AS errors
-        FROM verifications v
-        LEFT JOIN users su ON su.id = v.started_by
-        LEFT JOIN users vu ON vu.id = v.verified_by
-        LEFT JOIN shopify_stores s ON s.id = v.shopify_store_id
-        LEFT JOIN verification_lines l ON l.verification_id = v.id
-        {"WHERE " + " AND ".join(where) if where else ""}
-        GROUP BY v.id, s.name, su.username, vu.username
-        ORDER BY v.started_at DESC
-        LIMIT {HISTORY_LIMIT}"""
-    return db.query(sql, tuple(params)) or []
+    return " AND ".join(where) or "TRUE", params
+
+
+def history_order(sort=None, desc=False):
+    expr = HISTORY_SORT.get(sort)
+    if not expr:
+        return HISTORY_DEFAULT_ORDER
+    return f"{expr} {'DESC' if desc else 'ASC'} NULLS LAST, {HISTORY_DEFAULT_ORDER}"
+
+
+def history(filters, sort=None, desc=False, limit=HISTORY_PAGE_DEFAULT, offset=0):
+    """One page of verifications plus totals over every row the filters match."""
+    where, params = history_where(filters)
+    stats = db.query(
+        f"""SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE v.status = 'verified') AS verified,
+                   COUNT(*) FILTER (WHERE v.status = 'in_progress') AS in_progress,
+                   COUNT(*) FILTER (WHERE v.forced) AS forced,
+                   COALESCE(SUM(er.errors), 0) AS errors
+            {HISTORY_FROM} WHERE {where}""",
+        tuple(params), one=True,
+    ) or {"total": 0, "verified": 0, "in_progress": 0, "forced": 0, "errors": 0}
+    total = stats.pop("total")
+    rows = []
+    if total:
+        # Rows reset while paging can leave the client past the end; answer
+        # with the last page and echo the offset actually used.
+        if offset >= total:
+            offset = ((total - 1) // limit) * limit
+        rows = db.query(
+            f"""SELECT v.id, v.order_name, v.source, v.source_db, v.shopify_store_id, s.name AS store_name,
+                       v.customer, v.status, v.forced, v.started_at, v.verified_at, v.shopify_tag_state,
+                       v.dbadmin_state, su.username AS started_by_name, vu.username AS verified_by_name,
+                       un.units_required, un.units_verified, er.errors
+                {HISTORY_FROM} WHERE {where}
+                ORDER BY {history_order(sort, desc)} LIMIT %s OFFSET %s""",
+            tuple(params) + (limit, offset),
+        ) or []
+    return {"rows": rows, "total": total, "offset": offset, "limit": limit,
+            "stats": {k: int(v) for k, v in stats.items()}}
+
+
+def history_sources():
+    return db.query(
+        """SELECT DISTINCT v.source, v.shopify_store_id, s.name AS store_name, v.source_db
+           FROM verifications v LEFT JOIN shopify_stores s ON s.id = v.shopify_store_id""",
+    ) or []
 
 
 def wrong_barcodes(include_fixed=False):

@@ -80,7 +80,7 @@ class VerifyApiTest(unittest.TestCase):
             (verify_api.verify_store, "get", lambda vid: self.verification),
             (verify_api.verify_store, "set_line_qty", self._set_line_qty),
             (verify_api.verify_store, "list_cases", lambda: []),
-            (verify_api.verify_store, "history", lambda f: self.history_filters.append(f) or []),
+            (verify_api.verify_store, "history", self._history),
         ]
         self._orig = [(obj, name, getattr(obj, name)) for obj, name, _ in patches]
         for obj, name, fn in patches:
@@ -89,6 +89,11 @@ class VerifyApiTest(unittest.TestCase):
     def tearDown(self):
         for obj, name, fn in self._orig:
             setattr(obj, name, fn)
+
+    def _history(self, filters, **page):
+        self.history_filters.append(filters)
+        self.history_page = page
+        return {"rows": [], "total": 0, "offset": 0, "limit": page["limit"], "stats": {}}
 
     def _nodes(self, store_id, gids):
         if isinstance(self.node, Exception):
@@ -167,16 +172,49 @@ class VerifyApiTest(unittest.TestCase):
                          (403, 200, [("force_line", None)]))
 
     def test_packers_see_only_their_own_day(self):
-        self.client.get("/api/verify/history?user_id=9&from=2026-01-01")
+        self.client.get("/api/verify/history?user=9&from=2026-01-01")
         f = self.history_filters[0]
-        self.assertEqual((f["user_id"], f["since"].date() >= datetime(2026, 10, 1).date()), (5, True))
+        self.assertEqual((f["user_ids"], f["since"].date() >= datetime(2026, 10, 1).date()), ([5], True))
 
     def test_override_users_filter_freely(self):
         self.sections = ["verify", "verify_override"]
-        self.client.get("/api/verify/history?user_id=9&from=2026-01-01&to=2026-01-31&status=bogus")
+        self.client.get("/api/verify/history?user=9,x,12&from=2026-01-01&to=2026-01-31&status=bogus")
         f = self.history_filters[0]
-        self.assertEqual((f["user_id"], f["since"].isoformat(), f["until"].isoformat(), f["status"]),
-                         (9, "2026-01-01T00:00:00-06:00", "2026-02-01T00:00:00-06:00", None))
+        self.assertEqual((f["user_ids"], f["since"].isoformat(), f["until"].isoformat(), f["statuses"]),
+                         ([9, 12], "2026-01-01T00:00:00-06:00", "2026-02-01T00:00:00-06:00", []))
+
+    def test_history_filters_take_lists_and_drop_unknown_values(self):
+        self.sections = ["verify", "verify_override"]
+        self.client.get("/api/verify/history?status=verified,reset,nope&source=shopify:3,backoffice:Prime"
+                        "&flags=forced,errors,bogus&q=%20ann%20")
+        f = self.history_filters[0]
+        self.assertEqual((f["q"], f["statuses"], f["sources"], f["flags"]),
+                         ("ann", ["verified", "reset"], ["shopify:3", "backoffice:Prime"], ["forced", "errors"]))
+
+    def test_history_paging_and_sort_are_validated(self):
+        cases = [
+            ("sort=units&dir=desc&limit=100&offset=200", {"sort": "units", "desc": True, "limit": 100, "offset": 200}),
+            ("sort=drop%20table&limit=99999&offset=-5",
+             {"sort": None, "desc": False, "limit": verify_store.HISTORY_PAGE_MAX, "offset": 0}),
+            ("", {"sort": None, "desc": False, "limit": verify_store.HISTORY_PAGE_DEFAULT, "offset": 0}),
+        ]
+        for query, expected in cases:
+            with self.subTest(query=query):
+                self.assertEqual(self.client.get(f"/api/verify/history?{query}").status_code, 200)
+                self.assertEqual(self.history_page, expected)
+
+    def test_history_options_list_sources_and_hide_users_from_packers(self):
+        verify_api.verify_store.history_sources = lambda: [
+            {"source": "backoffice", "shopify_store_id": None, "store_name": None, "source_db": "Prime"},
+            {"source": "shopify", "shopify_store_id": 3, "store_name": "TSW", "source_db": None},
+            {"source": "backoffice", "shopify_store_id": None, "store_name": None, "source_db": None},
+        ]
+        self.addCleanup(setattr, verify_api.verify_store, "history_sources", verify_store.history_sources)
+        body = self.client.get("/api/verify/history/options").get_json()
+        self.assertEqual(body, {"can_see_all": False, "users": [], "sources": [
+            {"value": "backoffice:Prime", "group": "BackOffice", "label": "Prime"},
+            {"value": "shopify:3", "group": "Shopify", "label": "TSW"},
+        ]})
 
     def test_store_error_becomes_its_status(self):
         def refuse(*a, **k):

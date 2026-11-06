@@ -291,16 +291,29 @@ def _day_bounds(value, end=False):
     return day + timedelta(days=1) if end else day
 
 
+HISTORY_STATUSES = ("in_progress", "verified", "reset")
+
+
+def _list_arg(name, allowed=None):
+    values = [v.strip() for v in (request.args.get(name) or "").split(",") if v.strip()]
+    return [v for v in values if allowed is None or v in allowed]
+
+
+def _page_arg(name, default, lo, hi):
+    raw = (request.args.get(name) or "").strip()
+    return max(lo, min(int(raw), hi)) if raw.isdigit() else default
+
+
 @bp.get("/history")
 @section_required("verify")
 def history():
     args = request.args
     filters = {
         "q": (args.get("q") or "").strip(),
-        "status": args.get("status") if args.get("status") in ("in_progress", "verified", "reset") else None,
-        "source": args.get("source") if args.get("source") in ("shopify", "backoffice") else None,
-        "user_id": args.get("user_id", type=int),
-        "forced": args.get("forced") == "1",
+        "statuses": _list_arg("status", HISTORY_STATUSES),
+        "sources": _list_arg("source"),
+        "user_ids": [int(v) for v in _list_arg("user") if v.isdigit()],
+        "flags": _list_arg("flags", verify_store.HISTORY_FLAGS),
     }
     try:
         filters["since"] = _day_bounds(args["from"]) if args.get("from") else None
@@ -309,14 +322,36 @@ def history():
         return api_error("Dates must be YYYY-MM-DD")
     if not _can_see_all():
         today = datetime.now(CENTRAL).replace(hour=0, minute=0, second=0, microsecond=0)
-        filters.update(user_id=session["user_id"], since=max(filters["since"] or today, today))
-    rows = verify_store.history(filters)
-    for row in rows:
+        filters.update(user_ids=[session["user_id"]], since=max(filters["since"] or today, today))
+    page = verify_store.history(
+        filters,
+        sort=args.get("sort") if args.get("sort") in verify_store.HISTORY_SORT else None,
+        desc=args.get("dir") == "desc",
+        limit=_page_arg("limit", verify_store.HISTORY_PAGE_DEFAULT, 1, verify_store.HISTORY_PAGE_MAX),
+        offset=_page_arg("offset", 0, 0, 10**9),
+    )
+    for row in page["rows"]:
         for key in ("started_at", "verified_at"):
             row[key] = row[key].isoformat() if row[key] else None
-    users = db.query("SELECT id, username FROM users ORDER BY username") if _can_see_all() else []
-    return jsonify({"rows": rows, "limit": verify_store.HISTORY_LIMIT, "users": users or [],
-                    "can_see_all": _can_see_all()})
+    return jsonify(page)
+
+
+@bp.get("/history/options")
+@section_required("verify")
+def history_options():
+    """What the history filters offer: every user and order source seen."""
+    can_see_all = _can_see_all()
+    sources = []
+    for row in verify_store.history_sources():
+        if row["source"] == "shopify" and row["shopify_store_id"]:
+            sources.append({"value": f"shopify:{row['shopify_store_id']}", "group": "Shopify",
+                            "label": row["store_name"] or f"Store {row['shopify_store_id']}"})
+        elif row["source"] == "backoffice" and row["source_db"]:
+            sources.append({"value": f"backoffice:{row['source_db']}", "group": "BackOffice",
+                            "label": row["source_db"]})
+    sources.sort(key=lambda o: (o["group"], o["label"].lower()))
+    users = db.query("SELECT id, username FROM users ORDER BY username") if can_see_all else []
+    return jsonify({"can_see_all": can_see_all, "users": users or [], "sources": sources})
 
 
 @bp.get("/status")

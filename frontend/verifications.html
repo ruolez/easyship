@@ -19,28 +19,73 @@
 
     <section class="tab-panel active" data-panel="history">
       <div class="vh-stats" id="vh-stats"></div>
-      <div class="card">
-        <div class="vh-filters">
-          <div class="field wide"><label>Order or customer</label><input id="vh-q" type="search" autocomplete="off" spellcheck="false"></div>
-          <div class="field"><label>Status</label><select id="vh-status">
-            <option value="">Any</option><option value="verified">Verified</option><option value="in_progress">In progress</option><option value="reset">Started over</option></select></div>
-          <div class="field"><label>Source</label><select id="vh-source">
-            <option value="">Any</option><option value="shopify">Shopify</option><option value="backoffice">BackOffice</option></select></div>
-          <div class="field" id="vh-user-field" hidden><label>User</label><select id="vh-user"><option value="">Anyone</option></select></div>
-          <div class="field"><label>From</label><input id="vh-from" type="date"></div>
-          <div class="field"><label>To</label><input id="vh-to" type="date"></div>
-          <label class="svc-item" style="align-self:center"><input type="checkbox" id="vh-forced"> Marked without scanning</label>
+      <div class="card vh-card">
+        <div class="vh-toolbar">
+          <label class="vh-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="vh-q" type="search" placeholder="Search order # or customer" autocomplete="off" spellcheck="false" aria-label="Search order number or customer">
+          </label>
+          <div class="vh-range" id="vh-range" role="group" aria-label="Started">
+            <button type="button" data-range="today">Today</button>
+            <button type="button" data-range="yesterday">Yesterday</button>
+            <button type="button" data-range="7">7 days</button>
+            <button type="button" data-range="30">30 days</button>
+            <button type="button" data-range="all">All time</button>
+            <button type="button" data-range="custom">Custom</button>
+          </div>
+          <div class="vh-custom" id="vh-custom" hidden>
+            <input id="vh-from" type="date" aria-label="Started from">
+            <span>–</span>
+            <input id="vh-to" type="date" aria-label="Started to">
+          </div>
+        </div>
+        <div class="vh-filterbar">
+          <button type="button" class="vh-fbtn" data-filter="status">Status</button>
+          <button type="button" class="vh-fbtn" data-filter="source">Source</button>
+          <button type="button" class="vh-fbtn" data-filter="user" hidden>User</button>
+          <button type="button" class="vh-fbtn" data-filter="flags">Issues</button>
+          <button type="button" class="btn btn-text btn-small" id="vh-clear" hidden>Clear filters</button>
+          <label class="vh-sort-m">Sort
+            <select id="vh-sort-m">
+              <option value="started:desc">Newest started</option>
+              <option value="started:asc">Oldest started</option>
+              <option value="verified:desc">Newest verified</option>
+              <option value="order:asc">Order #</option>
+              <option value="customer:asc">Customer</option>
+              <option value="errors:desc">Most wrong scans</option>
+              <option value="units:desc">Most units</option>
+            </select>
+          </label>
+          <span class="vh-count" id="vh-count"></span>
         </div>
         <div class="table-wrap flush">
           <table class="striped compact vh-table">
             <thead><tr>
-              <th>Order</th><th>Source</th><th>Customer</th><th>Status</th><th class="num">Units</th>
-              <th class="num">Wrong scans</th><th>Verified by</th><th>Verified (CT)</th><th>Started</th><th>Writeback</th>
+              <th class="sortable" data-sort="order">Order</th>
+              <th class="sortable" data-sort="source">Source</th>
+              <th class="sortable" data-sort="customer">Customer</th>
+              <th class="sortable" data-sort="status">Status</th>
+              <th class="num sortable" data-sort="units">Units</th>
+              <th class="num sortable" data-sort="errors">Wrong scans</th>
+              <th class="sortable" data-sort="verified_by">Verified by</th>
+              <th class="sortable" data-sort="verified">Verified (CT)</th>
+              <th class="sortable" data-sort="started">Started</th>
+              <th>Writeback</th>
             </tr></thead>
             <tbody id="vh-body"></tbody>
           </table>
         </div>
         <div class="empty" id="vh-empty" style="display:none"></div>
+        <div class="table-pager" id="vh-pager" style="display:none">
+          <label class="pager-size">Rows per page
+            <select id="vh-page-size"><option>25</option><option>50</option><option>100</option><option>200</option></select>
+          </label>
+          <span class="pager-range" id="vh-range-text"></span>
+          <button type="button" class="btn btn-outlined btn-small pager-btn" id="vh-first" aria-label="First page">«</button>
+          <button type="button" class="btn btn-outlined btn-small pager-btn" id="vh-prev" aria-label="Previous page">‹</button>
+          <button type="button" class="btn btn-outlined btn-small pager-btn" id="vh-next" aria-label="Next page">›</button>
+          <button type="button" class="btn btn-outlined btn-small pager-btn" id="vh-last" aria-label="Last page">»</button>
+        </div>
       </div>
     </section>
 
