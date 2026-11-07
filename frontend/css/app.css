@@ -2092,6 +2092,12 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .bt-chip.on { background: var(--primary-light); border-color: var(--primary); color: var(--primary); font-weight: 600; }
 .bt-failed { margin: 8px 0 0 18px; font-size: 13px; max-height: 240px; overflow-y: auto; }
 #bt-error { margin-top: 10px; }
+.bt-filter { margin-bottom: 10px; }
+.bt-remove { max-height: 260px; overflow-y: auto; padding: 2px; }
+.bt-count { margin-left: 6px; font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.bt-remove .bt-chip:hover { border-color: var(--error); color: var(--error); }
+.bt-remove .bt-chip.on { background: var(--error-light); border-color: var(--error); color: var(--error); text-decoration: line-through; }
+.bt-remove .bt-chip.on .bt-count { color: inherit; }
 
 /* Short screens: tighter spacing so the window still fits without scrolling. */
 @media (max-height: 820px) {

@@ -89,7 +89,7 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 
 /* ---------- Keyboard ----------
    In the list: ↑ / ↓ move, Space ticks, Enter opens, E excludes (or restores),
-   T tags the selected orders, ⌘Z / Ctrl+Z undoes, / finds. In the order window: ← →, E and H. */
+   T tags the selected orders (Shift+T removes tags), ⌘Z / Ctrl+Z undoes, / finds. In the order window: ← →, E and H. */
 document.addEventListener('keydown', (e) => {
   const modalOpen = document.getElementById('modal-backdrop').classList.contains('show');
   if (e.key === 'Escape' && pop) {
@@ -113,7 +113,8 @@ document.addEventListener('keydown', (e) => {
     }
     if (key === 't' && checked.size && !e.repeat) {
       e.preventDefault();
-      openBulkTags();
+      if (e.shiftKey) openBulkRemoveTags();
+      else openBulkTags();
       return;
     }
     if (key === 'arrowdown' || key === 'arrowup') {
@@ -1884,17 +1885,118 @@ function openBulkTags() {
 
 const sameTag = (a) => (b) => a.toLowerCase() === b.toLowerCase();
 
-async function saveBulkTags(targets, tags) {
+/* Remove tags: the tags the selected orders carry, most common first, each
+   with how many of them have it. Each order loses only the tags it has. */
+function openBulkRemoveTags() {
+  const targets = selectedOrders();
+  if (!targets.length) return;
+  const counts = new Map();
+  targets.forEach((o) => {
+    new Map(o.tags.map((t) => [t.toLowerCase(), t])).forEach((t, k) => {
+      const c = counts.get(k) || { tag: t, n: 0 };
+      c.n += 1;
+      counts.set(k, c);
+    });
+  });
+  const present = [...counts.values()].sort((a, b) => b.n - a.n || a.tag.localeCompare(b.tag));
+  const count = plural(targets.length, 'order');
+  if (!present.length) {
+    openModal(`<h3>Remove tags from ${count}</h3>
+      <p class="hint">The selected orders have no tags.</p>
+      <div class="actions"><button class="btn btn-primary" onclick="closeModal()">OK</button></div>`, 'bulktag');
+    return;
+  }
+  const picked = new Set();
+  openModal(`<h3>Remove tags from ${count}</h3>
+    ${present.length > BULK_SUGGESTIONS ? `<div class="field bt-filter"><input id="bt-filter" placeholder="Find tags"
+      autocomplete="off" spellcheck="false" aria-label="Find tags"></div>` : ''}
+    <div class="bt-chips bt-remove" id="bt-present" role="group" aria-label="Tags to remove"></div>
+    <div class="hint bt-note">Click the tags to remove. The number is how many of the selected orders have the tag; each order loses only the tags it has.</div>
+    <div class="error-note" id="bt-error" hidden></div>
+    <div class="actions">
+      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" id="bt-save" disabled>Remove tags</button>
+    </div>`, 'bulktag');
+  const box = document.getElementById('bt-present');
+  const filter = document.getElementById('bt-filter');
+  const save = document.getElementById('bt-save');
+  const pickedTags = () => present.filter((p) => picked.has(p.tag.toLowerCase())).map((p) => p.tag);
+  const shownTags = () => {
+    const typed = filter ? filter.value.trim().toLowerCase() : '';
+    return present.filter((p) => !typed || picked.has(p.tag.toLowerCase()) || p.tag.toLowerCase().includes(typed));
+  };
+
+  function draw() {
+    const shown = shownTags();
+    box.innerHTML = shown.length
+      ? shown.map((p) => {
+        const on = picked.has(p.tag.toLowerCase());
+        return `<button type="button" class="bt-chip${on ? ' on' : ''}" data-tag="${attr(p.tag)}" aria-pressed="${on}"
+          title="On ${p.n} of ${count}">${esc(p.tag)}<span class="bt-count">${p.n.toLocaleString()}</span></button>`;
+      }).join('')
+      : '<span class="hint">No tag matches</span>';
+    const tags = pickedTags();
+    const hit = targets.filter((o) => o.tags.some((t) => picked.has(t.toLowerCase()))).length;
+    save.disabled = !tags.length;
+    save.textContent = tags.length ? `Remove ${plural(tags.length, 'tag')} from ${plural(hit, 'order')}` : 'Remove tags';
+  }
+
+  function toggle(tag) {
+    const k = tag.toLowerCase();
+    if (picked.has(k)) picked.delete(k);
+    else picked.add(k);
+    draw();
+  }
+
+  box.addEventListener('click', (e) => {
+    const chip = e.target.closest('.bt-chip');
+    if (chip) toggle(chip.dataset.tag);
+  });
+  save.addEventListener('click', () => saveBulkTags(targets, pickedTags(), 'remove'));
+  if (filter) {
+    filter.addEventListener('input', draw);
+    filter.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const shown = shownTags().filter((p) => !picked.has(p.tag.toLowerCase()));
+        if (filter.value.trim() && shown.length === 1) {
+          filter.value = '';
+          toggle(shown[0].tag);
+        } else if (!filter.value.trim() && picked.size) {
+          saveBulkTags(targets, pickedTags(), 'remove');
+        }
+      }
+    });
+  }
+  draw();
+  (filter || box.querySelector('.bt-chip')).focus();
+}
+
+const BULK_TAG_MODES = {
+  add: {
+    url: '/api/picklists/orders/tags/bulk', busy: 'Adding tags…', none: 'No orders were tagged', refused: 'could not be tagged',
+    done: (tags, orders) => `Added ${tags} to ${orders}`,
+    apply: (o, tags) => [...o.tags, ...tags.filter((t) => !o.tags.some(sameTag(t)))],
+  },
+  remove: {
+    url: '/api/picklists/orders/tags/bulk/remove', busy: 'Removing tags…', none: 'No tags were removed', refused: 'could not be changed',
+    done: (tags, orders) => `Removed ${tags} from ${orders}`,
+    apply: (o, tags) => o.tags.filter((t) => !tags.some(sameTag(t))),
+  },
+};
+
+async function saveBulkTags(targets, tags, mode = 'add') {
+  const words = BULK_TAG_MODES[mode];
   const save = document.getElementById('bt-save');
   const error = document.getElementById('bt-error');
   if (save.disabled) return;
   save.disabled = true;
-  save.textContent = 'Adding tags…';
+  save.textContent = words.busy;
   error.hidden = true;
   let res;
   try {
-    res = await api('/api/picklists/orders/tags/bulk', {
-      method: 'POST', body: { orders: targets.map((o) => ({ store_id: o.store_id, order_id: o.id })), add: tags },
+    res = await api(words.url, {
+      method: 'POST', body: { orders: targets.map((o) => ({ store_id: o.store_id, order_id: o.id })), [mode]: tags },
     });
   } catch (err) {
     error.textContent = err.message;
@@ -1911,37 +2013,40 @@ async function saveBulkTags(targets, tags) {
     if (!targets.some((t) => orderKey(t) === key) || failed.has(key)) return [o];
     const updated = back.get(key);
     orderDetails.delete(key); // the window reads the tags afresh
-    if (!updated) return [{ ...o, tags: [...o.tags, ...res.tags.filter((t) => !o.tags.some(sameTag(t)))] }];
+    if (!updated) return [{ ...o, tags: words.apply(o, res.tags) }];
     if (updated.ineligible_reason) {
       gone.push(o.name);
       return [];
     }
     return [{ ...o, ...updated }];
   });
-  res.tags.forEach((t) => [...new Set(targets.map((o) => o.store_id))].forEach((id) => rememberShopTag(id, 'order', t)));
+  if (mode === 'add') res.tags.forEach((t) => [...new Set(targets.map((o) => o.store_id))].forEach((id) => rememberShopTag(id, 'order', t)));
   render();
-  const done = targets.length - res.failed.length;
+  const untouched = res.untouched || 0;
+  const done = targets.length - res.failed.length - untouched;
   const stillListed = new Set(listedOrders().map(orderKey));
   const leftView = targets.filter((o) => !failed.has(orderKey(o)) && !gone.includes(o.name) && !stillListed.has(orderKey(o))).length;
   const note = [
+    untouched ? `${untouched} had none of them` : '',
     gone.length ? `${gone.length} can no longer be picked` : '',
     leftView ? `${leftView} no longer fit the view and filters` : '',
   ].filter(Boolean).join(' · ');
   const tagText = res.tags.length === 1 ? `“${res.tags[0]}”` : plural(res.tags.length, 'tag');
   if (!res.failed.length) {
     closeModal();
-    snackbar(`Added ${tagText} to ${plural(done, 'order')}${note ? ` · ${note}` : ''}`);
+    snackbar(`${words.done(tagText, plural(done, 'order'))}${note ? ` · ${note}` : ''}`);
     return;
   }
   const name = (f) => (targets.find((o) => o.store_id === f.store_id && o.id === f.order_id) || {}).name || f.order_id;
-  document.getElementById('modal').innerHTML = `<h3>${done ? `Added ${esc(tagText)} to ${plural(done, 'order')}` : 'No orders were tagged'}</h3>
+  document.getElementById('modal').innerHTML = `<h3>${done ? esc(words.done(tagText, plural(done, 'order'))) : words.none}</h3>
     ${note ? `<p class="hint">${esc(note)}</p>` : ''}
-    <div class="error-note">${plural(res.failed.length, 'order')} could not be tagged:</div>
+    <div class="error-note">${plural(res.failed.length, 'order')} ${words.refused}:</div>
     <ul class="bt-failed">${res.failed.map((f) => `<li><strong>${esc(name(f))}</strong> — ${esc(f.error)}</li>`).join('')}</ul>
     <div class="actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>`;
 }
 
 document.getElementById('pl-bulk-tag').addEventListener('click', openBulkTags);
+document.getElementById('pl-bulk-untag').addEventListener('click', openBulkRemoveTags);
 
 /* ---------- Generate ---------- */
 document.getElementById('pl-generate').addEventListener('click', openGenerate);

@@ -435,6 +435,82 @@ def bulk_add_order_tags():
     return jsonify({"orders": orders, "failed": failed, "tags": add})
 
 
+@bp.post("/orders/tags/bulk/remove")
+@section_required(SECTION)
+def bulk_remove_order_tags():
+    """Remove tags from many orders at once. The orders are read first so each
+    loses only the tags it has, spelled as Shopify keeps them; an order with
+    none of them is left alone and counted as untouched. One order failing
+    never stops the others."""
+    data = request.get_json(silent=True) or {}
+    refs = _order_refs(data.get("orders"))
+    remove = _clean_tags(data.get("remove") or [])
+    if not refs or not remove:
+        return api_error("orders and the tags to remove are required")
+    if len(refs) > BULK_TAG_LIMIT:
+        return api_error(f"Change at most {BULK_TAG_LIMIT} orders at a time")
+    drop = {t.lower() for t in remove}
+    by_store = {}
+    for sid, gid in refs:
+        by_store.setdefault(sid, []).append(gid)
+    nodes, failed = {}, []
+    for sid, gids in by_store.items():
+        try:
+            found = {n["id"]: n for n in get_picklist_orders(sid, gids)}
+        except ShopifyError as e:
+            failed += [{"store_id": sid, "order_id": gid, "error": str(e)} for gid in gids]
+            continue
+        for gid in gids:
+            if gid in found:
+                nodes[(sid, gid)] = found[gid]
+            else:
+                failed.append({"store_id": sid, "order_id": gid, "error": "Order not found in Shopify"})
+    work = []
+    for ref, n in nodes.items():
+        tags = [t for t in n.get("tags") or [] if t.lower() in drop]
+        if tags:
+            work.append((ref, tags))
+    app = current_app._get_current_object()
+
+    def run(item):
+        (sid, gid), tags = item
+        with app.app_context():
+            try:
+                change_tags(sid, gid, remove=tags)
+                return None
+            except ShopifyError as e:
+                return _tag_error_text(e, "order")
+            except Exception as e:  # noqa: BLE001 — reported per order, shown to the user
+                log.exception("Untagging order %s failed", gid)
+                return f"Unexpected error: {e}"
+
+    errors = []
+    if work:
+        with ThreadPoolExecutor(max_workers=min(TAG_WORKERS, len(work))) as pool:
+            errors = list(pool.map(run, work))
+    changed = {}
+    for (ref, tags), error in zip(work, errors):
+        if error:
+            failed.append({"store_id": ref[0], "order_id": ref[1], "error": error})
+            del nodes[ref]
+            continue
+        n = nodes[ref]
+        n["tags"] = [t for t in n.get("tags") or [] if t not in tags]
+        changed.setdefault(ref[0], []).append(n)
+    for sid, changed_nodes in changed.items():
+        picklist_cache.put_orders(sid, changed_nodes)
+    rules = picklist_rules.load_rules()
+    orders = []
+    for (sid, _), n in nodes.items():
+        order = _listed_order(n, sid, rules)
+        order["ineligible_reason"] = picklists.ineligible_reason(order, set())
+        orders.append(order)
+    untouched = len(nodes) - sum(len(v) for v in changed.values())
+    audit("picklist.tags.bulk_remove", {"removed": remove, "done": len(nodes) - untouched, "untouched": untouched,
+                                        "failed": [f["order_id"] for f in failed]})
+    return jsonify({"orders": orders, "failed": failed, "tags": remove, "untouched": untouched})
+
+
 def _hold_error_text(error):
     text = str(error)
     if "ACCESS_DENIED" in text or "access denied" in text.lower():

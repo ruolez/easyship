@@ -620,6 +620,51 @@ class PicklistsApiTest(unittest.TestCase):
         self.assertEqual([self.bulk_tag(ids, **body)[0] for ids, body in cases], [400] * 3)
         self.assertEqual(self.calls, [])
 
+    def bulk_untag(self, ids, **body):
+        res = self.client.post("/api/picklists/orders/tags/bulk/remove",
+                               json={"orders": [{"store_id": STORE, "order_id": g} for g in ids], **body})
+        return res.status_code, res.get_json()
+
+    def test_bulk_remove_takes_off_only_the_tags_each_order_has_as_shopify_spells_them(self):
+        self.shopify[STORE][0]["tags"] = ["Rush", "keep"]
+        self.shopify[STORE][1]["tags"] = ["gift", "rush"]
+        self.shopify[STORE][2]["tags"] = ["keep"]
+        status, data = self.bulk_untag(["g1", "g2", "g3"], remove=["rush, GIFT"])
+        self.assertEqual(
+            (status, [c for c in self.calls if c[0] == "change_tags"],
+             [(o["id"], o["tags"]) for o in data["orders"]], data["failed"], data["tags"], data["untouched"]),
+            (200, [("change_tags", STORE, "g1", [], ["Rush"]), ("change_tags", STORE, "g2", [], ["gift", "rush"])],
+             [("g1", ["keep"]), ("g2", []), ("g3", ["keep"])], [], ["rush", "GIFT"], 1))
+
+    def test_bulk_remove_caches_only_the_orders_it_changed(self):
+        self.shopify[STORE][0]["tags"] = ["rush"]
+        self.bulk_untag(["g1", "g2"], remove=["rush"])
+        self.assertEqual([c for c in self.calls if c[0] == "put_orders"], [("put_orders", STORE, [("g1", [])])])
+
+    def test_an_order_shopify_refuses_to_untag_is_reported_and_the_rest_still_lose_the_tag(self):
+        for n in self.shopify[STORE][:2]:
+            n["tags"] = ["rush"]
+        self.tag_fail = {"g2": "Order is archived"}
+        status, data = self.bulk_untag(["g1", "g2"], remove=["rush"])
+        self.assertEqual((status, [(o["id"], o["tags"]) for o in data["orders"]], data["failed"]),
+                         (200, [("g1", [])], [{"store_id": STORE, "order_id": "g2", "error": "Order is archived"}]))
+
+    def test_orders_that_cannot_be_read_are_reported_and_left_alone(self):
+        picklists_api.get_picklist_orders = lambda sid, gids: (
+            (_ for _ in ()).throw(ShopifyError("Shopify down")) if sid == 2 else [n for n in self.shopify[sid] if n["id"] in gids])
+        res = self.client.post("/api/picklists/orders/tags/bulk/remove", json={
+            "remove": ["rush"], "orders": [{"store_id": STORE, "order_id": "gone"}, {"store_id": 2, "order_id": "w1"}]})
+        data = res.get_json()
+        self.assertEqual((res.status_code, data["orders"], data["failed"], self.calls), (200, [], [
+            {"store_id": STORE, "order_id": "gone", "error": "Order not found in Shopify"},
+            {"store_id": 2, "order_id": "w1", "error": "Shopify down"}], []))
+
+    def test_bulk_remove_refusals(self):
+        too_many = [f"g{i}" for i in range(picklists_api.BULK_TAG_LIMIT + 1)]
+        cases = [(["g1"], {"remove": [" , "]}), ([], {"remove": ["x"]}), (too_many, {"remove": ["x"]})]
+        self.assertEqual([self.bulk_untag(ids, **body)[0] for ids, body in cases], [400] * 3)
+        self.assertEqual(self.calls, [])
+
     # ----- Shopify tag "picklist <quotation number>" -----
 
     def create(self, ids):
