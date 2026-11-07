@@ -779,6 +779,7 @@ vwHead.addEventListener('change', (e) => {
     else selected.delete(rowKey(r));
   });
   document.querySelectorAll('.vw-pick').forEach((cb) => { cb.checked = e.target.checked; });
+  anchorIndex = null;
   updateSelection();
 });
 document.getElementById('vw-sort-m').addEventListener('change', (e) => {
@@ -1012,6 +1013,7 @@ function renderWrongPager(offset) {
 
 function clearSelection() {
   selected.clear();
+  anchorIndex = null;
   document.querySelectorAll('.vw-pick').forEach((cb) => { cb.checked = false; });
   updateSelection();
 }
@@ -1079,24 +1081,41 @@ async function markWrong(action, picked) {
   loadWrong();
 }
 
-const vwBody = document.getElementById('vw-body');
-vwBody.addEventListener('change', (e) => {
-  if (!e.target.classList.contains('vw-pick')) return;
-  const r = wrongRows[Number(e.target.closest('tr').dataset.i)];
-  if (e.target.checked) selected.set(rowKey(r), r);
-  else selected.delete(rowKey(r));
+/* Shift-click (on a checkbox or a row) sets every row between the last
+   one clicked and this one to this one's new state, like a mail client. */
+let anchorIndex = null;
+
+function pickRows(i, on, range) {
+  const from = range && anchorIndex !== null ? Math.min(anchorIndex, i) : i;
+  const to = range && anchorIndex !== null ? Math.max(anchorIndex, i) : i;
+  for (let k = from; k <= to; k += 1) {
+    const r = wrongRows[k];
+    if (on) selected.set(rowKey(r), r);
+    else selected.delete(rowKey(r));
+    const cb = vwBody.querySelector(`tr[data-i="${k}"] .vw-pick`);
+    if (cb) cb.checked = on;
+  }
+  anchorIndex = i;
   updateSelection();
+}
+
+const vwBody = document.getElementById('vw-body');
+vwBody.addEventListener('mousedown', (e) => {
+  if (e.shiftKey && e.target.closest('tr') && !e.target.closest('input[type="search"]')) e.preventDefault();
 });
 vwBody.addEventListener('click', async (e) => {
   const tr = e.target.closest('tr');
   if (!tr) return;
-  const r = wrongRows[Number(tr.dataset.i)];
+  const i = Number(tr.dataset.i);
+  const r = wrongRows[i];
+  const pick = e.target.closest('.vw-pick');
+  if (pick) { pickRows(i, pick.checked, e.shiftKey); return; }
   const order = e.target.closest('.vw-order');
   if (order) { openDetail(Number(order.dataset.vid)); return; }
   const act = e.target.closest('.vw-act');
   if (act) { markWrong(act.dataset.act, [r]); return; }
   const copy = e.target.closest('.vw-code');
-  if (copy) {
+  if (copy && !e.shiftKey) {
     try {
       await navigator.clipboard.writeText(copy.dataset.copy);
       snackbar(`Copied ${copy.dataset.copy}`);
@@ -1105,11 +1124,9 @@ vwBody.addEventListener('click', async (e) => {
     }
     return;
   }
-  if (e.target.closest('input, button, a')) return;
-  const cb = tr.querySelector('.vw-pick');
-  if (window.getSelection().toString()) return;
-  cb.checked = !cb.checked;
-  cb.dispatchEvent(new Event('change', { bubbles: true }));
+  if (e.target.closest('input, a') || (e.target.closest('button') && !copy)) return;
+  if (!e.shiftKey && window.getSelection().toString()) return;
+  pickRows(i, !selected.has(rowKey(r)), e.shiftKey);
 });
 document.getElementById('vw-fix').addEventListener('click', () => markWrong('fix', [...selected.values()]));
 document.getElementById('vw-reopen').addEventListener('click', () => markWrong('reopen', [...selected.values()]));
