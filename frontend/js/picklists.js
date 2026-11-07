@@ -791,12 +791,13 @@ function scopedOrders() {
   return orders.filter((o) => inScope(o)).sort(compareOrders);
 }
 
-/* What Generate puts on the pick list: search and Needs review play no part. */
-function pickedOrders() {
-  return scopedOrders().filter((o) => !excluded.has(orderKey(o)));
-}
-
 const inCurrentView = (o) => excluded.has(orderKey(o)) === (view === 'excluded');
+
+/* What Generate puts on the pick list: the To pick orders, or in the Excluded
+   view the excluded ones. Search and Needs review play no part. */
+function pickedOrders() {
+  return scopedOrders().filter(inCurrentView);
+}
 
 function lensPass(o, search) {
   if (search && !`${o.name} ${o.customer}`.toLowerCase().includes(search)) return false;
@@ -978,7 +979,7 @@ function render(emptyMessage) {
   const onScreen = new Set(shown.map(orderKey));
   [...checked].forEach((k) => { if (!onScreen.has(k)) checked.delete(k); });
   renderSortHeads();
-  renderSummary(picked, scoped.length, search || reviewOnly);
+  renderSummary(view === 'excluded' ? inView : picked, scoped.length, search || reviewOnly);
   renderSelection(shown.length);
   renderShowing(shown.length, scoped.length !== orders.length || search || reviewOnly);
   renderFilterBar();
@@ -1052,20 +1053,25 @@ function clearChecked() {
 
 /* The pick list as Generate would make it; the note says what else is in play. */
 function renderSummary(picked, scopedCount, lens) {
+  const fromExcluded = view === 'excluded';
   const units = picked.reduce((n, o) => n + o.units, 0);
   const products = new Set(picked.flatMap((o) => o.lines.map((l) => l.barcode || `?${l.title}`))).size;
   document.getElementById('pl-summary').textContent = picked.length
-    ? `On the pick list: ${plural(picked.length, 'order')} · ${plural(units, 'unit')} · ${plural(products, 'product')}`
-    : 'Nothing on the pick list';
-  const excludedCount = scopedCount - picked.length;
+    ? `${fromExcluded ? 'From excluded' : 'On the pick list'}: ${plural(picked.length, 'order')} · ${plural(units, 'unit')} · ${plural(products, 'product')}`
+    : fromExcluded ? 'No excluded orders to pick' : 'Nothing on the pick list';
+  const otherCount = scopedCount - picked.length;
   const flagged = picked.filter((o) => o.issues && o.issues.length).length;
   document.getElementById('pl-summary-note').textContent = [
     scopedCount !== orders.length ? `${scopedCount} of ${orders.length} eligible orders match the view and filters` : '',
-    excludedCount ? `${excludedCount} excluded` : '',
+    otherCount ? `${otherCount} ${fromExcluded ? 'to pick not included' : 'excluded'}` : '',
     flagged ? `${plural(flagged, 'order')} will be left out` : '',
     lens ? 'search and Needs review don’t change it' : '',
   ].filter(Boolean).join(' · ');
-  document.getElementById('pl-generate').disabled = !picked.length;
+  const generate = document.getElementById('pl-generate');
+  generate.disabled = !picked.length;
+  generate.classList.toggle('pl-generate-excluded', fromExcluded);
+  generate.textContent = fromExcluded ? 'Generate from excluded' : 'Generate pick list';
+  generate.title = fromExcluded ? 'Make a pick list from the excluded orders' : '';
 }
 
 document.getElementById('pl-orders').addEventListener('click', (e) => {
@@ -2060,11 +2066,11 @@ function customerMeta(c) {
   return [c.account_no ? `Account ${esc(c.account_no)}` : '', esc(where)].filter(Boolean).join(' · ') || `Customer #${c.id}`;
 }
 
-function genFrame(body, foot) {
+function genFrame(body, foot, fromExcluded) {
   return `
     <div class="om-head">
       <div>
-        <div class="om-title">New pick list</div>
+        <div class="om-title">New pick list${fromExcluded ? ' <span class="gen-from-excluded">from excluded orders</span>' : ''}</div>
         <div class="om-meta">Check the products, choose who the BackOffice quotation is for, then create it.</div>
       </div>
       <button class="om-close" onclick="closeModal()" aria-label="Close">${ICONS.close}</button>
@@ -2102,8 +2108,10 @@ function linesTable(lines) {
 async function openGenerate() {
   const picked = pickedOrders();
   if (!picked.length) return;
+  const fromExcluded = view === 'excluded';
+  const frame = (content, foot) => genFrame(content, foot, fromExcluded);
   const body = { orders: picked.map((o) => ({ store_id: o.store_id, order_id: o.id })) };
-  openModal(genFrame(`<div class="om-loading"><span class="spinner"></span> Checking ${plural(picked.length, 'order')} with Shopify and BackOffice…</div>`, GEN_CANCEL), 'gen');
+  openModal(frame(`<div class="om-loading"><span class="spinner"></span> Checking ${plural(picked.length, 'order')} with Shopify and BackOffice…</div>`, GEN_CANCEL), 'gen');
   let preview;
   let reps;
   try {
@@ -2122,7 +2130,7 @@ async function openGenerate() {
   const t = preview.totals;
   const left = preview.excluded;
   if (!t.orders) {
-    openModal(genFrame(`<div class="gen-empty">${ICONS.warn}<div><strong>None of these orders can go on a pick list</strong>
+    openModal(frame(`<div class="gen-empty">${ICONS.warn}<div><strong>None of these orders can go on a pick list</strong>
       <div class="hint">Fix the reasons below, then try again.</div></div></div>${leftOutHtml(left, true)}`, GEN_CANCEL), 'gen');
     return;
   }
@@ -2131,7 +2139,7 @@ async function openGenerate() {
   const lastRep = recall(REP_KEY, null);
   const stats = [['Orders', t.orders], ['Units', t.units], ['Products', t.lines], ['Left out', left.length]];
   const repPick = reps.length === 1 ? reps[0].id : lastRep;
-  openModal(genFrame(`
+  openModal(frame(`
     <div class="om-stats">${stats.map(([label, n], i) => `<div class="om-stat"><div class="om-label">${label}</div>
       <div class="om-value ${i === 3 && n ? 'gen-warn' : ''}">${n.toLocaleString()}</div></div>`).join('')}</div>
     ${leftOutHtml(left, false)}

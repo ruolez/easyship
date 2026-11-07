@@ -2137,6 +2137,9 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .gen-failed { flex-direction: column; }
 .gen-failed .error-note { font-size: 13px; max-width: 560px; }
 .om-value.gen-warn { color: var(--warning); }
+.gen-from-excluded { color: var(--warning); }
+.btn-primary.pl-generate-excluded { background: var(--warning); }
+.btn-primary.pl-generate-excluded:hover:not(:disabled) { background: #b45309; }
 .gen-empty { display: flex; gap: 12px; align-items: flex-start; padding: 6px 0; font-size: 14px; }
 .gen-empty > .ico { flex: none; width: 22px; height: 22px; color: var(--warning); }
 
@@ -2183,6 +2186,7 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 }
 .gen-msg { display: flex; align-items: center; gap: 8px; padding: 14px; color: var(--text-secondary); font-size: 13px; }
 .gen-msg.error { color: var(--error); }
+.gen-msg[hidden] { display: none; }
 
 .gen-side-body { display: flex; flex-direction: column; gap: 18px; padding: 14px; }
 .gen-step { display: flex; flex-direction: column; gap: 8px; }
