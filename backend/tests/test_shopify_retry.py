@@ -102,6 +102,24 @@ class GraphqlRetryTest(unittest.TestCase):
         self.assertNotIsInstance(ctx.exception, shopify_client.ShopifyUnavailable)
         self.assertEqual((len(calls), self.sleeps), (1, []))
 
+    def test_rejected_app_token_is_renewed_once_and_retried(self):
+        invalidated = []
+        self.addCleanup(setattr, shopify_client.shopify_auth, "invalidate", shopify_client.shopify_auth.invalidate)
+        shopify_client.shopify_auth.invalidate = invalidated.append
+        shopify_client._store = lambda store_id: {**STORE, "auth_method": "app"}
+        calls = self.run_with([status(401), ok()])
+        self.assertEqual(shopify_client._graphql(1, QUERY), OK_BODY["data"])
+        self.assertEqual((len(calls), invalidated), (2, [1]))
+
+    def test_rejected_app_token_twice_gives_up(self):
+        self.addCleanup(setattr, shopify_client.shopify_auth, "invalidate", shopify_client.shopify_auth.invalidate)
+        shopify_client.shopify_auth.invalidate = lambda store_id: None
+        shopify_client._store = lambda store_id: {**STORE, "auth_method": "app"}
+        calls = self.run_with([status(401), status(401)])
+        with self.assertRaises(shopify_client.ShopifyAuthRejected):
+            shopify_client._graphql(1, QUERY)
+        self.assertEqual(len(calls), 2)
+
     def test_throttling_waits_for_the_bucket_and_does_not_count_as_a_failure(self):
         shopify_client.random.uniform = lambda a, b: 0
         try:

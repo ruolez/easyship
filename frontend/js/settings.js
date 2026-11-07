@@ -1602,13 +1602,18 @@ async function onOAuthClick(p, e) {
   }
 }
 
-/* Back from a provider's sign-in page: say how it went, then drop the query. */
+/* Back from a provider's sign-in page or Shopify's app approval: say how it
+   went, then drop the query. */
 function reportOAuthReturn() {
   const params = new URLSearchParams(location.search);
   if (params.get('oauth') === 'connected') {
     snackbar(`${params.get('provider')}: connected as ${params.get('account')}`, 'success');
   } else if (params.has('oauth_error')) {
     snackbar(params.get('oauth_error'), 'error');
+  } else if (params.get('shopify') === 'connected') {
+    snackbar(`${params.get('store')}: connected to Shopify`, 'success');
+  } else if (params.has('shopify_error')) {
+    snackbar(params.get('shopify_error'), 'error');
   } else {
     return;
   }
@@ -2171,8 +2176,8 @@ function intNameCell(name) {
 function intStatusCell(active) {
   return `<span class="us-status ${active ? 'on' : ''}">${active ? 'Active' : 'Inactive'}</span>`;
 }
-function intActionsCell(kind, item) {
-  return `<td class="us-actions">
+function intActionsCell(kind, item, extra = '') {
+  return `<td class="us-actions">${extra}
     <button class="btn btn-text btn-small" data-int="${kind}" data-act="test" data-id="${item.id}">Test</button>
     <button class="us-icon" data-int="${kind}" data-act="edit" data-id="${item.id}" title="Edit" aria-label="Edit ${plAttr(item.name)}">${INT_ICONS.edit}</button>
     <button class="us-icon us-deact" data-int="${kind}" data-act="delete" data-id="${item.id}" title="Delete" aria-label="Delete ${plAttr(item.name)}">${INT_ICONS.trash}</button>
@@ -2287,6 +2292,25 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 });
 
 /* ---------- Shopify stores ---------- */
+/* A store connects with a pasted Admin API token (legacy custom app) or
+   through a Dev Dashboard app: client ID + secret, then Connect. Connect gets
+   a token straight away for stores in the app's own organization, otherwise
+   it opens Shopify's approval page, which comes back to SHOPIFY_CALLBACK. */
+const SHOPIFY_SCOPES = ['read_orders', 'write_orders', 'read_customers', 'read_products', 'read_inventory',
+  'read_merchant_managed_fulfillment_orders', 'write_merchant_managed_fulfillment_orders'];
+const SHOPIFY_CALLBACK = '/api/oauth/shopify/callback';
+
+function storeConnectionCell(st) {
+  const n = (st.missing_scopes || []).length;
+  const missing = n ? `<span class="us-chip warn" title="Missing: ${plAttr(st.missing_scopes.join(', '))}">${n} scope${n === 1 ? '' : 's'} missing</span>` : '';
+  let state;
+  if (st.auth_method === 'token') state = '<span class="us-chip">Admin token</span>';
+  else if (st.connected) state = `<span class="us-status on">App · ${st.token_grant === 'client_credentials' ? 'org credentials' : 'installed'}</span>`;
+  else if (st.auth_error) state = `<span class="us-status warn" title="${plAttr(st.auth_error)}">App · reconnect needed</span>`;
+  else state = '<span class="us-status">App · not connected</span>';
+  return `<div class="us-chips">${state}${missing}</div>`;
+}
+
 async function loadStores() {
   const stores = await api('/api/shopify-stores');
   window._stores = stores;
@@ -2296,13 +2320,15 @@ async function loadStores() {
   document.getElementById('stores-body').innerHTML = stores.length ? stores.map((st) => `<tr class="${st.is_active ? '' : 'us-off'}">
     <td>${intNameCell(st.name)}</td>
     <td class="int-mono">${esc(st.shop_domain)}</td>
+    <td>${storeConnectionCell(st)}</td>
     <td>${st.prefix ? `<span class="us-chip">${esc(st.prefix)}</span>` : '<span class="us-none">—</span>'}</td>
     <td>${intStatusCell(st.is_active)}</td>
-    ${intActionsCell('store', st)}
-  </tr>`).join('') : intEmptyRow(5, 'No Shopify stores yet. Add one to pull its orders.');
+    ${intActionsCell('store', st, st.auth_method === 'app'
+    ? `<button class="btn btn-text btn-small" data-int="store" data-act="connect" data-id="${st.id}">${st.connected || st.auth_error ? 'Reconnect' : 'Connect'}</button>` : '')}
+  </tr>`).join('') : intEmptyRow(6, 'No Shopify stores yet. Add one to pull its orders.');
 }
 
-/* Test / Edit / Delete on both Integrations tables. */
+/* Test / Connect / Edit / Delete on both Integrations tables. */
 ['stores-body', 'dbs-body'].forEach((id) => document.getElementById(id).addEventListener('click', (e) => {
   const btn = e.target.closest('[data-int]');
   if (!btn) return;
@@ -2310,15 +2336,22 @@ async function loadStores() {
   const item = (store ? window._stores : window._dbs).find((x) => x.id === Number(btn.dataset.id));
   if (!item) return;
   if (btn.dataset.act === 'test') (store ? window.testStore : window.testDb)(item.id, btn);
+  else if (btn.dataset.act === 'connect') connectStore(item.id, btn);
   else if (btn.dataset.act === 'edit') (store ? window.editStore : window.editDb)(item.id);
   else (store ? window.deleteStore : window.deleteDb)(item.id, esc(item.name));
 }));
+
+function reportStoreConnection(message, missing) {
+  if (missing && missing.length) snackbar(`${message}, but the token lacks: ${missing.join(', ')}`, 'error');
+  else snackbar(message, 'success');
+}
 
 window.testStore = async (id, btn) => {
   btn.disabled = true;
   try {
     const res = await api(`/api/shopify-stores/${id}/test`, { method: 'POST' });
-    snackbar(`Connected to "${res.shop}"`, 'success');
+    reportStoreConnection(`Connected to "${res.shop}"`, res.missing_scopes);
+    loadStores();
   } catch (err) {
     snackbar(err.message, 'error');
   } finally {
@@ -2326,37 +2359,154 @@ window.testStore = async (id, btn) => {
   }
 };
 
+async function connectStore(id, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api(`/api/shopify-stores/${id}/connect`, { method: 'POST', body: { origin: location.origin } });
+    if (res.url) {
+      location.href = res.url;
+      return;
+    }
+    reportStoreConnection(`Connected to "${res.shop}"`, res.missing_scopes);
+    await loadStores();
+  } catch (err) {
+    snackbar(err.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function storeAppStatusHtml(store) {
+  if (!store || store.auth_method !== 'app') return '';
+  const state = store.connected
+    ? `<span class="us-status on">Connected · ${store.token_grant === 'client_credentials' ? 'organization credentials' : 'installed through Shopify approval'}</span>
+       <button type="button" class="btn btn-text btn-small" id="m-store-disconnect">Disconnect</button>`
+    : `<span class="us-status${store.auth_error ? ' warn' : ''}">${store.auth_error ? `Reconnect needed — ${esc(store.auth_error)}` : 'Not connected'}</span>`;
+  return `
+    <div class="st-app-state">${state}</div>
+    <details class="field pv-oauth-paste mb-16">
+      <summary class="hint">Shopify's approval page did not come back here?</summary>
+      <div class="pr-inline">
+        <input id="m-store-paste" placeholder="Paste the address the browser landed on" autocomplete="off">
+        <button type="button" class="btn btn-outlined btn-small" id="m-store-paste-go">Finish connecting</button>
+      </div>
+    </details>`;
+}
+
 function storeForm(store) {
+  let method = store ? store.auth_method : 'app';
+  const keepsSecret = store && store.auth_method === 'app' && store.client_secret;
   openModal(`
     <h3>${store ? 'Edit store' : 'Add Shopify store'}</h3>
     <div class="field mb-16"><label>Name</label><input id="m-store-name" value="${store ? esc(store.name) : ''}"></div>
     <div class="field mb-16"><label>Shop domain (mystore.myshopify.com)</label><input id="m-store-domain" value="${store ? esc(store.shop_domain) : ''}"></div>
     <div class="field mb-16"><label>Order-number prefix (for scan auto-detect)</label><input id="m-store-prefix" autocomplete="off" value="${store ? esc(store.prefix || '') : ''}"></div>
     <div class="field mb-16"><label class="svc-selectall"><input type="checkbox" id="m-store-nocompany" ${store && store.no_company ? 'checked' : ''}> No Company — leave the customer's company name blank on shipments</label></div>
-    <div class="field mb-16"><label>Admin API access token${store ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-store-token" autocomplete="off"></div>
+    <div class="field mb-16"><label>Connection</label>
+      <div class="plr-seg" id="m-store-method" role="group" aria-label="Connection">
+        <button type="button" data-v="app">Shopify app (OAuth)</button>
+        <button type="button" data-v="token">Admin API token</button>
+      </div>
+    </div>
+    <div id="m-store-token-box">
+      <div class="field mb-16"><label>Admin API access token${store && store.auth_method === 'token' ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-store-token" autocomplete="off"></div>
+    </div>
+    <div id="m-store-app-box">
+      ${storeAppStatusHtml(store)}
+      <div class="field mb-16"><label>Client ID</label><input id="m-store-cid" autocomplete="off" value="${store ? esc(store.client_id || '') : ''}"></div>
+      <div class="field mb-16"><label>Client secret${keepsSecret ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-store-secret" autocomplete="off"></div>
+      <div class="field st-app-help mb-16">
+        <span class="hint">Both come from the app's Settings in the Shopify Dev Dashboard. In the app's version, add this redirect URL and these scopes:</span>
+        <div class="pr-inline"><input id="m-store-callback" readonly value="${esc(location.origin + SHOPIFY_CALLBACK)}"><button type="button" class="btn btn-outlined btn-small" id="m-store-copy">Copy</button></div>
+        <div class="us-chips">${SHOPIFY_SCOPES.map((s) => `<span class="us-chip">${s}</span>`).join('')}</div>
+        <span class="hint">A store in the app's own organization connects without approval once the app is installed on it from the Dev Dashboard. Any other store approves the app on Shopify's page.</span>
+      </div>
+    </div>
     ${store ? `<div class="field mb-16"><label>Status</label><select id="m-store-active"><option value="true" ${store.is_active ? 'selected' : ''}>Active</option><option value="false" ${!store.is_active ? 'selected' : ''}>Inactive</option></select></div>` : ''}
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="m-store-save">Save</button>
     </div>`);
+
+  const connectedApp = store && store.auth_method === 'app' && store.connected;
+  const showMethod = () => {
+    document.querySelectorAll('#m-store-method button').forEach((b) => {
+      b.classList.toggle('on', b.dataset.v === method);
+      b.setAttribute('aria-pressed', String(b.dataset.v === method));
+    });
+    document.getElementById('m-store-token-box').hidden = method !== 'token';
+    document.getElementById('m-store-app-box').hidden = method !== 'app';
+    document.getElementById('m-store-save').textContent = method === 'app' && !connectedApp ? 'Save & connect' : 'Save';
+  };
+  showMethod();
+  document.getElementById('m-store-method').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-v]');
+    if (!b) return;
+    method = b.dataset.v;
+    showMethod();
+  });
+  document.getElementById('m-store-copy').addEventListener('click', async () => {
+    const field = document.getElementById('m-store-callback');
+    field.select();
+    try {
+      await navigator.clipboard.writeText(field.value);
+      snackbar('Redirect URL copied', 'success');
+    } catch {
+      document.execCommand('copy'); // plain-http LAN pages have no clipboard API
+    }
+  });
+  const disconnectBtn = document.getElementById('m-store-disconnect');
+  if (disconnectBtn) {
+    disconnectBtn.addEventListener('click', async () => {
+      try {
+        await api(`/api/shopify-stores/${store.id}/disconnect`, { method: 'POST' });
+        closeModal();
+        snackbar(`${store.name}: disconnected`, 'success');
+        loadStores();
+      } catch (err) {
+        snackbar(err.message, 'error');
+      }
+    });
+  }
+  const pasteBtn = document.getElementById('m-store-paste-go');
+  if (pasteBtn) {
+    pasteBtn.addEventListener('click', async () => {
+      const url = document.getElementById('m-store-paste').value.trim();
+      if (!url) return;
+      try {
+        const res = await api(`/api/shopify-stores/${store.id}/oauth/complete`, { method: 'POST', body: { url } });
+        closeModal();
+        snackbar(`${res.store}: connected to Shopify`, 'success');
+        loadStores();
+      } catch (err) {
+        snackbar(err.message, 'error');
+      }
+    });
+  }
+
   document.getElementById('m-store-save').addEventListener('click', async () => {
     const body = {
       name: document.getElementById('m-store-name').value,
       shop_domain: document.getElementById('m-store-domain').value,
       prefix: document.getElementById('m-store-prefix').value,
       no_company: document.getElementById('m-store-nocompany').checked,
-      access_token: document.getElementById('m-store-token').value,
+      auth_method: method,
     };
+    if (method === 'token') {
+      body.access_token = document.getElementById('m-store-token').value;
+    } else {
+      body.client_id = document.getElementById('m-store-cid').value;
+      body.client_secret = document.getElementById('m-store-secret').value;
+    }
     if (store) body.is_active = document.getElementById('m-store-active').value === 'true';
     try {
-      if (store) {
-        await api(`/api/shopify-stores/${store.id}`, { method: 'PUT', body });
-      } else {
-        await api('/api/shopify-stores', { method: 'POST', body });
-      }
+      const res = store
+        ? await api(`/api/shopify-stores/${store.id}`, { method: 'PUT', body })
+        : await api('/api/shopify-stores', { method: 'POST', body });
       closeModal();
-      snackbar('Store saved', 'success');
-      loadStores();
+      await loadStores();
+      if (method === 'app' && !res.connected) await connectStore(store ? store.id : res.id);
+      else snackbar('Store saved', 'success');
     } catch (err) {
       snackbar(err.message, 'error');
     }

@@ -55,10 +55,17 @@ Default login: **admin** / value of `ADMIN_INITIAL_PASSWORD` in `.env` (change i
      - Not built: COD (UDS has none), manifests (there is no manifest API) and webhooks (the server is on a LAN).
 2. **Origin address** — your ship-from address, used for every rate request.
 3. **BackOffice SQL Server** — host/port/database/user/password, *Test connection* runs `SELECT TOP 1` on `Invoices_tbl`.
-4. **Shopify stores** — one row per store: name, `*.myshopify.com` domain, Admin API access token from a custom app with scopes:
-   - `read_orders`, `read_customers`, `read_products`, `read_inventory`
-   - `read_merchant_managed_fulfillment_orders`, `write_merchant_managed_fulfillment_orders`
-   - `write_orders` — order tags (pick list tags, the Verify page's `Checked` tag)
+4. **Shopify stores** (Integrations tab) — one row per store: name, `*.myshopify.com` domain, and a **Connection**:
+   - **Shopify app (OAuth)** — for apps made in the Shopify **Dev Dashboard** (since 2026-01-01 the only kind Shopify lets you create). Enter the app's **Client ID** and **Client secret** (app › Settings). In the app's version, add the redirect URL shown in the store form (`https://<easyship address>/api/oauth/shopify/callback`) and the scopes below, then click **Save & connect** (or **Connect** in the table):
+     - A store in the **same Shopify organization** as the app, with the app installed on it from the Dev Dashboard, connects at once through the *client credentials* grant. EasyShip mints a new 24-hour token whenever the old one runs out.
+     - **Any other store** goes to Shopify's approval page. After the admin approves, Shopify sends the browser back to the redirect URL (an HMAC-checked *authorization code* install). EasyShip keeps an expiring token (1 h) and a refresh token that rotates on each use. A store left unused for 90 days has to be reconnected.
+     - The redirect URL must be the exact address the admin opens EasyShip on. If the browser can't come back to it, paste the address it landed on into *Edit store › Shopify's approval page did not come back here?*.
+     - When Shopify refuses a refresh (app uninstalled, secret rotated), the table shows **Reconnect needed**. Changing an app store's domain, client ID or secret also disconnects it until the next Connect.
+   - **Admin API token** — a token pasted from a legacy custom app (created in the store admin before 2026). It keeps working as before.
+   - Scopes, for both kinds (**Test** lists any the token lacks):
+     - `read_orders`, `read_customers`, `read_products`, `read_inventory`
+     - `read_merchant_managed_fulfillment_orders`, `write_merchant_managed_fulfillment_orders`
+     - `write_orders` — order tags (pick list tags, the Verify page's `Checked` tag)
 5. **Users** — create logins for warehouse staff. Every label records who bought it. *Access* sets which shipping accounts and sections (Pick lists, Verify, Verify override) a user has. With no shipping account checked the user doesn't ship: they sign in straight to their section (e.g. Verify on a scanner phone), see only it and Settings › My account, and every shipping page and API refuses them. A user needs at least one account or one section.
 6. **Shopify order tag rules** (Shipping tab, optional) — map an order tag to a preferred courier service and/or a signature requirement (signature / adult 21+). Tagged orders show the tags, the order note and the matched rule on the Ship page; the preferred rate is pre-selected and the signature requirement is sent to the provider (Easyship `delivery_confirmation`, Shippo `signature_confirmation`, EasyPost `delivery_confirmation`). Packers can override both before buying. Easyship only enables signature options for some accounts — if it rejects the option, rating falls back without it and the packer is warned.
 

@@ -9,14 +9,12 @@ import config
 import db
 import order_gate
 import profit
+import shopify_auth
+from shopify_errors import ShopifyError, ShopifyUnavailable
 
 
-class ShopifyError(Exception):
-    pass
-
-
-class ShopifyUnavailable(ShopifyError):
-    """Shopify could not be reached or was overloaded — a retry later can succeed."""
+class ShopifyAuthRejected(ShopifyError):
+    """Shopify answered 401: the access token is no longer accepted."""
 
 
 RETRY_ATTEMPTS = 3
@@ -36,7 +34,7 @@ def _store(store_id):
     store = db.query("SELECT * FROM shopify_stores WHERE id = %s", (store_id,), one=True)
     if not store:
         raise ShopifyError("Shopify store not found")
-    return store
+    return shopify_auth.fresh_store(store)
 
 
 def throttle_wait(extensions):
@@ -52,7 +50,31 @@ def throttle_wait(extensions):
 
 
 def _graphql(store_id, query, variables=None):
-    return _graphql_for(_store(store_id), query, variables)
+    store = _store(store_id)
+    try:
+        return _graphql_for(store, query, variables)
+    except ShopifyAuthRejected:
+        if store.get("auth_method") != "app":
+            raise
+        shopify_auth.invalidate(store_id)
+        return _graphql_for(_store(store_id), query, variables)
+
+
+CONNECTION_QUERY = """
+query connectionCheck {
+  shop { name }
+  currentAppInstallation { accessScopes { handle } }
+}
+"""
+
+
+def check_connection(store_id):
+    """(shop name, granted scope handles) — also remembers the scopes so
+    Settings can say which ones the store's token lacks."""
+    data = _graphql(store_id, CONNECTION_QUERY)
+    scopes = [s["handle"] for s in ((data.get("currentAppInstallation") or {}).get("accessScopes") or [])]
+    db.execute("UPDATE shopify_stores SET granted_scopes = %s WHERE id = %s", (",".join(scopes), store_id))
+    return data["shop"]["name"], scopes
 
 
 def _graphql_for(store, query, variables=None):
@@ -72,6 +94,8 @@ def _graphql_for(store, query, variables=None):
         else:
             if resp.status_code == 429 or resp.status_code >= 500:
                 last_transient = f"Shopify returned {resp.status_code}: {resp.text[:300]}"
+            elif resp.status_code == 401:
+                raise ShopifyAuthRejected(f"Shopify refused the store's access token (401): {resp.text[:300]}")
             elif resp.status_code != 200:
                 raise ShopifyError(f"Shopify returned {resp.status_code}: {resp.text[:300]}")
             else:

@@ -5,19 +5,20 @@ import secrets
 import time
 from urllib.parse import parse_qs, urlencode, urlparse
 
-import requests
 from flask import Blueprint, jsonify, redirect, request, session
 from werkzeug.security import generate_password_hash
 
-import config
 import db
 import dbadmin
 import picklist_rules
 import profit
 import providers
+import shopify_auth
+import shopify_client
 import tag_rules
 from auth import admin_required, login_required, sanitize_sections, ship_required
 from providers.base import ProviderError
+from shopify_errors import ShopifyError
 from util import CENTRAL, api_error, audit, central_time
 
 bp = Blueprint("settings", __name__, url_prefix="/api")
@@ -766,17 +767,37 @@ def delete_box(box_id):
 
 
 # ---------- Shopify stores ----------
+# A store connects with a pasted Admin API token or through a Dev Dashboard
+# app (client ID + secret); shopify_auth gets and renews the app's tokens.
+
+SHOPIFY_OAUTH_KEY = "shopify_oauth_pending"
+
+
+def _store_json(r):
+    granted = shopify_auth.split_scopes(r["granted_scopes"]) if r["granted_scopes"] is not None else None
+    return {
+        "id": r["id"], "name": r["name"], "shop_domain": r["shop_domain"], "prefix": r["prefix"],
+        "no_company": r["no_company"], "is_active": r["is_active"], "created_at": r["created_at"].isoformat(),
+        "auth_method": r["auth_method"], "client_id": r["client_id"],
+        "client_secret": MASK if r["client_secret"] else "",
+        "connected": r["auth_method"] == "token" or bool(r["token_grant"]),
+        "token_grant": r["token_grant"],
+        "connected_at": r["connected_at"].isoformat() if r["connected_at"] else None,
+        "auth_error": r["auth_error"],
+        "missing_scopes": shopify_auth.missing_scopes(granted) if granted is not None else [],
+    }
+
+
+def _kept(value, current):
+    value = (value or "").strip()
+    return current if not value or value == MASK else value
+
 
 @bp.get("/shopify-stores")
 @login_required
 def list_stores():
-    rows = db.query(
-        """SELECT id, name, shop_domain, prefix, no_company, is_active, created_at
-           FROM shopify_stores ORDER BY id"""
-    )
-    return jsonify([
-        {**r, "created_at": r["created_at"].isoformat()} for r in rows
-    ])
+    rows = db.query("SELECT * FROM shopify_stores ORDER BY id")
+    return jsonify([_store_json(r) for r in rows])
 
 
 @bp.post("/shopify-stores")
@@ -784,19 +805,26 @@ def list_stores():
 def create_store():
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
-    domain = (data.get("shop_domain") or "").strip().lower()
-    token = (data.get("access_token") or "").strip()
-    if not name or not domain or not token:
-        return api_error("Name, shop domain and access token are required")
-    prefix = (data.get("prefix") or "").strip()
+    method = data.get("auth_method") or "token"
+    domain = shopify_auth.normalize_domain(data.get("shop_domain"))
+    token = (data.get("access_token") or "").strip() if method == "token" else ""
+    client_id = (data.get("client_id") or "").strip() if method == "app" else ""
+    secret = (data.get("client_secret") or "").strip() if method == "app" else ""
+    if not name or not domain:
+        return api_error("Name and shop domain are required")
+    problem = shopify_auth.store_auth_problem(method, domain, token, client_id, secret)
+    if problem:
+        return api_error(problem)
     row = db.execute(
-        """INSERT INTO shopify_stores (name, shop_domain, access_token, prefix, no_company)
-           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-        (name, domain, token, prefix, bool(data.get("no_company"))),
+        """INSERT INTO shopify_stores (name, shop_domain, access_token, prefix, no_company,
+               auth_method, client_id, client_secret)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (name, domain, token, (data.get("prefix") or "").strip(), bool(data.get("no_company")),
+         method, client_id, secret),
         returning=True,
     )
-    audit("store.create", {"name": name, "domain": domain})
-    return jsonify({"id": row["id"]})
+    audit("store.create", {"name": name, "domain": domain, "auth_method": method})
+    return jsonify({"id": row["id"], "connected": method == "token"})
 
 
 @bp.put("/shopify-stores/<int:store_id>")
@@ -807,20 +835,35 @@ def update_store(store_id):
     if not store:
         return api_error("Store not found", 404)
     name = (data.get("name") or store["name"]).strip()
-    domain = (data.get("shop_domain") or store["shop_domain"]).strip().lower()
-    token = (data.get("access_token") or "").strip()
-    if not token or token == MASK:
-        token = store["access_token"]
-    is_active = bool(data.get("is_active", store["is_active"]))
+    method = data.get("auth_method") or store["auth_method"]
+    domain = shopify_auth.normalize_domain(data.get("shop_domain") or store["shop_domain"])
+    was_token = store["auth_method"] == "token"
+    # A token store's saved token is the pasted one; an app store's is minted,
+    # so switching to 'token' always needs a fresh paste.
+    token = _kept(data.get("access_token"), store["access_token"] if was_token else "") if method == "token" else ""
+    client_id = (data["client_id"] if data.get("client_id") is not None else store["client_id"]).strip()
+    secret = _kept(data.get("client_secret"), store["client_secret"])
+    problem = shopify_auth.store_auth_problem(method, domain, token, client_id, secret)
+    if problem:
+        return api_error(problem)
+    reset = method == "app" and (was_token or domain != store["shop_domain"] or client_id != store["client_id"]
+                                 or secret != store["client_secret"])
     prefix = data.get("prefix")
     prefix = prefix.strip() if prefix is not None else store["prefix"]
     db.execute(
-        """UPDATE shopify_stores SET name=%s, shop_domain=%s, access_token=%s, prefix=%s,
-           no_company=%s, is_active=%s WHERE id=%s""",
-        (name, domain, token, prefix, bool(data.get("no_company", store["no_company"])), is_active, store_id),
+        """UPDATE shopify_stores SET name=%s, shop_domain=%s, access_token=%s, prefix=%s, no_company=%s,
+               is_active=%s, auth_method=%s, client_id=%s, client_secret=%s WHERE id=%s""",
+        (name, domain, token if method == "token" else store["access_token"], prefix,
+         bool(data.get("no_company", store["no_company"])), bool(data.get("is_active", store["is_active"])),
+         method, client_id if method == "app" else store["client_id"],
+         secret if method == "app" else store["client_secret"], store_id),
     )
-    audit("store.update", {"id": store_id, "name": name})
-    return jsonify({"ok": True})
+    if reset or (method == "token" and not was_token):
+        shopify_auth.disconnect(store_id)
+        if method == "token":
+            db.execute("UPDATE shopify_stores SET access_token = %s WHERE id = %s", (token, store_id))
+    audit("store.update", {"id": store_id, "name": name, "auth_method": method})
+    return jsonify({"ok": True, "connected": method == "token" or (bool(store["token_grant"]) and not reset)})
 
 
 @bp.delete("/shopify-stores/<int:store_id>")
@@ -837,25 +880,121 @@ def delete_store(store_id):
     return jsonify({"ok": True})
 
 
+def _connection_result(store_id):
+    shop, scopes = shopify_client.check_connection(store_id)
+    return {"ok": True, "shop": shop, "missing_scopes": shopify_auth.missing_scopes(scopes)}
+
+
 @bp.post("/shopify-stores/<int:store_id>/test")
 @admin_required
 def test_store(store_id):
-    store = db.query("SELECT * FROM shopify_stores WHERE id = %s", (store_id,), one=True)
-    if not store:
+    if not db.query("SELECT 1 FROM shopify_stores WHERE id = %s", (store_id,), one=True):
         return api_error("Store not found", 404)
-    url = f"https://{store['shop_domain']}/admin/api/{config.SHOPIFY_API_VERSION}/graphql.json"
     try:
-        resp = requests.post(
-            url,
-            headers={"X-Shopify-Access-Token": store["access_token"]},
-            json={"query": "{ shop { name } }"},
-            timeout=15,
-        )
-    except requests.RequestException as e:
-        return api_error(f"Connection failed: {e}")
-    if resp.status_code == 200 and "errors" not in resp.json():
-        return jsonify({"ok": True, "shop": resp.json()["data"]["shop"]["name"]})
-    return api_error(f"Shopify returned {resp.status_code}: {resp.text[:300]}")
+        return jsonify(_connection_result(store_id))
+    except ShopifyError as e:
+        return api_error(str(e))
+
+
+def _app_store(store_id):
+    store = db.query("SELECT * FROM shopify_stores WHERE id = %s", (store_id,), one=True)
+    return store if store and store["auth_method"] == "app" else None
+
+
+@bp.post("/shopify-stores/<int:store_id>/connect")
+@admin_required
+def connect_store(store_id):
+    """Client credentials first (no redirect, stores in the app's own Shopify
+    organization); any other refusal than bad credentials sends the browser
+    to Shopify's install page instead."""
+    store = _app_store(store_id)
+    if not store:
+        return api_error("Only stores that use a Shopify app connect", 404)
+    origin = str((request.get_json(silent=True) or {}).get("origin") or "").rstrip("/")
+    if not PAGE_ORIGIN_RE.fullmatch(origin):
+        return api_error("Open Settings from the app's own address and try again")
+    try:
+        shopify_auth.mint_client_credentials(store)
+    except shopify_auth.ShopifyAuthRefused as e:
+        if e.code in shopify_auth.BAD_CREDENTIALS:
+            return api_error(f"Shopify rejected the client ID or secret — {e}")
+        if e.code == "http_404":
+            return api_error(f"Shopify has no store at {store['shop_domain']} — check the shop domain")
+    except ShopifyError as e:
+        return api_error(str(e))
+    else:
+        audit("store.connected", {"id": store_id, "grant": "client_credentials"})
+        try:
+            return jsonify({**_connection_result(store_id), "grant": "client_credentials"})
+        except ShopifyError as e:
+            return api_error(str(e))
+    redirect_uri = origin + shopify_auth.CALLBACK_PATH
+    state = secrets.token_urlsafe(24)
+    session[SHOPIFY_OAUTH_KEY] = {"state": state, "store_id": store_id, "redirect_uri": redirect_uri,
+                                  "at": time.time()}
+    return jsonify({"url": shopify_auth.authorize_url(store, redirect_uri, state), "redirect_uri": redirect_uri})
+
+
+def _finish_shopify_oauth(params, store_id=None):
+    """Complete a pending install from Shopify's redirect parameters.
+    Returns the store row; raises ValueError / ShopifyError."""
+    pending = session.pop(SHOPIFY_OAUTH_KEY, None)
+    state = params.get("state") or ""
+    if (not pending or not state or not hmac.compare_digest(pending["state"], state)
+            or time.time() - pending["at"] > OAUTH_STATE_TTL_S):
+        raise ValueError("This Shopify connection is stale or was started elsewhere — click Connect again")
+    if store_id is not None and pending["store_id"] != store_id:
+        raise ValueError("That Shopify approval belongs to a different store")
+    store = _app_store(pending["store_id"])
+    if not store:
+        raise ValueError("That store no longer connects through a Shopify app")
+    if params.get("error"):
+        raise ValueError(f"Shopify did not approve: {params.get('error_description') or params['error']}")
+    if not shopify_auth.verify_hmac(params, store["client_secret"]):
+        raise ValueError("Shopify's answer failed its signature check — click Connect again")
+    shop = (params.get("shop") or "").lower()
+    if shop != store["shop_domain"]:
+        raise ValueError(f"Shopify answered for {shop or 'no store'}, not {store['shop_domain']}")
+    if not params.get("code"):
+        raise ValueError("Shopify returned no authorization code")
+    store = shopify_auth.exchange_code(store, params["code"])
+    audit("store.connected", {"id": store["id"], "grant": "authorization_code", "scopes": store["granted_scopes"]})
+    return store
+
+
+@bp.get("/oauth/shopify/callback")
+def shopify_oauth_callback():
+    if session.get("role") != "admin":
+        return redirect("/login.html")
+    try:
+        store = _finish_shopify_oauth(request.args.to_dict())
+        query = {"shopify": "connected", "store": store["name"]}
+    except (ValueError, ShopifyError) as e:
+        query = {"shopify_error": str(e)}
+    return redirect(f"/settings.html?{urlencode(query)}#integrations")
+
+
+@bp.post("/shopify-stores/<int:store_id>/oauth/complete")
+@admin_required
+def shopify_oauth_complete(store_id):
+    """Fallback when the callback URL is not reachable from the browser: the
+    admin pastes the address Shopify's approval landed on."""
+    query = parse_qs(urlparse(str((request.get_json(silent=True) or {}).get("url") or "").strip()).query)
+    try:
+        store = _finish_shopify_oauth({k: v[0] for k, v in query.items()}, store_id)
+    except (ValueError, ShopifyError) as e:
+        return api_error(str(e))
+    return jsonify({"ok": True, "store": store["name"]})
+
+
+@bp.post("/shopify-stores/<int:store_id>/disconnect")
+@admin_required
+def disconnect_store(store_id):
+    if not _app_store(store_id):
+        return api_error("Only stores that use a Shopify app disconnect", 404)
+    shopify_auth.disconnect(store_id)
+    audit("store.disconnected", {"id": store_id})
+    return jsonify({"ok": True})
 
 
 # ---------- Users ----------
