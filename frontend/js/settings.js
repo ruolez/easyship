@@ -2280,8 +2280,10 @@ window.deleteDb = (id, name) => {
 };
 
 /* ---------- Modal helpers ---------- */
-function openModal(html) {
-  document.getElementById('modal').innerHTML = html;
+function openModal(html, variant = '') {
+  const modal = document.getElementById('modal');
+  modal.className = variant ? `modal ${variant}` : 'modal';
+  modal.innerHTML = html;
   document.getElementById('modal-backdrop').classList.add('show');
 }
 function closeModal() {
@@ -2376,85 +2378,210 @@ async function connectStore(id, btn) {
   }
 }
 
+const ST_ICON = (paths) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+const ST_ICONS = {
+  bag: ST_ICON('<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>'),
+  app: ST_ICON('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7"/><path d="M14 17.5h7"/>'),
+  key: ST_ICON('<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/>'),
+  copy: ST_ICON('<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
+  check: ST_ICON('<path d="M20 6 9 17l-5-5"/>'),
+  close: ST_ICON('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+  info: ST_ICON('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
+  alert: ST_ICON('<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>'),
+  plug: ST_ICON('<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>'),
+};
+const MYSHOPIFY = '.myshopify.com';
+
+/* Clipboard with a fallback for plain-http LAN pages, which have no clipboard API. */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+}
+
+function flashCopied(btn) {
+  const label = btn.querySelector('span');
+  const before = [btn.innerHTML, label ? label.textContent : ''];
+  btn.classList.add('done');
+  btn.innerHTML = `${ST_ICONS.check}${label ? '<span>Copied</span>' : ''}`;
+  setTimeout(() => {
+    btn.classList.remove('done');
+    btn.innerHTML = before[0];
+  }, 1600);
+}
+
 function storeAppStatusHtml(store) {
   if (!store || store.auth_method !== 'app') return '';
-  const state = store.connected
-    ? `<span class="us-status on">Connected · ${store.token_grant === 'client_credentials' ? 'organization credentials' : 'installed through Shopify approval'}</span>
-       <button type="button" class="btn btn-text btn-small" id="m-store-disconnect">Disconnect</button>`
-    : `<span class="us-status${store.auth_error ? ' warn' : ''}">${store.auth_error ? `Reconnect needed — ${esc(store.auth_error)}` : 'Not connected'}</span>`;
-  return `
-    <div class="st-app-state">${state}</div>
-    <details class="field pv-oauth-paste mb-16">
-      <summary class="hint">Shopify's approval page did not come back here?</summary>
-      <div class="pr-inline">
-        <input id="m-store-paste" placeholder="Paste the address the browser landed on" autocomplete="off">
-        <button type="button" class="btn btn-outlined btn-small" id="m-store-paste-go">Finish connecting</button>
-      </div>
-    </details>`;
+  if (store.connected) {
+    const how = store.token_grant === 'client_credentials' ? 'Organization credentials' : 'Approved on Shopify';
+    const since = store.connected_at ? ` · since ${new Date(store.connected_at).toLocaleDateString()}` : '';
+    return `<div class="st-banner ok">${ST_ICONS.check}
+      <div class="st-banner-text"><strong>Connected</strong><span>${how}${since}</span></div>
+      <button type="button" class="btn btn-text btn-small st-banner-act" id="m-store-disconnect">Disconnect</button></div>`;
+  }
+  if (store.auth_error) {
+    return `<div class="st-banner warn">${ST_ICONS.alert}
+      <div class="st-banner-text"><strong>Reconnect needed</strong><span>${esc(store.auth_error)}</span></div></div>`;
+  }
+  return `<div class="st-banner">${ST_ICONS.plug}
+    <div class="st-banner-text"><strong>Not connected yet</strong><span>Save &amp; connect finishes the setup.</span></div></div>`;
+}
+
+function storeMethodCard(value, icon, title, text, badge) {
+  return `<label class="st-method">
+    <input type="radio" name="m-store-method" value="${value}">
+    <span class="st-method-icon">${icon}</span>
+    <span class="st-method-text"><strong>${title}${badge ? ` <em class="st-badge">${badge}</em>` : ''}</strong><span>${text}</span></span>
+    <span class="st-radio" aria-hidden="true"></span>
+  </label>`;
 }
 
 function storeForm(store) {
   let method = store ? store.auth_method : 'app';
-  const keepsSecret = store && store.auth_method === 'app' && store.client_secret;
-  openModal(`
-    <h3>${store ? 'Edit store' : 'Add Shopify store'}</h3>
-    <div class="field mb-16"><label>Name</label><input id="m-store-name" value="${store ? esc(store.name) : ''}"></div>
-    <div class="field mb-16"><label>Shop domain (mystore.myshopify.com)</label><input id="m-store-domain" value="${store ? esc(store.shop_domain) : ''}"></div>
-    <div class="field mb-16"><label>Order-number prefix (for scan auto-detect)</label><input id="m-store-prefix" autocomplete="off" value="${store ? esc(store.prefix || '') : ''}"></div>
-    <div class="field mb-16"><label class="svc-selectall"><input type="checkbox" id="m-store-nocompany" ${store && store.no_company ? 'checked' : ''}> No Company — leave the customer's company name blank on shipments</label></div>
-    <div class="field mb-16"><label>Connection</label>
-      <div class="plr-seg" id="m-store-method" role="group" aria-label="Connection">
-        <button type="button" data-v="app">Shopify app (OAuth)</button>
-        <button type="button" data-v="token">Admin API token</button>
-      </div>
-    </div>
-    <div id="m-store-token-box">
-      <div class="field mb-16"><label>Admin API access token${store && store.auth_method === 'token' ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-store-token" autocomplete="off"></div>
-    </div>
-    <div id="m-store-app-box">
-      ${storeAppStatusHtml(store)}
-      <div class="field mb-16"><label>Client ID</label><input id="m-store-cid" autocomplete="off" value="${store ? esc(store.client_id || '') : ''}"></div>
-      <div class="field mb-16"><label>Client secret${keepsSecret ? ' (leave blank to keep current)' : ''}</label><input type="password" id="m-store-secret" autocomplete="off"></div>
-      <div class="field st-app-help mb-16">
-        <span class="hint">Both come from the app's Settings in the Shopify Dev Dashboard. In the app's version, add this redirect URL and these scopes:</span>
-        <div class="pr-inline"><input id="m-store-callback" readonly value="${esc(location.origin + SHOPIFY_CALLBACK)}"><button type="button" class="btn btn-outlined btn-small" id="m-store-copy">Copy</button></div>
-        <div class="us-chips">${SHOPIFY_SCOPES.map((s) => `<span class="us-chip">${s}</span>`).join('')}</div>
-        <span class="hint">A store in the app's own organization connects without approval once the app is installed on it from the Dev Dashboard. Any other store approves the app on Shopify's page.</span>
-      </div>
-    </div>
-    ${store ? `<div class="field mb-16"><label>Status</label><select id="m-store-active"><option value="true" ${store.is_active ? 'selected' : ''}>Active</option><option value="false" ${!store.is_active ? 'selected' : ''}>Inactive</option></select></div>` : ''}
-    <div class="actions">
-      <button class="btn btn-text" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="m-store-save">Save</button>
-    </div>`);
+  const appStore = store && store.auth_method === 'app';
+  const connectedApp = appStore && store.connected;
+  const domain = store ? store.shop_domain : '';
+  const domainShown = domain.endsWith(MYSHOPIFY) ? domain.slice(0, -MYSHOPIFY.length) : domain;
+  const callback = location.origin + SHOPIFY_CALLBACK;
+  const keep = '(leave blank to keep)';
 
-  const connectedApp = store && store.auth_method === 'app' && store.connected;
+  openModal(`
+    <div class="st-head">
+      <span class="st-head-icon">${ST_ICONS.bag}</span>
+      <div class="st-head-text">
+        <h3>${store ? esc(store.name) : 'Add Shopify store'}</h3>
+        <p>${store ? 'Edit the store and how EasyShip connects to it' : 'Pull its orders here and write tracking back to Shopify'}</p>
+      </div>
+      <button type="button" class="st-close" aria-label="Close" onclick="closeModal()">${ST_ICONS.close}</button>
+    </div>
+
+    <div class="st-body">
+      <section class="st-section">
+        <div class="st-section-title">Store</div>
+        <div class="st-grid">
+          <div class="field"><label for="m-store-name">Name</label>
+            <input id="m-store-name" placeholder="e.g. Prime Wholesale" value="${store ? esc(store.name) : ''}"></div>
+          <div class="field"><label for="m-store-prefix">Order prefix <span class="st-opt">optional</span></label>
+            <input id="m-store-prefix" autocomplete="off" placeholder="e.g. PW" value="${store ? esc(store.prefix || '') : ''}"></div>
+          <div class="field st-span"><label for="m-store-domain">Shop domain</label>
+            <div class="st-affix">
+              <input id="m-store-domain" autocomplete="off" spellcheck="false" placeholder="your-store" value="${esc(domainShown)}">
+              <span class="st-suffix" id="m-store-suffix">${MYSHOPIFY}</span>
+            </div>
+            <span class="st-hint">Its permanent address, shown in Shopify admin › Settings › Domains. The order prefix lets a scan open this store.</span>
+          </div>
+        </div>
+        <label class="switch st-switch">
+          <input type="checkbox" id="m-store-nocompany" ${store && store.no_company ? 'checked' : ''}>
+          <span class="switch-track"></span>
+          <span class="st-switch-text"><strong>Leave company names blank</strong><span>Labels show only the customer's name</span></span>
+        </label>
+      </section>
+
+      <section class="st-section">
+        <div class="st-section-title">Connection</div>
+        <div class="st-methods" role="radiogroup" aria-label="Connection">
+          ${storeMethodCard('app', ST_ICONS.app, 'Shopify app', 'Client ID and secret from the Dev Dashboard', 'Recommended')}
+          ${storeMethodCard('token', ST_ICONS.key, 'Admin API token', 'Pasted from a legacy custom app')}
+        </div>
+
+        <div id="m-store-token-box" class="st-pane">
+          <div class="field"><label for="m-store-token">Admin API access token ${store && store.auth_method === 'token' ? `<span class="st-opt">${keep}</span>` : ''}</label>
+            <input type="password" id="m-store-token" autocomplete="off" spellcheck="false" placeholder="shpat_…"></div>
+        </div>
+
+        <div id="m-store-app-box" class="st-pane">
+          ${storeAppStatusHtml(store)}
+          ${connectedApp ? `<details class="st-setup"><summary>${ST_ICONS.app}<span>App setup &amp; credentials</span><span class="st-opt">redirect URL, scopes, client ID and secret</span></summary>` : ''}
+          <ol class="st-steps">
+            <li>
+              <div class="st-step-title">Allow this redirect URL in the app</div>
+              <div class="st-copyfield">
+                <code id="m-store-callback">${esc(callback)}</code>
+                <button type="button" class="st-copy" data-copy="${plAttr(callback)}">${ST_ICONS.copy}<span>Copy</span></button>
+              </div>
+            </li>
+            <li>
+              <div class="st-step-title">Give it these access scopes
+                <button type="button" class="st-copy st-copy-link" data-copy="${plAttr(SHOPIFY_SCOPES.join(','))}">${ST_ICONS.copy}<span>Copy all</span></button>
+              </div>
+              <div class="st-scopes">${SHOPIFY_SCOPES.map((s) => `<code>${s}</code>`).join('')}</div>
+            </li>
+            <li>
+              <div class="st-step-title">Paste the app's credentials <span class="st-opt">App › Settings</span></div>
+              <div class="st-grid">
+                <div class="field"><label for="m-store-cid">Client ID</label>
+                  <input id="m-store-cid" autocomplete="off" spellcheck="false" value="${store ? esc(store.client_id || '') : ''}"></div>
+                <div class="field"><label for="m-store-secret">Client secret ${appStore && store.client_secret ? `<span class="st-opt">${keep}</span>` : ''}</label>
+                  <input type="password" id="m-store-secret" autocomplete="off" spellcheck="false" placeholder="${appStore && store.client_secret ? '••••••••' : ''}"></div>
+              </div>
+            </li>
+          </ol>
+          <div class="st-note">${ST_ICONS.info}
+            <span><strong>Same organization as the app</strong> (installed from the Dev Dashboard): connects instantly.
+            <strong>Any other store:</strong> you approve the app on Shopify, then land back here.</span>
+          </div>
+          ${connectedApp ? '</details>' : ''}
+          ${appStore && !store.connected ? `
+          <details class="st-paste">
+            <summary>Shopify's approval page didn't come back here?</summary>
+            <div class="st-paste-row">
+              <input id="m-store-paste" placeholder="Paste the address the browser landed on" autocomplete="off" spellcheck="false">
+              <button type="button" class="btn btn-outlined btn-small" id="m-store-paste-go">Finish</button>
+            </div>
+          </details>` : ''}
+        </div>
+      </section>
+    </div>
+
+    <div class="st-foot">
+      ${store ? `<label class="switch st-active">
+        <input type="checkbox" id="m-store-active" ${store.is_active ? 'checked' : ''}>
+        <span class="switch-track"></span><span>Active</span></label>` : '<span></span>'}
+      <div class="st-foot-actions">
+        <button type="button" class="btn btn-text" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn btn-primary" id="m-store-save">Save</button>
+      </div>
+    </div>`, 'st-modal');
+
+  const modal = document.getElementById('modal');
+  const domainInput = document.getElementById('m-store-domain');
+  const showSuffix = () => {
+    document.getElementById('m-store-suffix').hidden = domainInput.value.includes('.');
+  };
+  domainInput.addEventListener('input', showSuffix);
+  showSuffix();
+
   const showMethod = () => {
-    document.querySelectorAll('#m-store-method button').forEach((b) => {
-      b.classList.toggle('on', b.dataset.v === method);
-      b.setAttribute('aria-pressed', String(b.dataset.v === method));
+    modal.querySelectorAll('input[name="m-store-method"]').forEach((r) => {
+      r.checked = r.value === method;
+      r.closest('.st-method').classList.toggle('on', r.checked);
     });
     document.getElementById('m-store-token-box').hidden = method !== 'token';
     document.getElementById('m-store-app-box').hidden = method !== 'app';
-    document.getElementById('m-store-save').textContent = method === 'app' && !connectedApp ? 'Save & connect' : 'Save';
+    let label = store ? 'Save' : 'Add store';
+    if (method === 'app' && !connectedApp) label = appStore && store.auth_error ? 'Save & reconnect' : `${store ? 'Save' : 'Add'} & connect`;
+    document.getElementById('m-store-save').textContent = label;
   };
   showMethod();
-  document.getElementById('m-store-method').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-v]');
-    if (!b) return;
-    method = b.dataset.v;
+  modal.querySelector('.st-methods').addEventListener('change', (e) => {
+    method = e.target.value;
     showMethod();
   });
-  document.getElementById('m-store-copy').addEventListener('click', async () => {
-    const field = document.getElementById('m-store-callback');
-    field.select();
-    try {
-      await navigator.clipboard.writeText(field.value);
-      snackbar('Redirect URL copied', 'success');
-    } catch {
-      document.execCommand('copy'); // plain-http LAN pages have no clipboard API
-    }
-  });
+  modal.querySelectorAll('[data-copy]').forEach((btn) => btn.addEventListener('click', async () => {
+    await copyText(btn.dataset.copy);
+    flashCopied(btn);
+  }));
+  if (!store) document.getElementById('m-store-name').focus();
+
   const disconnectBtn = document.getElementById('m-store-disconnect');
   if (disconnectBtn) {
     disconnectBtn.addEventListener('click', async () => {
@@ -2484,10 +2611,12 @@ function storeForm(store) {
     });
   }
 
-  document.getElementById('m-store-save').addEventListener('click', async () => {
+  const saveBtn = document.getElementById('m-store-save');
+  saveBtn.addEventListener('click', async () => {
+    const typed = domainInput.value.trim();
     const body = {
       name: document.getElementById('m-store-name').value,
-      shop_domain: document.getElementById('m-store-domain').value,
+      shop_domain: typed && !typed.includes('.') ? typed + MYSHOPIFY : typed,
       prefix: document.getElementById('m-store-prefix').value,
       no_company: document.getElementById('m-store-nocompany').checked,
       auth_method: method,
@@ -2498,7 +2627,8 @@ function storeForm(store) {
       body.client_id = document.getElementById('m-store-cid').value;
       body.client_secret = document.getElementById('m-store-secret').value;
     }
-    if (store) body.is_active = document.getElementById('m-store-active').value === 'true';
+    if (store) body.is_active = document.getElementById('m-store-active').checked;
+    saveBtn.disabled = true;
     try {
       const res = store
         ? await api(`/api/shopify-stores/${store.id}`, { method: 'PUT', body })
@@ -2509,6 +2639,8 @@ function storeForm(store) {
       else snackbar('Store saved', 'success');
     } catch (err) {
       snackbar(err.message, 'error');
+    } finally {
+      saveBtn.disabled = false;
     }
   });
 }
