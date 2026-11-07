@@ -70,5 +70,78 @@ class HistoryPageTest(unittest.TestCase):
         self.assertEqual((page["offset"], self.queries[1]), (100, ("%ann%", "%ann%", 50, 100)))
 
 
+class WrongWhereTest(unittest.TestCase):
+    """The wrong-barcode queue: open by default, the stat cards see both."""
+
+    def test_open_is_the_default(self):
+        self.assertEqual(verify_store.wrong_where({}),
+                         (f"{verify_store.WRONG_BASE} AND e.fixed_at IS NULL", []))
+
+    def test_status_choices(self):
+        cases = [("fixed", " AND e.fixed_at IS NOT NULL"), ("all", ""), ("open", " AND e.fixed_at IS NULL")]
+        for status, extra in cases:
+            with self.subTest(status=status):
+                self.assertEqual(verify_store.wrong_where({"status": status})[0], verify_store.WRONG_BASE + extra)
+
+    def test_stats_ignore_status_but_keep_other_filters(self):
+        sql, params = verify_store.wrong_where({"status": "fixed", "user_ids": [4],
+                                                "sources": ["backoffice:Prime"]}, with_status=False)
+        self.assertEqual((sql, params), (
+            f"{verify_store.WRONG_BASE} AND ((v.source = 'backoffice' AND v.source_db = %s)) AND e.user_id = ANY(%s)",
+            ["Prime", [4]]))
+
+    def test_search_finds_a_barcode_with_or_without_leading_zeros(self):
+        cases = [("0076452", "76452"), ("000", "0"), ("TG116", "TG116")]
+        for q, key in cases:
+            with self.subTest(q=q):
+                sql, params = verify_store.wrong_where({"q": q, "status": "all"})
+                self.assertEqual((sql, params), (
+                    f"{verify_store.WRONG_BASE} AND (e.barcode ILIKE %s OR v.order_name ILIKE %s"
+                    f" OR {verify_store.WRONG_KEY} ILIKE %s)", [f"%{q}%", f"%{q}%", f"%{key}%"]))
+
+
+class WrongOrderTest(unittest.TestCase):
+    def test_defaults_per_view(self):
+        self.assertEqual((verify_store.wrong_order("scans"), verify_store.wrong_order("barcodes", "nope")),
+                         (verify_store.WRONG_DEFAULT_ORDER,
+                          f"{verify_store.WRONG_GROUP_DEFAULT_ORDER}, {verify_store.WRONG_KEY}"))
+
+    def test_a_scan_sort_is_not_a_group_sort(self):
+        self.assertEqual(verify_store.wrong_order("barcodes", "packer"),
+                         f"{verify_store.WRONG_GROUP_DEFAULT_ORDER}, {verify_store.WRONG_KEY}")
+
+    def test_group_sort_ends_with_the_group_key(self):
+        self.assertEqual(verify_store.wrong_order("barcodes", "scans", desc=True),
+                         f"COUNT(*) DESC NULLS LAST, {verify_store.WRONG_GROUP_DEFAULT_ORDER}, {verify_store.WRONG_KEY}")
+
+
+class WrongPageTest(unittest.TestCase):
+    def setUp(self):
+        self.queries = []
+        self.total = 0
+        self.addCleanup(setattr, verify_store.db, "query", verify_store.db.query)
+        verify_store.db.query = self._query
+
+    def _query(self, sql, params=None, one=False):
+        self.queries.append(sql)
+        if "AS total" in sql:
+            return {"total": self.total}
+        if "AS n" in sql:
+            return {"n": 9}
+        return {"open": 4, "fixed": 2, "barcodes": 3, "orders": 1} if one else [{"id": 1}]
+
+    def test_empty_result_skips_the_page_query(self):
+        page = verify_store.wrong_barcodes({}, limit=50)
+        self.assertEqual((page, len(self.queries)), ({
+            "rows": [], "total": 0, "offset": 0, "limit": 50, "open_all": 9,
+            "stats": {"open": 4, "fixed": 2, "barcodes": 3, "orders": 1}}, 3))
+
+    def test_grouped_view_counts_and_groups_by_barcode_key(self):
+        self.total = 70
+        page = verify_store.wrong_barcodes({}, view="barcodes", limit=50, offset=200)
+        self.assertEqual((page["offset"], f"COUNT(DISTINCT {verify_store.WRONG_KEY})" in self.queries[1],
+                          f"GROUP BY {verify_store.WRONG_KEY}" in self.queries[2]), (50, True, True))
+
+
 if __name__ == "__main__":
     unittest.main()

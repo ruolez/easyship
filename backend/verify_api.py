@@ -380,11 +380,40 @@ def _shipment_from_args(args):
 def wrong_barcodes():
     if not _can_see_all():
         return api_error("Admin or Verify override access required", 403)
-    rows = verify_store.wrong_barcodes(include_fixed=request.args.get("fixed") == "1")
-    for row in rows:
-        for key in ("created_at", "fixed_at"):
-            row[key] = row[key].isoformat() if row[key] else None
-    return jsonify(rows)
+    args = request.args
+    view = args.get("view") if args.get("view") in verify_store.WRONG_VIEWS else "scans"
+    sorts = verify_store.WRONG_GROUP_SORT if view == "barcodes" else verify_store.WRONG_SORT
+    filters = {
+        "q": (args.get("q") or "").strip(),
+        "status": args.get("status") if args.get("status") in verify_store.WRONG_STATUSES else "open",
+        "sources": _list_arg("source"),
+        "user_ids": [int(v) for v in _list_arg("user") if v.isdigit()],
+    }
+    try:
+        filters["since"] = _day_bounds(args["from"]) if args.get("from") else None
+        filters["until"] = _day_bounds(args["to"], end=True) if args.get("to") else None
+    except ValueError:
+        return api_error("Dates must be YYYY-MM-DD")
+    page = verify_store.wrong_barcodes(
+        filters, view=view,
+        sort=args.get("sort") if args.get("sort") in sorts else None,
+        desc=args.get("dir") == "desc",
+        limit=_page_arg("limit", verify_store.HISTORY_PAGE_DEFAULT, 1, verify_store.HISTORY_PAGE_MAX),
+        offset=_page_arg("offset", 0, 0, 10**9),
+    )
+    for row in page["rows"]:
+        for key in ("created_at", "fixed_at", "first_at", "last_at"):
+            if key in row:
+                row[key] = row[key].isoformat() if row[key] else None
+        if "order_refs" in row:
+            refs = [ref.rpartition("|") for ref in row.pop("order_refs") or []]
+            row["order_list"] = [{"name": name, "verification_id": int(vid)} for name, _, vid in refs if vid.isdigit()]
+    page["view"] = view
+    return jsonify(page)
+
+
+def _event_ids():
+    return [int(i) for i in _body().get("ids") or [] if str(i).isdigit()]
 
 
 @bp.post("/wrong-barcodes/fix")
@@ -392,11 +421,24 @@ def wrong_barcodes():
 def fix_wrong_barcodes():
     if not _can_see_all():
         return api_error("Admin or Verify override access required", 403)
-    ids = [int(i) for i in _body().get("ids") or [] if str(i).isdigit()]
+    ids = _event_ids()
     if not ids:
         return api_error("Nothing selected")
     verify_store.fix_wrong_barcodes(ids, session["user_id"])
     audit("verify.wrong_barcodes_fixed", {"count": len(ids)})
+    return jsonify({"ok": True})
+
+
+@bp.post("/wrong-barcodes/reopen")
+@section_required("verify")
+def reopen_wrong_barcodes():
+    if not _can_see_all():
+        return api_error("Admin or Verify override access required", 403)
+    ids = _event_ids()
+    if not ids:
+        return api_error("Nothing selected")
+    verify_store.reopen_wrong_barcodes(ids)
+    audit("verify.wrong_barcodes_reopened", {"count": len(ids)})
     return jsonify({"ok": True})
 
 

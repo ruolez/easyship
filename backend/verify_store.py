@@ -463,18 +463,124 @@ def history_sources():
     ) or []
 
 
-def wrong_barcodes(include_fixed=False):
-    return db.query(
-        f"""SELECT e.id, e.barcode, e.created_at, e.fixed_at, u.username, fu.username AS fixed_by_name,
-                   v.id AS verification_id, v.order_name, v.source, v.source_db, s.name AS store_name
-            FROM verification_events e
-            JOIN verifications v ON v.id = e.verification_id
-            LEFT JOIN users u ON u.id = e.user_id
-            LEFT JOIN users fu ON fu.id = e.fixed_by
-            LEFT JOIN shopify_stores s ON s.id = v.shopify_store_id
-            WHERE e.kind = 'scan' AND e.result = 'wrong' {"" if include_fixed else "AND e.fixed_at IS NULL"}
-            ORDER BY e.id DESC LIMIT 500""",
-    ) or []
+WRONG_BASE = "e.kind = 'scan' AND e.result = 'wrong'"
+# Same idea as barcodes.barcode_key: digits compare without leading zeros,
+# anything else case-insensitively, so one shelf product is one group.
+WRONG_KEY = ("(CASE WHEN BTRIM(e.barcode) ~ '^[0-9]+$' "
+             "THEN COALESCE(NULLIF(LTRIM(BTRIM(e.barcode), '0'), ''), '0') ELSE UPPER(BTRIM(e.barcode)) END)")
+WRONG_FROM = """
+    FROM verification_events e
+    JOIN verifications v ON v.id = e.verification_id
+    LEFT JOIN users u ON u.id = e.user_id
+    LEFT JOIN users fu ON fu.id = e.fixed_by
+    LEFT JOIN shopify_stores s ON s.id = v.shopify_store_id"""
+WRONG_STATUSES = ("open", "fixed", "all")
+WRONG_VIEWS = ("scans", "barcodes")
+WRONG_SORT = {
+    "barcode": "LOWER(e.barcode)",
+    "order": "LOWER(v.order_name)",
+    "source": "LOWER(COALESCE(s.name, v.source_db, v.source))",
+    "packer": "LOWER(u.username)",
+    "when": "e.created_at",
+    "fixed": "e.fixed_at",
+}
+WRONG_DEFAULT_ORDER = "e.id DESC"
+WRONG_GROUP_SORT = {
+    "barcode": "MIN(LOWER(e.barcode))",
+    "scans": "COUNT(*)",
+    "orders": "COUNT(DISTINCT v.id)",
+    "first": "MIN(e.created_at)",
+    "last": "MAX(e.created_at)",
+}
+WRONG_GROUP_DEFAULT_ORDER = "MAX(e.id) DESC"
+
+
+def wrong_where(filters, with_status=True):
+    where, params = [WRONG_BASE], []
+    status = filters.get("status") or "open"
+    if with_status and status == "open":
+        where.append("e.fixed_at IS NULL")
+    elif with_status and status == "fixed":
+        where.append("e.fixed_at IS NOT NULL")
+    if filters.get("q"):
+        q = filters["q"]
+        # A scanned 0076… finds 76… too: the key drops leading zeros.
+        key = (q.lstrip("0") or "0") if q.isdigit() else q
+        where.append(f"(e.barcode ILIKE %s OR v.order_name ILIKE %s OR {WRONG_KEY} ILIKE %s)")
+        params += [f"%{q}%", f"%{q}%", f"%{key}%"]
+    sources = [_source_match(v) for v in filters.get("sources") or []]
+    sources = [m for m in sources if m[0]]
+    if sources:
+        where.append("(" + " OR ".join(sql for sql, _ in sources) + ")")
+        params += [p for _, ps in sources for p in ps]
+    if filters.get("user_ids"):
+        where.append("e.user_id = ANY(%s)")
+        params.append(list(filters["user_ids"]))
+    if filters.get("since"):
+        where.append("e.created_at >= %s")
+        params.append(filters["since"])
+    if filters.get("until"):
+        where.append("e.created_at < %s")
+        params.append(filters["until"])
+    return " AND ".join(where), params
+
+
+def wrong_order(view="scans", sort=None, desc=False):
+    if view == "barcodes":
+        expr, default = WRONG_GROUP_SORT.get(sort), f"{WRONG_GROUP_DEFAULT_ORDER}, {WRONG_KEY}"
+    else:
+        expr, default = WRONG_SORT.get(sort), WRONG_DEFAULT_ORDER
+    if not expr:
+        return default
+    return f"{expr} {'DESC' if desc else 'ASC'} NULLS LAST, {default}"
+
+
+def wrong_barcodes(filters, view="scans", sort=None, desc=False, limit=HISTORY_PAGE_DEFAULT, offset=0):
+    """One page of wrong scans (or of barcodes, grouped) plus totals.
+
+    The stat cards ignore the Open / Fixed choice so they can switch it."""
+    where, params = wrong_where(filters)
+    stats_where, stats_params = wrong_where(filters, with_status=False)
+    stats = db.query(
+        f"""SELECT COUNT(*) FILTER (WHERE e.fixed_at IS NULL) AS open,
+                   COUNT(*) FILTER (WHERE e.fixed_at IS NOT NULL) AS fixed,
+                   COUNT(DISTINCT {WRONG_KEY}) FILTER (WHERE e.fixed_at IS NULL) AS barcodes,
+                   COUNT(DISTINCT v.id) FILTER (WHERE e.fixed_at IS NULL) AS orders
+            {WRONG_FROM} WHERE {stats_where}""",
+        tuple(stats_params), one=True,
+    ) or {}
+    grouped = view == "barcodes"
+    counted = db.query(
+        f"SELECT COUNT({'DISTINCT ' + WRONG_KEY if grouped else '*'}) AS total {WRONG_FROM} WHERE {where}",
+        tuple(params), one=True,
+    ) or {}
+    total = int(counted.get("total") or 0)
+    rows = []
+    if total:
+        if offset >= total:
+            offset = ((total - 1) // limit) * limit
+        if grouped:
+            sql = f"""SELECT {WRONG_KEY} AS key, MIN(e.barcode) AS barcode, COUNT(*) AS scans,
+                             COUNT(*) FILTER (WHERE e.fixed_at IS NULL) AS open,
+                             COUNT(DISTINCT v.id) AS orders,
+                             (ARRAY_AGG(DISTINCT v.order_name || '|' || v.id))[1:6] AS order_refs,
+                             ARRAY_REMOVE(ARRAY_AGG(DISTINCT u.username), NULL) AS packers,
+                             ARRAY_AGG(e.id ORDER BY e.id) AS ids,
+                             MIN(e.created_at) AS first_at, MAX(e.created_at) AS last_at
+                      {WRONG_FROM} WHERE {where}
+                      GROUP BY {WRONG_KEY} ORDER BY {wrong_order(view, sort, desc)} LIMIT %s OFFSET %s"""
+        else:
+            sql = f"""SELECT e.id, e.barcode, e.created_at, e.fixed_at, u.username, fu.username AS fixed_by_name,
+                             v.id AS verification_id, v.order_name, v.source, v.source_db, s.name AS store_name
+                      {WRONG_FROM} WHERE {where}
+                      ORDER BY {wrong_order(view, sort, desc)} LIMIT %s OFFSET %s"""
+        rows = db.query(sql, tuple(params) + (limit, offset)) or []
+    open_all = db.query(
+        f"SELECT COUNT(*) AS n FROM verification_events e WHERE {WRONG_BASE} AND e.fixed_at IS NULL", one=True,
+    ) or {}
+    return {"rows": rows, "total": total, "offset": offset, "limit": limit,
+            "stats": {k: int(stats.get(k) or 0) for k in ("open", "fixed", "barcodes", "orders")},
+            "open_all": int(open_all.get("n") or 0)}
 
 
 def fix_wrong_barcodes(event_ids, user_id):
@@ -482,6 +588,14 @@ def fix_wrong_barcodes(event_ids, user_id):
         """UPDATE verification_events SET fixed_at = now(), fixed_by = %s
            WHERE id = ANY(%s) AND kind = 'scan' AND result = 'wrong' AND fixed_at IS NULL""",
         (user_id, list(event_ids)),
+    )
+
+
+def reopen_wrong_barcodes(event_ids):
+    db.execute(
+        """UPDATE verification_events SET fixed_at = NULL, fixed_by = NULL
+           WHERE id = ANY(%s) AND kind = 'scan' AND result = 'wrong' AND fixed_at IS NOT NULL""",
+        (list(event_ids),),
     )
 
 

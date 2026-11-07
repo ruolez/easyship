@@ -43,6 +43,8 @@ class VerifyApiTest(unittest.TestCase):
         self.line_changes = []
         self.audits = []
         self.history_filters = []
+        self.wrong_calls = []
+        self.wrong_rows = []
         self.node = shopify_node()
         self.quotation_status = {"QuotationNumber": "10282026191", "SourceDB": "PrimeWholesale", "Dop1": "881",
                                  "BusinessName": "Corner Shop"}
@@ -81,6 +83,9 @@ class VerifyApiTest(unittest.TestCase):
             (verify_api.verify_store, "set_line_qty", self._set_line_qty),
             (verify_api.verify_store, "list_cases", lambda: []),
             (verify_api.verify_store, "history", self._history),
+            (verify_api.verify_store, "wrong_barcodes", self._wrong),
+            (verify_api.verify_store, "fix_wrong_barcodes", lambda ids, uid: self.wrong_calls.append(("fix", ids, uid))),
+            (verify_api.verify_store, "reopen_wrong_barcodes", lambda ids: self.wrong_calls.append(("reopen", ids))),
         ]
         self._orig = [(obj, name, getattr(obj, name)) for obj, name, _ in patches]
         for obj, name, fn in patches:
@@ -94,6 +99,11 @@ class VerifyApiTest(unittest.TestCase):
         self.history_filters.append(filters)
         self.history_page = page
         return {"rows": [], "total": 0, "offset": 0, "limit": page["limit"], "stats": {}}
+
+    def _wrong(self, filters, **page):
+        self.wrong_calls.append((filters, page))
+        return {"rows": self.wrong_rows, "total": len(self.wrong_rows), "offset": 0, "limit": page["limit"],
+                "stats": {}, "open_all": 0}
 
     def _nodes(self, store_id, gids):
         if isinstance(self.node, Exception):
@@ -215,6 +225,48 @@ class VerifyApiTest(unittest.TestCase):
             {"value": "backoffice:Prime", "group": "BackOffice", "label": "Prime"},
             {"value": "shopify:3", "group": "Shopify", "label": "TSW"},
         ]})
+
+    def test_wrong_barcodes_are_for_admins_and_override_users_only(self):
+        denied = self.client.get("/api/verify/wrong-barcodes")
+        self.sections = ["verify", "verify_override"]
+        allowed = self.client.get("/api/verify/wrong-barcodes")
+        self.assertEqual((denied.status_code, allowed.status_code), (403, 200))
+
+    def test_wrong_barcodes_validate_view_status_sort_and_dates(self):
+        self.sections = ["verify", "verify_override"]
+        cases = [
+            ("view=barcodes&status=fixed&sort=scans&dir=desc&source=shopify:3&user=4,x&q=%2007&limit=25&offset=50",
+             {"q": "07", "status": "fixed", "sources": ["shopify:3"], "user_ids": [4], "since": None, "until": None},
+             {"view": "barcodes", "sort": "scans", "desc": True, "limit": 25, "offset": 50}),
+            ("view=bogus&status=bogus&sort=scans",
+             {"q": "", "status": "open", "sources": [], "user_ids": [], "since": None, "until": None},
+             {"view": "scans", "sort": None, "desc": False, "limit": verify_store.HISTORY_PAGE_DEFAULT, "offset": 0}),
+        ]
+        for query, filters, page in cases:
+            with self.subTest(query=query):
+                self.wrong_calls.clear()
+                self.assertEqual(self.client.get(f"/api/verify/wrong-barcodes?{query}").status_code, 200)
+                self.assertEqual(self.wrong_calls, [(filters, page)])
+        bad = self.client.get("/api/verify/wrong-barcodes?from=11/06/2026")
+        self.assertEqual(bad.status_code, 400)
+
+    def test_wrong_barcode_groups_list_their_orders(self):
+        self.sections = ["verify", "verify_override"]
+        self.wrong_rows = [{"key": "76452304508", "first_at": STARTED, "last_at": STARTED,
+                            "order_refs": ["TG116180|41", "A|B|7", "broken"]}]
+        row = self.client.get("/api/verify/wrong-barcodes?view=barcodes").get_json()["rows"][0]
+        self.assertEqual(row, {"key": "76452304508", "first_at": STARTED.isoformat(), "last_at": STARTED.isoformat(),
+                               "order_list": [{"name": "TG116180", "verification_id": 41},
+                                              {"name": "A|B", "verification_id": 7}]})
+
+    def test_fix_and_reopen_take_event_ids(self):
+        self.sections = ["verify", "verify_override"]
+        empty = self.client.post("/api/verify/wrong-barcodes/fix", json={"ids": ["x"]})
+        self.client.post("/api/verify/wrong-barcodes/fix", json={"ids": [3, "4", "x"]})
+        self.client.post("/api/verify/wrong-barcodes/reopen", json={"ids": [3]})
+        self.assertEqual((empty.status_code, self.wrong_calls, self.audits),
+                         (400, [("fix", [3, 4], 5), ("reopen", [3])],
+                          ["verify.wrong_barcodes_fixed", "verify.wrong_barcodes_reopened"]))
 
     def test_store_error_becomes_its_status(self):
         def refuse(*a, **k):

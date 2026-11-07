@@ -90,24 +90,69 @@
     </section>
 
     <section class="tab-panel" data-panel="wrong">
-      <div class="card">
-        <h2>Barcodes not on the order
-          <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center">
-            <label class="svc-item"><input type="checkbox" id="vw-show-fixed"> Show fixed</label>
-            <button class="btn btn-primary btn-small" id="vw-fix" disabled>Mark fixed</button>
-          </span>
-        </h2>
-        <p class="hint mb-16">A packer scanned these and they matched nothing on the order — often a product whose barcode in Shopify or BackOffice differs from the one on the shelf. Fix the product, then mark the row fixed.</p>
+      <div class="vh-stats" id="vw-stats"></div>
+      <div class="card vh-card vw-card">
+        <p class="vw-intro">A packer scanned these and they matched nothing on the order — usually a product whose barcode in Shopify or BackOffice differs from the one on the shelf. Fix the product, then mark it fixed. <b>By barcode</b> groups repeat scans of one product.</p>
+        <div class="vh-toolbar">
+          <label class="vh-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="vw-q" type="search" placeholder="Search barcode or order #" autocomplete="off" spellcheck="false" aria-label="Search barcode or order number">
+          </label>
+          <div class="vh-range" id="vw-status" role="group" aria-label="Status">
+            <button type="button" data-status="open">Open</button>
+            <button type="button" data-status="fixed">Fixed</button>
+            <button type="button" data-status="all">All</button>
+          </div>
+          <div class="vh-range" id="vw-range" role="group" aria-label="Scanned">
+            <button type="button" data-range="today">Today</button>
+            <button type="button" data-range="7">7 days</button>
+            <button type="button" data-range="30">30 days</button>
+            <button type="button" data-range="all">All time</button>
+            <button type="button" data-range="custom">Custom</button>
+          </div>
+          <div class="vh-custom" id="vw-custom" hidden>
+            <input id="vw-from" type="date" aria-label="Scanned from">
+            <span>–</span>
+            <input id="vw-to" type="date" aria-label="Scanned to">
+          </div>
+        </div>
+        <div class="vh-filterbar" id="vw-filterbar">
+          <div class="vw-view" id="vw-view" role="group" aria-label="Show">
+            <button type="button" data-view="scans" title="Every wrong scan">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>Scans</button>
+            <button type="button" data-view="barcodes" title="One row per barcode">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5v14M8 5v14M11 5v14M15 5v14M17 5v14M20 5v14"/></svg>By barcode</button>
+          </div>
+          <span class="vw-divider" aria-hidden="true"></span>
+          <button type="button" class="vh-fbtn" data-filter="source">Source</button>
+          <button type="button" class="vh-fbtn" data-filter="user">Packer</button>
+          <button type="button" class="btn btn-text btn-small" id="vw-clear" hidden>Clear filters</button>
+          <label class="vh-sort-m">Sort <select id="vw-sort-m"></select></label>
+          <span class="vh-count" id="vw-count"></span>
+        </div>
         <div class="table-wrap flush">
-          <table class="striped compact">
-            <thead><tr>
-              <th style="width:34px"><input type="checkbox" id="vw-all" title="Select all"></th>
-              <th>Scanned barcode</th><th>Order</th><th>Source</th><th>Packer</th><th>When</th><th>Fixed</th>
-            </tr></thead>
+          <table class="striped compact vh-table vw-table">
+            <thead id="vw-head"></thead>
             <tbody id="vw-body"></tbody>
           </table>
         </div>
         <div class="empty" id="vw-empty" style="display:none"></div>
+        <div class="table-pager" id="vw-pager" style="display:none">
+          <label class="pager-size">Rows per page
+            <select id="vw-page-size"><option>25</option><option>50</option><option>100</option><option>200</option></select>
+          </label>
+          <span class="pager-range" id="vw-range-text"></span>
+          <button type="button" class="btn btn-outlined btn-small pager-btn" id="vw-first" aria-label="First page">«</button>
+          <button type="button" class="btn btn-outlined btn-small pager-btn" id="vw-prev" aria-label="Previous page">‹</button>
+          <button type="button" class="btn btn-outlined btn-small pager-btn" id="vw-next" aria-label="Next page">›</button>
+          <button type="button" class="btn btn-outlined btn-small pager-btn" id="vw-last" aria-label="Last page">»</button>
+        </div>
+      </div>
+      <div class="vw-bulk" id="vw-bulk" role="region" aria-label="Selected rows" hidden>
+        <span class="vw-bulk-n" id="vw-bulk-n"></span>
+        <button type="button" class="btn btn-primary btn-small" id="vw-fix">Mark fixed</button>
+        <button type="button" class="btn btn-outlined btn-small" id="vw-reopen">Reopen</button>
+        <button type="button" class="vw-bulk-x" id="vw-bulk-clear" aria-label="Clear selection" title="Clear selection">×</button>
       </div>
     </section>
   </div>
