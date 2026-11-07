@@ -2463,7 +2463,7 @@ async function viewPicklist(id) {
 function confirmCancel(id, number, tag) {
   openModal(`
     <h3>Cancel pick list #${id}?</h3>
-    <p>${number ? `Quotation <strong>${esc(number)}</strong> and its lines will be <strong>deleted from BackOffice</strong>. ` : ''}${tag ? `The tag <strong>${esc(tag)}</strong> is removed from its Shopify orders. ` : ''}Its orders become available for a new pick list again.</p>
+    <p>${number ? `Quotation <strong>${esc(number)}</strong> and its lines will be <strong>deleted from BackOffice</strong>, and its row in DB_Admin QuotationsStatus is removed. ` : ''}${tag ? `The tag <strong>${esc(tag)}</strong> is removed from its Shopify orders. ` : ''}Its orders become available for a new pick list again.</p>
     <div class="actions">
       <button class="btn btn-text" onclick="closeModal()">Keep it</button>
       <button class="btn btn-danger" id="m-cancel-confirm">Cancel pick list</button>
@@ -2475,7 +2475,8 @@ function confirmCancel(id, number, tag) {
       loadHistory();
       loadOrders();
       const t = res.tagging;
-      const done = `Pick list #${id} cancelled${res.quotation_deleted ? ' — quotation deleted' : ''}`;
+      const removed = [res.quotation_deleted && 'quotation deleted', res.status_rows_deleted && 'QuotationsStatus row removed'].filter(Boolean);
+      const done = `Pick list #${id} cancelled${removed.length ? ` — ${removed.join(', ')}` : ''}`;
       if (t && (t.error || t.failed.length)) {
         // The cancel itself went through; what is left is the tag on some orders.
         openModal(`<h3>${esc(done)}</h3>${taggingHtml(t, id)}

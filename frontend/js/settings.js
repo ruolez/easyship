@@ -2624,7 +2624,7 @@ function auditSummary(r) {
     case 'backoffice_db.update': return S('Updated a BackOffice database', [d.name || `#${d.id}`]);
     case 'backoffice_db.delete': return S('Removed a BackOffice database', [d.name || `#${d.id}`], 'warn');
     case 'picklist.create': return S(`Created pick list #${d.picklist}`, [d.quotation, d.orders != null ? plural(d.orders, 'order') : '', d.units != null ? plural(d.units, 'unit') : '']);
-    case 'picklist.cancel': return S(`Cancelled pick list #${d.picklist}`, [d.quotation, d.quotation_deleted ? 'quotation deleted' : ''], 'warn');
+    case 'picklist.cancel': return S(`Cancelled pick list #${d.picklist}`, [d.quotation, d.quotation_deleted ? 'quotation deleted' : '', d.status_rows_deleted ? 'QuotationsStatus row removed' : ''], 'warn');
     case 'picklist.failed': return S(`Pick list #${d.picklist} failed`, [d.error], 'err');
     case 'picklist.tags':
       if (d.picklist) {

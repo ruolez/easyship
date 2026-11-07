@@ -8,6 +8,7 @@ from flask import Blueprint, current_app, jsonify, request, session
 
 import backoffice
 import db
+import dbadmin
 import order_risk
 import picklist_cache
 import picklist_rules
@@ -816,8 +817,10 @@ def detail(picklist_id):
 @bp.post("/<int:picklist_id>/cancel")
 @section_required(SECTION)
 def cancel(picklist_id):
-    """Delete the BackOffice quotation first; only once it is gone are the
-    orders freed, so they never come back while the quotation still exists."""
+    """Delete the BackOffice quotation, then its DB_Admin QuotationsStatus
+    row; only once both are gone are the orders freed, so they never come back
+    while the quotation still exists. A failure leaves the pick list active and
+    a second cancel finishes the job (both deletes are safe to repeat)."""
     p = picklists.get_picklist(picklist_id)
     if not p:
         return api_error("Pick list not found", 404)
@@ -825,15 +828,23 @@ def cancel(picklist_id):
         return api_error("This pick list is already cancelled")
     if p["status"] == "creating" and datetime.now(timezone.utc) - p["created_at"] < STALE_CREATING:
         return api_error("This pick list is still being created — try again in a few minutes", 409)
-    deleted = False
+    deleted, status_rows = False, 0
     if p["quotation_id"]:
+        if dbadmin.get_config() is None:
+            return api_error("DB_Admin is not configured — set it up in Settings › Verify so the "
+                             "quotation's QuotationsStatus row can be deleted too")
         try:
             deleted = backoffice.delete_quotation(p["backoffice_db_id"], p["quotation_id"], p["quotation_number"])
         except backoffice.BackofficeError as e:
             return api_error(str(e), 502)
+        try:
+            status_rows = dbadmin.delete_quotation_status(p["quotation_number"], p["quotation_id"])
+        except dbadmin.DbAdminError as e:
+            log.warning("Pick list %s: quotation deleted, QuotationsStatus not: %s", picklist_id, e)
+            return api_error(f"{e} — the pick list is still active, cancel it again to finish", 502)
     picklists.cancel(picklist_id, session["user_id"])
     audit("picklist.cancel", {"picklist": picklist_id, "quotation": p["quotation_number"],
-                              "quotation_deleted": deleted})
+                              "quotation_deleted": deleted, "status_rows_deleted": status_rows})
     tagging = None
     if p.get("shopify_tag"):
         try:
@@ -841,7 +852,8 @@ def cancel(picklist_id):
         except Exception as e:  # noqa: BLE001 — the cancel is done; only the tags are left behind
             log.exception("Removing the tag of pick list %s failed", picklist_id)
             tagging = _tagging_result(p["shopify_tag"], "remove", 0, [], f"Could not remove the tag: {e}")
-    return jsonify({"ok": True, "quotation_deleted": deleted, "tagging": tagging})
+    return jsonify({"ok": True, "quotation_deleted": deleted, "status_rows_deleted": status_rows,
+                    "tagging": tagging})
 
 
 @bp.post("/<int:picklist_id>/tags/retry")

@@ -149,3 +149,27 @@ def write_checker(number, username):
         conn.commit()
     finally:
         conn.close()
+
+
+def delete_quotation_status(number, quotation_id):
+    """Drop the QuotationsStatus row of a deleted pick-list quotation, whatever
+    its Status. Dop1 must hold the same QuotationID, so a quotation with the
+    same number in another BackOffice database is never touched. Returns the
+    number of rows deleted (0 when none is left)."""
+    number = (number or "").strip()
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """DELETE FROM QuotationsStatus
+                   WHERE LTRIM(RTRIM(QuotationNumber)) = %s AND LTRIM(RTRIM(Dop1)) = %s""",
+                (number, str(quotation_id)),
+            )
+            deleted = cur.rowcount
+        conn.commit()
+        return deleted
+    except Exception as e:
+        conn.rollback()
+        raise DbAdminError(f"Could not delete quotation {number} from DB_Admin QuotationsStatus: {e}")
+    finally:
+        conn.close()

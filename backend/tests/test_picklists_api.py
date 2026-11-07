@@ -15,6 +15,7 @@ from flask import Flask  # noqa: E402
 
 import auth  # noqa: E402
 import backoffice  # noqa: E402
+import dbadmin  # noqa: E402
 import picklist_cache  # noqa: E402
 import picklists  # noqa: E402
 import picklists_api  # noqa: E402
@@ -91,6 +92,8 @@ class PicklistsApiTest(unittest.TestCase):
             (backoffice, "known_upcs", lambda db_id, upcs: {u for u in upcs if u == "111"}),
             (backoffice, "create_quotation", self.fake_create_quotation),
             (backoffice, "delete_quotation", self.fake_delete_quotation),
+            (dbadmin, "get_config", lambda: self.dbadmin_config),
+            (dbadmin, "delete_quotation_status", self.fake_delete_quotation_status),
             (picklists_api, "get_order_fraud", lambda sid, gid: self.fraud_node),
             (picklists_api, "list_shop_tags", self.fake_shop_tags),
             (picklists_api, "change_tags", self.fake_change_tags),
@@ -117,6 +120,9 @@ class PicklistsApiTest(unittest.TestCase):
             setattr(obj, name, value)
         self.quotation_error = None
         self.delete_error = None
+        self.dbadmin_config = {"host": "dbadmin", "db": "DB_Admin", "user": "sa"}
+        self.status_error = None
+        self.status_rows = 1
         self.picklist = None
         self.login("user")
 
@@ -180,6 +186,12 @@ class PicklistsApiTest(unittest.TestCase):
             raise backoffice.BackofficeError(self.delete_error)
         self.calls.append(("delete_quotation", db_id, qid, number))
         return True
+
+    def fake_delete_quotation_status(self, number, qid):
+        if self.status_error:
+            raise dbadmin.DbAdminError(self.status_error)
+        self.calls.append(("delete_quotation_status", number, qid))
+        return self.status_rows
 
     def fake_shop_tags(self, store_id, kind):
         self.calls.append(("shop_tags", store_id, kind))
@@ -454,11 +466,39 @@ class PicklistsApiTest(unittest.TestCase):
         return {"id": 42, "status": "active", "backoffice_db_id": DB_ID, "quotation_id": 555,
                 "quotation_number": "10222026191", "created_at": datetime.now(timezone.utc), **over}
 
-    def test_cancel_deletes_the_quotation_before_freeing_the_orders(self):
+    def test_cancel_deletes_the_quotation_and_its_status_row_before_freeing_the_orders(self):
         self.picklist = self.active_picklist()
         res = self.client.post("/api/picklists/42/cancel")
-        self.assertEqual((res.status_code, self.calls), (200, [
-            ("delete_quotation", DB_ID, 555, "10222026191"), ("cancel", 42)]))
+        self.assertEqual((res.status_code, res.get_json()["status_rows_deleted"], self.calls), (200, 1, [
+            ("delete_quotation", DB_ID, 555, "10222026191"),
+            ("delete_quotation_status", "10222026191", 555), ("cancel", 42)]))
+
+    def test_cancel_without_dbadmin_configured_changes_nothing(self):
+        self.picklist = self.active_picklist()
+        self.dbadmin_config = None
+        res = self.client.post("/api/picklists/42/cancel")
+        self.assertEqual((res.status_code, "DB_Admin" in res.get_json()["error"], self.calls), (400, True, []))
+
+    def test_dbadmin_failure_keeps_the_pick_list_active_and_a_second_cancel_finishes_it(self):
+        self.picklist = self.active_picklist()
+        self.status_error = "DB_Admin connection failed: timeout"
+        failed = self.client.post("/api/picklists/42/cancel")
+        failed_calls = list(self.calls)
+        self.status_error = None
+        retried = self.client.post("/api/picklists/42/cancel")
+        self.assertEqual(
+            (failed.status_code, "timeout" in failed.get_json()["error"], failed_calls, retried.status_code,
+             self.calls[len(failed_calls):]),
+            (502, True, [("delete_quotation", DB_ID, 555, "10222026191")], 200, [
+                ("delete_quotation", DB_ID, 555, "10222026191"),
+                ("delete_quotation_status", "10222026191", 555), ("cancel", 42)]))
+
+    def test_no_status_row_left_still_cancels(self):
+        self.picklist = self.active_picklist()
+        self.status_rows = 0
+        res = self.client.post("/api/picklists/42/cancel")
+        self.assertEqual((res.status_code, res.get_json()["status_rows_deleted"], self.calls[-1]),
+                         (200, 0, ("cancel", 42)))
 
     def test_cancel_changes_nothing_when_backoffice_fails(self):
         self.picklist = self.active_picklist()
@@ -720,7 +760,8 @@ class PicklistsApiTest(unittest.TestCase):
         before = len(self.calls)
         res = self.client.post("/api/picklists/42/cancel").get_json()
         self.assertEqual((res["tagging"]["done"], self.calls[before:], self.tag_states()), (1, [
-            ("delete_quotation", DB_ID, 555, "10222026191"), ("cancel", 42),
+            ("delete_quotation", DB_ID, 555, "10222026191"),
+            ("delete_quotation_status", "10222026191", 555), ("cancel", 42),
             ("change_tags", STORE, "g1", [], ["picklist 10222026191"])], [("#1", "removed", None)]))
 
     def test_a_tag_that_cannot_be_removed_leaves_the_cancel_done_and_can_be_retried(self):
@@ -738,7 +779,7 @@ class PicklistsApiTest(unittest.TestCase):
     def test_pick_lists_from_before_tagging_cancel_without_touching_shopify(self):
         self.picklist = self.active_picklist(shopify_tag=None)
         res = self.client.post("/api/picklists/42/cancel").get_json()
-        self.assertEqual((res["tagging"], [c[0] for c in self.calls]), (None, ["delete_quotation", "cancel"]))
+        self.assertEqual((res["tagging"], [c[0] for c in self.calls]), (None, ["delete_quotation", "delete_quotation_status", "cancel"]))
 
     def test_retry_refusals(self):
         self.picklist = None
