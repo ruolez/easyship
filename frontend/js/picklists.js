@@ -212,6 +212,7 @@ function renderStores(counts) {
 /* ---------- Orders ---------- */
 let loadSeq = 0;
 let backofficeError = null;
+let inventoryError = null;
 let shownStores = null; // the store selection the table shows orders for
 
 /* The orders read last time show at once while Shopify is asked for what
@@ -340,6 +341,7 @@ function showOrders(res, ids, refreshing) {
   presets = res.presets || [];
   hiddenTags = new Set((res.hidden_tags || []).map((t) => t.toLowerCase()));
   backofficeError = res.backoffice_error || null;
+  inventoryError = res.inventory_error || null;
   const savedPreset = recall(PRESET_KEY, null);
   activePreset = presets.some((p) => p.id === savedPreset) ? savedPreset : null;
   // Only a fresh read says an order is gone; the last read can miss new ones.
@@ -381,7 +383,9 @@ function showLoadErrors(errors) {
       <button class="btn btn-outlined btn-small pl-retry">Retry</button>
     </div>`).join('')
     + (backofficeError && orders.length ? `<div class="rule-banner warn"><span><strong>Barcodes weren’t checked against BackOffice</strong>
-      — ${esc(backofficeError)}. Products BackOffice doesn’t know only show up at Generate.</span></div>` : '');
+      — ${esc(backofficeError)}. Products BackOffice doesn’t know only show up at Generate.</span></div>` : '')
+    + (inventoryError && orders.length ? `<div class="rule-banner warn"><span><strong>Barcodes weren’t checked against Inventory</strong>
+      — ${esc(inventoryError)}. Orders with products BackOffice doesn’t know are left out until Inventory answers.</span></div>` : '');
   el.querySelectorAll('.pl-retry').forEach((b) => b.addEventListener('click', () => loadOrders()));
   if (errors.length) {
     const names = errors.map((e) => (e.store_id ? e.store_name || storeName(e.store_id) : null)).filter(Boolean);
@@ -694,6 +698,7 @@ const PICKLIST_TAG = /^picklist\s+\d+$/i;
 const FLAG_ICONS = {
   block: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>',
   risk: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>',
+  add: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 16h6"/><path d="M19 13v6"/><path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.14"/><path d="m7.5 4.27 9 5.15"/><path d="M3.29 7 12 12l8.71-5"/><path d="M12 22V12"/></svg>',
   tag: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.42l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
 };
 
@@ -719,8 +724,16 @@ function orderFlags(o) {
     flags.push({ tone: 'warn', icon: 'tag', label: 'Pick list tag', short: `Tagged “${tag}”`,
       detail: `Tagged “${tag}” — it may already be on a pick list` });
   }
+  if (o.adds && o.adds.length) {
+    flags.push({ tone: 'info', icon: 'add', label: 'Added to BackOffice at Generate',
+      short: `From Inventory: ${o.adds[0].title}${o.adds.length > 1 ? ` +${o.adds.length - 1}` : ''}`,
+      detail: `${o.adds.map((a) => `${a.title} (${a.barcode})`).join('; ')} — not in BackOffice yet, copied from Inventory when the pick list is created` });
+  }
   return flags;
 }
+
+/* Info flags only say what Generate will do; they don't need a review. */
+const reviewFlags = (o) => orderFlags(o).filter((f) => f.tone !== 'info');
 
 /* Each flag spelled out: short in the Needs review column, in full in the order window. */
 function flagReasonsHtml(o, full = false) {
@@ -801,7 +814,7 @@ function pickedOrders() {
 
 function lensPass(o, search) {
   if (search && !`${o.name} ${o.customer}`.toLowerCase().includes(search)) return false;
-  return !reviewOnly || orderFlags(o).length > 0;
+  return !reviewOnly || reviewFlags(o).length > 0;
 }
 
 /* The rows of the current view, in list order. */
@@ -942,7 +955,7 @@ function render(emptyMessage) {
   const shown = inView.filter((o) => lensPass(o, search));
   document.getElementById('pl-count-pick').textContent = picked.length;
   document.getElementById('pl-count-excluded').textContent = scoped.length - picked.length;
-  const reviewCount = inView.filter((o) => orderFlags(o).length).length;
+  const reviewCount = inView.filter((o) => reviewFlags(o).length).length;
   const review = document.getElementById('pl-review');
   review.classList.toggle('on', reviewOnly);
   review.classList.toggle('has', reviewCount > 0);
@@ -1256,7 +1269,7 @@ function orderBody(d, o) {
       : addressLines(d.billing_address);
   return `
     <div class="om-main">
-      ${flags.length ? `<div class="om-review"><span class="om-label">Needs review</span><div class="om-review-list">${flagReasonsHtml(o, true)}</div></div>` : ''}
+      ${flags.length ? `<div class="om-review"><span class="om-label">${flags.some((f) => f.tone !== 'info') ? 'Needs review' : 'Note'}</span><div class="om-review-list">${flagReasonsHtml(o, true)}</div></div>` : ''}
       <div class="om-stats">${stats.map(([l, v]) => `<div class="om-stat"><div class="om-label">${l}</div><div class="om-value">${v}</div></div>`).join('')}</div>
       <div class="om-cards">${omCard('Customer', customer)}${omCard('Ship to', ship)}${omCard('Bill to', bill)}</div>
       ${riskPanel(d.risk)}
@@ -2091,6 +2104,27 @@ function leftOutHtml(left, open) {
   </details>`;
 }
 
+/* Products missing from BackOffice that Inventory has: copied when the pick
+   list is created (preview), or copied just now (created). */
+function addedHtml(added, created) {
+  if (!added || !added.length) return '';
+  const head = created
+    ? `Added ${plural(added.length, 'product')} to BackOffice from Inventory`
+    : `${plural(added.length, 'product')} not in BackOffice yet`;
+  const hint = created ? '' : '<span class="hint">They’ll be copied from Inventory when you create the pick list</span>';
+  return `<details class="gen-added" ${added.length <= 3 ? 'open' : ''}>
+    <summary>${ICONS.info}<span>${head}</span>${hint}${ICONS.next}</summary>
+    <ul>${added.map((a) => `<li><strong>${esc(a.description || a.barcode)}</strong><span class="gen-code">${esc(a.barcode)}</span>${
+      a.sku ? `<span class="hint">SKU ${esc(a.sku)}</span>` : ''}</li>`).join('')}</ul>
+  </details>`;
+}
+
+function inventoryErrorHtml(error) {
+  if (!error) return '';
+  return `<div class="rule-banner warn gen-inventory-error"><span><strong>Inventory couldn’t be checked</strong>
+    — ${esc(error)}. Orders with products BackOffice doesn’t know are left out.</span></div>`;
+}
+
 function linesTable(lines) {
   const rows = lines.map((g, i) => `<tr data-i="${i}">
     <td class="num gen-idx">${i + 1}</td>
@@ -2131,7 +2165,7 @@ async function openGenerate() {
   const left = preview.excluded;
   if (!t.orders) {
     openModal(frame(`<div class="gen-empty">${ICONS.warn}<div><strong>None of these orders can go on a pick list</strong>
-      <div class="hint">Fix the reasons below, then try again.</div></div></div>${leftOutHtml(left, true)}`, GEN_CANCEL), 'gen');
+      <div class="hint">Fix the reasons below, then try again.</div></div></div>${inventoryErrorHtml(preview.inventory_error)}${leftOutHtml(left, true)}`, GEN_CANCEL), 'gen');
     return;
   }
 
@@ -2142,7 +2176,9 @@ async function openGenerate() {
   openModal(frame(`
     <div class="om-stats">${stats.map(([label, n], i) => `<div class="om-stat"><div class="om-label">${label}</div>
       <div class="om-value ${i === 3 && n ? 'gen-warn' : ''}">${n.toLocaleString()}</div></div>`).join('')}</div>
+    ${inventoryErrorHtml(preview.inventory_error)}
     ${leftOutHtml(left, false)}
+    ${addedHtml(preview.added, false)}
     <div class="gen-grid">
       <section class="gen-panel">
         <div class="gen-panel-head">
@@ -2371,6 +2407,7 @@ function showCreated(res, customerName, repName, changed) {
           <button class="btn btn-outlined btn-small" id="gen-copy">${ICONS.copy} Copy</button></div>
       </div>
       <div class="gen-done-stats">${plural(t.orders, 'order')} · ${plural(t.units, 'unit')} · ${plural(t.lines, 'product')}</div>
+      ${addedHtml(res.added, true)}
       ${changedHtml(changed)}
       ${res.excluded.length > changed.length ? `<div class="hint">Left out: ${res.excluded.filter((e) => !changed.includes(e)).map((e) => esc(e.name)).join(', ')}</div>` : ''}
       ${taggingHtml(res.tagging, res.id)}

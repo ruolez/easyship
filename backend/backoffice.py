@@ -443,6 +443,50 @@ def known_upcs(db_id, upcs):
     return known
 
 
+# The Items_tbl columns a product copied from the Inventory database keeps,
+# as the shopify-quotation app copies them (same schema in both databases).
+ITEM_COPY_COLUMNS = (
+    "CateID", "SubCateID", "ProductSKU", "ProductUPC", "ProductDescription", "UnitPrice",
+    "UnitCost", "ItemSize", "ItemWeight", "UnitID", "ItemTaxID", "SPPromoted",
+)
+ITEM_TEXT_LENGTHS = {"ProductSKU": 20, "ProductUPC": 20, "ProductDescription": 50, "ItemSize": 10, "ItemWeight": 10}
+
+
+def copy_items(db_id, rows):
+    """Add Inventory Items_tbl rows to this BackOffice database in one
+    transaction. A barcode BackOffice already has is skipped, also when
+    another pick list adds it at the same moment. Returns the barcodes added."""
+    if not rows:
+        return []
+    columns = ", ".join(ITEM_COPY_COLUMNS)
+    placeholders = ", ".join(["%s"] * len(ITEM_COPY_COLUMNS))
+    sql = f"""DECLARE @added INT = 0;
+              IF NOT EXISTS (SELECT 1 FROM Items_tbl WITH (UPDLOCK, HOLDLOCK) WHERE ProductUPC = %s)
+              BEGIN
+                  INSERT INTO Items_tbl ({columns}) VALUES ({placeholders});
+                  SET @added = 1;
+              END;
+              SELECT @added AS added"""
+    added = []
+    conn = _connect(db_id)
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            for row in rows:
+                values = {**row, "ProductUPC": (row.get("ProductUPC") or "").strip(), "SPPromoted": 0}
+                params = tuple(_trunc(values.get(c), ITEM_TEXT_LENGTHS[c]) if c in ITEM_TEXT_LENGTHS
+                               else values.get(c) for c in ITEM_COPY_COLUMNS)
+                cur.execute(sql, (values["ProductUPC"],) + params)
+                if cur.fetchone()["added"]:
+                    added.append(values["ProductUPC"])
+        conn.commit()
+        return added
+    except Exception as e:
+        conn.rollback()
+        raise BackofficeError(f"Could not add products to BackOffice: {e}")
+    finally:
+        conn.close()
+
+
 def quotation_detail_row(quotation_id, item, qty):
     """The QuotationsDetails_tbl values for one pick-list line, in
     QUOTATION_DETAIL_COLUMNS order — defaults as BackOffice writes them:

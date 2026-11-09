@@ -29,6 +29,9 @@ SETTINGS = {"picklist_backoffice_db_id": str(DB_ID), "picklist_quote_status": "2
 SYNCED_AT = datetime(2026, 10, 26, 15, 0, tzinfo=timezone.utc)
 REP = {"id": 7, "name": "Maria Lopez"}
 ITEM = {"ProductID": 1010, "ProductSKU": "AP", "ProductDescription": "APPLE", "ProductUPC": "111"}
+INVENTORY_DB_ID = 6
+INVENTORY_ITEM = {"ProductID": 77010, "ProductSKU": "PR", "ProductDescription": "PEAR", "ProductUPC": "222"}
+COPIED_PRODUCT_ID = 2020
 
 
 def node(gid, name, barcode="111", qty=1, financial="PAID", tags=()):
@@ -88,8 +91,10 @@ class PicklistsApiTest(unittest.TestCase):
             (picklists, "cancel", lambda pid, uid: self.calls.append(("cancel", pid))),
             (picklists, "get_picklist", lambda pid: self.picklist),
             (backoffice, "list_sales_reps", lambda db_id: [REP]),
-            (backoffice, "find_items_by_upc", lambda db_id, upcs: {u: ITEM for u in upcs if u == "111"}),
-            (backoffice, "known_upcs", lambda db_id, upcs: {u for u in upcs if u == "111"}),
+            (backoffice, "find_items_by_upc", self.fake_find_items),
+            (backoffice, "known_upcs", lambda db_id, upcs: set(self.fake_find_items(db_id, upcs))),
+            (backoffice, "copy_items", self.fake_copy_items),
+            (picklists_api, "audit", lambda action, detail=None: self.audits.append((action, detail))),
             (backoffice, "create_quotation", self.fake_create_quotation),
             (backoffice, "delete_quotation", self.fake_delete_quotation),
             (dbadmin, "get_config", lambda: self.dbadmin_config),
@@ -109,6 +114,10 @@ class PicklistsApiTest(unittest.TestCase):
         ]
         self.fetch = self.fake_list
         self.cache, self.synced, self.syncs = {}, {}, []
+        self.products = {DB_ID: {"111": ITEM}, INVENTORY_DB_ID: {"222": INVENTORY_ITEM}}
+        self.inventory_error = None
+        self.copy_error = None
+        self.audits = []
         self.fraud_node = FRAUD_NODE
         self.tag_error = None
         self.hold_error = None
@@ -173,6 +182,25 @@ class PicklistsApiTest(unittest.TestCase):
 
     def tag_states(self):
         return [(r["order_name"], r["tag_state"], r["tag_error"]) for r in self.tag_db.values()]
+
+    def fake_find_items(self, db_id, upcs):
+        if db_id == INVENTORY_DB_ID and self.inventory_error:
+            raise backoffice.BackofficeError(self.inventory_error)
+        known = self.products.get(db_id, {})
+        return {u: known[u] for u in upcs if u in known}
+
+    def fake_copy_items(self, db_id, rows):
+        if self.copy_error:
+            raise backoffice.BackofficeError(self.copy_error)
+        upcs = [row["ProductUPC"] for row in rows]
+        self.calls.append(("copy_items", db_id, upcs))
+        for row in rows:
+            self.products[db_id][row["ProductUPC"]] = {**row, "ProductID": COPIED_PRODUCT_ID}
+        return upcs
+
+    def use_inventory(self):
+        SETTINGS["picklist_inventory_db_id"] = str(INVENTORY_DB_ID)
+        self.addCleanup(SETTINGS.pop, "picklist_inventory_db_id", None)
 
     def fake_create_quotation(self, db_id, **kw):
         if self.quotation_error:
@@ -459,6 +487,106 @@ class PicklistsApiTest(unittest.TestCase):
     def test_unknown_sales_rep_is_refused(self):
         res = self.client.post("/api/picklists", json=self.body(["g1"], customer_id=3, sales_rep_id=99))
         self.assertEqual((res.status_code, self.calls), (400, []))
+
+    # ----- products copied from Inventory -----
+
+    def test_orders_flag_the_products_inventory_will_add(self):
+        self.use_inventory()
+        self.shopify[STORE] = [node("g1", "#1"), node("g8", "#8", barcode="222"), node("g2", "#2", barcode="999")]
+        res = self.client.get("/api/picklists/orders?store_ids=1").get_json()
+        self.assertEqual(
+            ([(o["name"], o["issues"], o["adds"]) for o in res["orders"]], res["inventory_error"]),
+            ([("#1", [], []),
+              ("#2", [{"kind": "unknown_barcode", "text": "Apple — barcode 999 is not in BackOffice or Inventory"}],
+               []),
+              ("#8", [], [{"title": "Apple", "barcode": "222"}])], None))
+
+    def test_orders_are_flagged_as_before_when_inventory_cannot_be_asked(self):
+        self.use_inventory()
+        self.inventory_error = "Inventory is offline"
+        self.shopify[STORE] = [node("g8", "#8", barcode="222")]
+        res = self.client.get("/api/picklists/orders?store_ids=1").get_json()
+        self.assertEqual(
+            ([(o["name"], o["issues"], o["adds"]) for o in res["orders"]], res["inventory_error"]),
+            ([("#8", [{"kind": "unknown_barcode", "text": "Apple — barcode 222 is not in BackOffice"}], [])],
+             "Inventory is offline"))
+
+    def test_without_an_inventory_database_unknown_barcodes_leave_orders_out_as_before(self):
+        self.shopify[STORE] = [node("g1", "#1"), node("g8", "#8", barcode="222")]
+        res = self.client.post("/api/picklists/preview", json=self.body(["g1", "g8"])).get_json()
+        self.assertEqual(
+            ([o["name"] for o in res["orders"]], [(e["name"], e["reasons"]) for e in res["excluded"]], res["added"]),
+            (["#1"], [("#8", ["Apple — barcode 222 is not in BackOffice"])], []))
+
+    def test_preview_lists_the_products_inventory_will_add_without_writing_them(self):
+        self.use_inventory()
+        self.shopify[STORE] = [node("g1", "#1"), node("g8", "#8", barcode="222")]
+        res = self.client.post("/api/picklists/preview", json=self.body(["g1", "g8"])).get_json()
+        self.assertEqual((
+            [o["name"] for o in res["orders"]],
+            res["added"],
+            [(g["barcode"], g["product_id"], g["sku"], g["description"]) for g in res["lines"]],
+            res["inventory_error"],
+            self.calls,
+        ), (
+            ["#1", "#8"],
+            [{"barcode": "222", "sku": "PR", "description": "PEAR"}],
+            [("111", 1010, "AP", "APPLE"), ("222", None, "PR", "PEAR")],
+            None,
+            [],
+        ))
+
+    def test_create_copies_the_missing_products_then_quotes_them_with_their_new_ids(self):
+        self.use_inventory()
+        self.shopify[STORE] = [node("g1", "#1"), node("g8", "#8", barcode="222")]
+        res = self.client.post("/api/picklists", json=self.body(["g1", "g8"], customer_id=3, sales_rep_id=7))
+        self.assertEqual((res.status_code, res.get_json()["added"], self.calls[:3], self.audits[0]), (
+            200,
+            [{"barcode": "222", "sku": "PR", "description": "PEAR"}],
+            [("copy_items", DB_ID, ["222"]),
+             ("reserve", ["#1", "#8"], [("111", 1), ("222", 1)]),
+             ("quotation", "PL 42", 2, "19", [(1010, 1), (COPIED_PRODUCT_ID, 1)])],
+            ("picklist.products_added", {"db_id": DB_ID, "inventory_db_id": INVENTORY_DB_ID, "barcodes": ["222"]}),
+        ))
+
+    def test_products_of_an_order_left_out_for_another_barcode_are_not_copied(self):
+        self.use_inventory()
+        both = node("g9", "#9", barcode="222")
+        both["lineItems"]["nodes"].append({"title": "Plum", "sku": "P", "quantity": 1, "unfulfilledQuantity": 1,
+                                           "requiresShipping": True, "variant": {"barcode": "999"}})
+        self.shopify[STORE] = [node("g1", "#1"), both]
+        res = self.client.post("/api/picklists", json=self.body(["g1", "g9"], customer_id=3, sales_rep_id=7))
+        data = res.get_json()
+        self.assertEqual(
+            (res.status_code, data["added"], [(e["name"], e["reasons"]) for e in data["excluded"]], self.calls[0]),
+            (200, [], [("#9", ["Plum — barcode 999 is not in BackOffice or Inventory"])],
+             ("reserve", ["#1"], [("111", 1)])))
+
+    def test_create_stops_before_reserving_when_backoffice_refuses_the_products(self):
+        self.use_inventory()
+        self.copy_error = "Could not add products to BackOffice: permission denied"
+        self.shopify[STORE] = [node("g8", "#8", barcode="222")]
+        res = self.client.post("/api/picklists", json=self.body(["g8"], customer_id=3, sales_rep_id=7))
+        self.assertEqual((res.status_code, res.get_json()["error"], self.calls),
+                         (502, "Could not add products to BackOffice: permission denied", []))
+
+    def test_preview_leaves_orders_out_as_before_when_inventory_cannot_be_asked(self):
+        self.use_inventory()
+        self.inventory_error = "Inventory is offline"
+        self.shopify[STORE] = [node("g1", "#1"), node("g8", "#8", barcode="222")]
+        res = self.client.post("/api/picklists/preview", json=self.body(["g1", "g8"])).get_json()
+        self.assertEqual(
+            ([o["name"] for o in res["orders"]], [(e["name"], e["reasons"]) for e in res["excluded"]],
+             res["added"], res["inventory_error"]),
+            (["#1"], [("#8", ["Apple — barcode 222 is not in BackOffice"])], [], "Inventory is offline"))
+
+    def test_an_inventory_setting_equal_to_the_pick_list_database_is_ignored(self):
+        SETTINGS["picklist_inventory_db_id"] = str(DB_ID)
+        self.addCleanup(SETTINGS.pop, "picklist_inventory_db_id", None)
+        self.shopify[STORE] = [node("g8", "#8", barcode="222")]
+        res = self.client.post("/api/picklists/preview", json=self.body(["g8"])).get_json()
+        self.assertEqual([(e["name"], e["reasons"]) for e in res["excluded"]],
+                         [("#8", ["Apple — barcode 222 is not in BackOffice"])])
 
     # ----- cancel -----
 

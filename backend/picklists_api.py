@@ -35,8 +35,12 @@ log = logging.getLogger(__name__)
 
 def _config():
     raw_db = (db.get_setting("picklist_backoffice_db_id") or "").strip()
+    raw_inventory = (db.get_setting("picklist_inventory_db_id") or "").strip()
+    db_id = int(raw_db) if raw_db.isdigit() else None
+    inventory_db_id = int(raw_inventory) if raw_inventory.isdigit() else None
     return {
-        "db_id": int(raw_db) if raw_db.isdigit() else None,
+        "db_id": db_id,
+        "inventory_db_id": inventory_db_id if inventory_db_id != db_id else None,
         "status": int(db.get_setting("picklist_quote_status") or 2),
         "prefix": (db.get_setting("picklist_title_prefix") or "PL").strip(),
         "tag": (db.get_setting("picklist_number_tag") or "19").strip(),
@@ -55,14 +59,23 @@ def _db_id_or_error():
 
 
 def _known_upcs(orders):
-    """(the orders' barcodes BackOffice knows, or None, why BackOffice could not say)."""
-    db_id = _config()["db_id"]
-    if not db_id:
-        return None, NO_DB_MESSAGE
+    """(the orders' barcodes BackOffice knows or None, those only Inventory has
+    or None when Inventory was not asked, why BackOffice could not say, why
+    Inventory could not say)."""
+    cfg = _config()
+    if not cfg["db_id"]:
+        return None, None, NO_DB_MESSAGE, None
+    upcs = {line["barcode"] for o in orders for line in o["lines"] if line["barcode"]}
     try:
-        return backoffice.known_upcs(db_id, {line["barcode"] for o in orders for line in o["lines"]}), None
+        known = backoffice.known_upcs(cfg["db_id"], upcs)
     except backoffice.BackofficeError as e:
-        return None, str(e)
+        return None, None, str(e), None
+    if not cfg["inventory_db_id"]:
+        return known, None, None, None
+    try:
+        return known, backoffice.known_upcs(cfg["inventory_db_id"], upcs - known), None, None
+    except backoffice.BackofficeError as e:
+        return known, None, None, str(e)
 
 
 def _iso(when):
@@ -184,13 +197,20 @@ def eligible_orders():
         return api_error("sync must be auto, full or none")
     rules = picklist_rules.load_rules()
     orders, errors, synced = _eligible(store_ids, sync, rules)
-    known, backoffice_error = _known_upcs(orders) if orders else (None, None)
+    known, from_inventory, backoffice_error, inventory_error = (
+        _known_upcs(orders) if orders else (None, None, None, None))
     for order in orders:
-        order["issues"] = picklists.pick_issues(order, known)
+        if from_inventory is None:
+            order["issues"] = picklists.pick_issues(order, known)
+            order["adds"] = []
+        else:
+            order["issues"] = picklists.pick_issues(order, known | from_inventory, inventory_checked=True)
+            order["adds"] = picklists.inventory_adds(order, from_inventory)
     return jsonify({
         "orders": orders,
         "errors": errors,
         "backoffice_error": backoffice_error,
+        "inventory_error": inventory_error,
         "hidden_tags": picklists.parse_tag_list(db.get_setting(HIDDEN_TAGS_KEY)),
         "days": PICKLIST_DAYS,
         "synced": {str(sid): _iso(synced.get(sid)) for sid in store_ids},
@@ -613,12 +633,14 @@ def _selection(data):
     return picked
 
 
-def _build(selection, db_id):
+def _build(selection, db_id, inventory_db_id=None, copy=False):
     """Re-read the chosen orders live and work out the pick list: the orders
     that go on it, those left out (with why), the lines grouped by barcode
-    and the BackOffice items behind them. Raises ShopifyError / BackofficeError
-    — a store Shopify cannot answer for stops the build, since its orders
-    would otherwise vanish from the pick list unnoticed."""
+    and the BackOffice items behind them. Products BackOffice lacks but the
+    Inventory database has are listed in `added`; with copy they are written
+    to BackOffice first. Raises ShopifyError / BackofficeError — a store
+    Shopify cannot answer for stops the build, since its orders would
+    otherwise vanish from the pick list unnoticed."""
     by_store = {}
     for store_id, gid in selection:
         by_store.setdefault(store_id, []).append(gid)
@@ -643,9 +665,30 @@ def _build(selection, db_id):
                 excluded.append({**picklists.summary(order), "reasons": [reason]})
             else:
                 eligible.append(order)
-    items = backoffice.find_items_by_upc(db_id, {line["barcode"] for o in eligible for line in o["lines"]})
-    included, blocked = picklists.split_blocked(eligible, set(items))
-    return included, excluded + blocked, picklists.group_lines(included, items), items
+    upcs = {line["barcode"] for o in eligible for line in o["lines"] if line["barcode"]}
+    items = backoffice.find_items_by_upc(db_id, upcs)
+    stock, inventory_error = {}, None
+    if inventory_db_id and upcs - set(items):
+        try:
+            stock = backoffice.find_items_by_upc(inventory_db_id, upcs - set(items))
+        except backoffice.BackofficeError as e:
+            inventory_error = str(e)
+    included, blocked = picklists.split_blocked(
+        eligible, set(items) | set(stock), inventory_checked=bool(inventory_db_id) and not inventory_error)
+    needed = sorted({line["barcode"] for o in included for line in o["lines"]} & set(stock))
+    if copy and needed:
+        backoffice.copy_items(db_id, [stock[b] for b in needed])
+        items.update(backoffice.find_items_by_upc(db_id, needed))
+        absent = [b for b in needed if b not in items]
+        if absent:
+            raise backoffice.BackofficeError(f"Products copied from Inventory are not in BackOffice: {', '.join(absent)}")
+        audit("picklist.products_added", {"db_id": db_id, "inventory_db_id": inventory_db_id, "barcodes": needed})
+    elif needed:
+        items = {**{b: {**stock[b], "ProductID": None} for b in needed}, **items}
+    added = [{"barcode": b, "sku": (stock[b].get("ProductSKU") or "").strip(),
+              "description": (stock[b].get("ProductDescription") or "").strip()} for b in needed]
+    return {"included": included, "excluded": excluded + blocked, "lines": picklists.group_lines(included, items),
+            "items": items, "added": added, "inventory_error": inventory_error}
 
 
 def _totals(orders, lines):
@@ -662,16 +705,19 @@ def preview():
     if not selection:
         return api_error("Select at least one order")
     try:
-        included, excluded, lines, _items = _build(selection, db_id)
+        built = _build(selection, db_id, _config()["inventory_db_id"])
     except ShopifyError as e:
         return api_error(str(e), 502)
     except backoffice.BackofficeError as e:
         return api_error(str(e), 502)
+    included, lines = built["included"], built["lines"]
     return jsonify({
         "orders": [picklists.summary(o) for o in included],
-        "excluded": excluded,
+        "excluded": built["excluded"],
         "lines": lines,
         "totals": _totals(included, lines),
+        "added": built["added"],
+        "inventory_error": built["inventory_error"],
     })
 
 
@@ -696,11 +742,13 @@ def create():
         rep = next((r for r in backoffice.list_sales_reps(db_id) if r["id"] == rep_id), None)
         if not rep:
             return api_error("That sales rep is not in BackOffice")
-        included, excluded, lines, items = _build(selection, db_id)
+        built = _build(selection, db_id, cfg["inventory_db_id"], copy=True)
     except ShopifyError as e:
         return api_error(str(e), 502)
     except backoffice.BackofficeError as e:
         return api_error(str(e), 502)
+    included, excluded, lines, items, added = (
+        built["included"], built["excluded"], built["lines"], built["items"], built["added"])
     if not included:
         return jsonify({"error": "None of the selected orders can go on a pick list", "excluded": excluded}), 409
     customer = {"id": customer_id, "name": str(data.get("customer_name") or "").strip()}
@@ -731,7 +779,8 @@ def create():
         return api_error(str(e), 502)
     picklists.activate(picklist_id, quotation_id, number, business_name or customer["name"])
     audit("picklist.create", {"picklist": picklist_id, "quotation": number, "orders": totals["orders"],
-                              "units": totals["units"], "customer_id": customer_id, "sales_rep_id": rep_id})
+                              "units": totals["units"], "customer_id": customer_id, "sales_rep_id": rep_id,
+                              "added": len(added)})
     tag = picklists.shopify_tag(number)
     try:
         picklists.start_tagging(picklist_id, tag)
@@ -740,7 +789,7 @@ def create():
         log.exception("Tagging pick list %s failed", picklist_id)
         tagging = _tagging_result(tag, "add", 0, [], f"Could not tag the orders: {e}")
     return jsonify({"id": picklist_id, "quotation_number": number, "totals": totals, "excluded": excluded,
-                    "tagging": tagging})
+                    "added": added, "tagging": tagging})
 
 
 def _tagging_result(tag, mode, done, failed, error=None):

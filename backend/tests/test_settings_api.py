@@ -242,5 +242,36 @@ class PicklistPresetsSettingsTest(unittest.TestCase):
         self.assertEqual(json.loads(out), [self.preset("big")])
 
 
+
+class PicklistInventorySettingsTest(unittest.TestCase):
+    """The Inventory database products are copied from must be another database."""
+
+    setUp = ProfitSettingsTest.setUp
+    tearDown = ProfitSettingsTest.tearDown
+
+    def put(self, **body):
+        res = self.client.put("/api/settings", json=body)
+        return res.status_code, res.get_json().get("error")
+
+    def test_the_pick_list_database_itself_is_refused(self):
+        self.assertEqual(self.put(picklist_backoffice_db_id="4", picklist_inventory_db_id="4"),
+                         (400, "Inventory database must be different from the pick list database"))
+
+    def test_the_stored_pick_list_database_counts_when_only_inventory_is_saved(self):
+        self.stored["picklist_backoffice_db_id"] = "4"
+        self.assertEqual(self.put(picklist_inventory_db_id="4"),
+                         (400, "Inventory database must be different from the pick list database"))
+
+    def test_another_database_is_saved(self):
+        self.stored["picklist_backoffice_db_id"] = "4"
+        self.assertEqual((self.put(picklist_inventory_db_id="6"), self.stored["picklist_inventory_db_id"]),
+                         ((200, None), "6"))
+
+    def test_not_set_is_saved(self):
+        self.stored["picklist_backoffice_db_id"] = "4"
+        self.assertEqual((self.put(picklist_inventory_db_id=""), self.stored["picklist_inventory_db_id"]),
+                         ((200, None), ""))
+
+
 if __name__ == "__main__":
     unittest.main()

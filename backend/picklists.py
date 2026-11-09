@@ -226,27 +226,34 @@ def summary(order):
     return {key: order.get(key) for key in ("store_id", "id", "name", "customer", "ship_state", "units")}
 
 
-def pick_issues(order, known_upcs):
+def pick_issues(order, known_upcs, inventory_checked=False):
     """The products that would leave the order off a pick list: no barcode, or
-    a barcode BackOffice does not know. known_upcs None means BackOffice was
-    not asked, so only missing barcodes count."""
+    a barcode BackOffice does not know (nor Inventory, when it was asked too).
+    known_upcs None means BackOffice was not asked, so only missing barcodes count."""
+    where = "BackOffice or Inventory" if inventory_checked else "BackOffice"
     issues = []
     for line in order["lines"]:
         if not line["barcode"]:
             issues.append({"kind": "no_barcode", "text": f"{line['title']} has no barcode in Shopify"})
         elif known_upcs is not None and line["barcode"] not in known_upcs:
             issues.append({"kind": "unknown_barcode",
-                           "text": f"{line['title']} — barcode {line['barcode']} is not in BackOffice"})
+                           "text": f"{line['title']} — barcode {line['barcode']} is not in {where}"})
     return issues
 
 
-def split_blocked(orders, known_upcs):
+def inventory_adds(order, inventory_upcs):
+    """The order's products that Generate will first copy from Inventory into BackOffice."""
+    return [{"title": line["title"], "barcode": line["barcode"]}
+            for line in order["lines"] if line["barcode"] in inventory_upcs]
+
+
+def split_blocked(orders, known_upcs, inventory_checked=False):
     """(orders that can be picked, orders left out with reasons). An order is
     left out whole when any of its products has an issue — the quotation never
     misses part of an order."""
     included, blocked = [], []
     for order in orders:
-        reasons = [issue["text"] for issue in pick_issues(order, known_upcs)]
+        reasons = [issue["text"] for issue in pick_issues(order, known_upcs, inventory_checked)]
         if reasons:
             blocked.append({**summary(order), "reasons": reasons})
         else:

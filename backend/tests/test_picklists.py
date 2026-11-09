@@ -236,6 +236,21 @@ class PickIssuesTest(unittest.TestCase):
         self.assertEqual(picklists.pick_issues(o, None),
                          [{"kind": "no_barcode", "text": "C has no barcode in Shopify"}])
 
+    def test_a_barcode_inventory_was_also_asked_about_says_so(self):
+        o = order(lines=[line("B", "999")])
+        self.assertEqual(picklists.pick_issues(o, set(), inventory_checked=True),
+                         [{"kind": "unknown_barcode", "text": "B — barcode 999 is not in BackOffice or Inventory"}])
+
+
+class InventoryAddsTest(unittest.TestCase):
+    def test_only_the_lines_inventory_supplies_are_listed(self):
+        o = order(lines=[line("A", "111"), line("B", "222"), line("C", "")])
+        self.assertEqual(picklists.inventory_adds(o, {"222"}), [{"title": "B", "barcode": "222"}])
+
+    def test_nothing_is_listed_when_inventory_supplies_nothing(self):
+        o = order(lines=[line("A", "111"), line("C", "")])
+        self.assertEqual(picklists.inventory_adds(o, set()), [])
+
 
 class ParseTagListTest(unittest.TestCase):
     def test_comma_list_is_trimmed_and_unique_ignoring_case(self):

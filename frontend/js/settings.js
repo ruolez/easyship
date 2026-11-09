@@ -10,7 +10,7 @@ const BASE_SETTING_IDS = [
   'shipper_host', 'shipper_port', 'shipper_db', 'shipper_user', 'shipper_password',
   'dbadmin_host', 'dbadmin_port', 'dbadmin_db', 'dbadmin_user', 'dbadmin_password',
   'verify_skip_prefixes_shopify', 'verify_skip_prefixes_backoffice',
-  'picklist_backoffice_db_id', 'picklist_quote_status', 'picklist_title_prefix',
+  'picklist_backoffice_db_id', 'picklist_inventory_db_id', 'picklist_quote_status', 'picklist_title_prefix',
   'picklist_number_tag', 'picklist_hidden_tags', 'picklist_rules', 'picklist_presets',
 ];
 let SETTING_IDS = [...BASE_SETTING_IDS];
@@ -218,8 +218,9 @@ async function loadPicklistOptions() {
   try {
     [dbs, plStores] = await Promise.all([api('/api/backoffice-dbs'), api('/api/shopify-stores')]);
   } catch { /* selects stay empty */ }
-  document.getElementById('picklist_backoffice_db_id').innerHTML = '<option value="">— Not set —</option>'
-    + dbs.map((d) => `<option value="${d.id}">${esc(d.name)}${d.is_active ? '' : ' (inactive)'}</option>`).join('');
+  const options = dbs.map((d) => `<option value="${d.id}">${esc(d.name)}${d.is_active ? '' : ' (inactive)'}</option>`).join('');
+  document.getElementById('picklist_backoffice_db_id').innerHTML = `<option value="">— Not set —</option>${options}`;
+  document.getElementById('picklist_inventory_db_id').innerHTML = `<option value="">— Not set —</option>${options}`;
 }
 
 function readPlRules() {

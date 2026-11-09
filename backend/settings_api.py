@@ -58,6 +58,7 @@ BASE_SETTING_KEYS = [
     "verify_skip_prefixes_shopify",
     "verify_skip_prefixes_backoffice",
     "picklist_backoffice_db_id",
+    "picklist_inventory_db_id",
     "picklist_quote_status",
     "picklist_title_prefix",
     "picklist_number_tag",
@@ -168,6 +169,13 @@ def _picklist_settings_error(data):
         return "Pick list number tag must be 1–4 digits"
     if len(str(data.get("picklist_title_prefix") or "").strip()) > 20:
         return "Pick list title prefix must be 20 characters or fewer"
+    inventory = str(data.get("picklist_inventory_db_id") or "").strip()
+    if inventory:
+        if not inventory.isdigit():
+            return "Choose the Inventory database from the list"
+        target = data.get("picklist_backoffice_db_id", db.get_setting("picklist_backoffice_db_id"))
+        if inventory == str(target or "").strip():
+            return "Inventory database must be different from the pick list database"
     return None
 
 
