@@ -125,7 +125,7 @@ function showOrder() {
           <div class="om-title">Order ${esc(o.name)}<span id="om-status">${statusChipsHtml(d)}</span></div>
           <div class="om-meta">${meta}<span id="om-tags">${tagsHtml(o.tags)}</span></div>
         </div>
-        <div class="om-head-actions">${holdButtonHtml(o)}</div>
+        <div class="om-head-actions">${adminLinkHtml(d)}${holdButtonHtml(o)}</div>
         <div class="om-hold" id="om-hold-panel" role="dialog" aria-label="Put ${attr(o.name)} on hold" hidden></div>
       </div>
       <div class="or-pick-row" id="or-pickable">${pickableHtml()}</div>
@@ -180,7 +180,7 @@ async function releaseHold(o, holds) {
 }
 
 /* ---------- Keyboard ----------
-   / finds an order, H puts the one on screen on hold, ← → step through the
+   / finds an order, S opens it in Shopify, H puts it on hold, ← → step through the
    recent lookups. In the number field Esc clears it. */
 document.addEventListener('keydown', (e) => {
   if (e.target === input && e.key === 'Escape') {
@@ -193,6 +193,9 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     input.focus();
     input.select();
+  } else if (e.key === 's' || e.key === 'S') {
+    e.preventDefault();
+    openInShopify();
   } else if (e.key === 'h' || e.key === 'H') {
     e.preventDefault();
     holdPanel();

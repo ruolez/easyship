@@ -84,6 +84,7 @@ const ICONS = {
   check: svg('<path d="M20 6 9 17l-5-5"/>'),
   copy: svg('<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
   pause: svg('<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>'),
+  external: svg('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
   box: svg('<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'),
 };
 
@@ -168,6 +169,7 @@ function orderBody(d, o) {
       ${flags.length ? `<div class="om-review"><span class="om-label">${flags.some((f) => f.tone !== 'info') ? 'Needs review' : 'Note'}</span><div class="om-review-list">${flagReasonsHtml(o, true)}</div></div>` : ''}
       <div class="om-stats">${stats.map(([l, v]) => `<div class="om-stat"><div class="om-label">${l}</div><div class="om-value">${v}</div></div>`).join('')}</div>
       <div class="om-cards">${omCard('Customer', customer)}${omCard('Ship to', ship)}${omCard('Bill to', bill)}</div>
+      ${discountsPanel(d.discounts)}
       ${riskPanel(d.risk)}
       ${profitPanel(d.profit)}
     </div>
@@ -238,6 +240,7 @@ function productsPanel(products) {
         <div class="om-product-codes">${[p.sku && `SKU ${esc(p.sku)}`, p.barcode ? esc(p.barcode) : p.ships && '<span class="om-nobarcode">No barcode</span>']
           .filter(Boolean).join(' · ')}</div>
         ${!p.ships ? '<div class="hint">No shipping needed</div>' : p.to_ship < p.qty ? `<div class="hint">${p.to_ship} left to ship</div>` : ''}
+        ${(p.discounts || []).length ? `<div class="om-product-disc">${p.discounts.map((x) => `${esc(x.label)} −${money(x.amount)}`).join(' · ')}</div>` : ''}
         ${p.cost != null
           ? `<div class="om-product-cost">Cost ${money(p.cost)}${p.margin_pct != null ? ` · <span class="${p.margin_pct < 0 ? 'neg' : p.margin_pct < 15 ? 'low' : 'good'}">${pct(p.margin_pct)} margin</span>` : ''}</div>`
           : p.ships ? '<div class="om-product-cost low">No cost in Shopify</div>' : ''}
@@ -250,6 +253,43 @@ function productsPanel(products) {
       ${products.length ? `<ul class="om-product-list">${rows}</ul>` : '<div class="om-products-empty text-secondary">No products</div>'}
     </div>
   </aside>`;
+}
+
+/* Codes, automatic, manual and script discounts, each with what it took off. */
+const DISCOUNT_KIND = { code: 'Discount code', automatic: 'Automatic discount', manual: 'Manual discount', script: 'Script discount' };
+
+function discountValueText(x) {
+  const value = x.value_type === 'percentage' ? `${+Number(x.value).toFixed(2)}%` : money(x.value);
+  const target = x.target === 'shipping' ? 'shipping' : x.selection === 'ALL' ? 'all items' : 'selected items';
+  return `${value} off ${target}`;
+}
+
+function discountsPanel(disc) {
+  if (!disc || !disc.items.length) return '';
+  const rows = disc.items.map((x) => `
+    <li class="om-discount">
+      <span class="om-dlabel ${x.kind}" title="${attr(DISCOUNT_KIND[x.kind] || 'Discount')}">${esc(x.label)}</span>
+      <span class="om-dmeta">${DISCOUNT_KIND[x.kind] || 'Discount'} · ${esc(discountValueText(x))}${x.description ? ` · ${esc(x.description)}` : ''}</span>
+      <span class="num">${x.amount ? `−${money(x.amount)}` : '<span class="hint">—</span>'}</span>
+    </li>`).join('');
+  return `<div class="om-discounts">
+    <div class="om-discounts-top"><span class="om-label">Discounts</span><span class="om-pill warn">−${money(disc.total)}</span></div>
+    <ul class="om-discount-list">${rows}</ul>
+  </div>`;
+}
+
+/* The order in the Shopify admin, in a new tab. */
+function adminLinkHtml(d) {
+  return d && d.admin_url
+    ? `<a class="btn btn-outlined btn-small" id="om-admin" href="${attr(d.admin_url)}" target="_blank" rel="noopener noreferrer"
+        title="Open the order in the Shopify admin (S)">${ICONS.external} Shopify <kbd>S</kbd></a>`
+    : '';
+}
+
+/* S: the window's Shopify link, when it is there. */
+function openInShopify() {
+  const link = document.getElementById('om-admin');
+  if (link) window.open(link.href, '_blank', 'noopener');
 }
 
 /* The order's payment and fulfillment status as chips beside its title. */

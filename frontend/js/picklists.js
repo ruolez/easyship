@@ -148,6 +148,10 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     holdPanel(modalOrderKey);
   }
+  if ((e.key === 's' || e.key === 'S') && !e.repeat && plain) {
+    e.preventDefault();
+    openInShopify();
+  }
 });
 
 function moveCursor(delta) {
@@ -1123,6 +1127,7 @@ async function showOrder(key) {
           <span id="om-tags">${tagsHtml(o.tags)}</span></div>
       </div>
       <div class="om-head-actions">
+        <span id="om-admin-slot"></span>
         <button class="btn btn-outlined btn-small" id="om-hold" aria-haspopup="dialog" aria-expanded="false"
           title="Hold fulfillment in Shopify (H)">${ICONS.pause} Put on hold <kbd>H</kbd></button>
         <button class="om-close" onclick="closeModal()" aria-label="Close">${ICONS.close}</button>
@@ -1165,6 +1170,7 @@ async function showOrder(key) {
     }
     if (modalOrderKey === key) {
       document.getElementById('om-status').innerHTML = statusChipsHtml(d);
+      document.getElementById('om-admin-slot').innerHTML = adminLinkHtml(d);
     }
   } catch (err) {
     html = `<div class="om-loading"><span class="error-note">${esc(err.message)}</span>

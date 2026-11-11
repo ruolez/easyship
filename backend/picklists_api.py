@@ -259,6 +259,16 @@ def order_fraud():
     return jsonify(_order_detail(store_id, node))
 
 
+def _admin_url(store_id, order_gid):
+    """The order's page in the Shopify admin (the store's myshopify address
+    sends it on to admin.shopify.com), or None when the store is unknown."""
+    store = db.query("SELECT shop_domain FROM shopify_stores WHERE id = %s", (store_id,), one=True)
+    numeric = (order_gid or "").rsplit("/", 1)[-1]
+    if not store or not store.get("shop_domain") or not numeric:
+        return None
+    return f"https://{store['shop_domain']}/admin/orders/{numeric}"
+
+
 def _order_detail(store_id, node):
     """What the order window shows, from get_order_fraud's order node."""
     risk = order_risk.order_risk(node)
@@ -290,6 +300,8 @@ def _order_detail(store_id, node):
             "tags": customer.get("tags") or [],
         } if customer else None,
         "products": picklists.order_products(node),
+        "discounts": picklists.order_discounts(node),
+        "admin_url": _admin_url(store_id, node.get("id")),
         "shipping_address": _address(node.get("shippingAddress")),
         "billing_address": _address(node.get("billingAddress")),
         "risk": risk,

@@ -107,9 +107,10 @@ class OrderProductsTest(unittest.TestCase):
         self.assertEqual(picklists.order_products(node), [
             {"title": "Glow Serum", "variant": "30 ml", "sku": "GS-30", "barcode": "0812", "qty": 2, "to_ship": 2,
              "ships": True, "price": "19.50", "price_original": None, "cost": None, "margin_pct": None,
-             "image": "https://cdn.shopify.com/g.jpg"},
+             "image": "https://cdn.shopify.com/g.jpg", "discounts": []},
             {"title": "Gift card", "variant": "", "sku": "", "barcode": "", "qty": 1, "to_ship": 1,
-             "ships": False, "price": None, "price_original": None, "cost": None, "margin_pct": None, "image": None},
+             "ships": False, "price": None, "price_original": None, "cost": None, "margin_pct": None, "image": None,
+             "discounts": []},
         ])
 
     def test_discounted_price_unit_cost_and_margin(self):
@@ -123,6 +124,67 @@ class OrderProductsTest(unittest.TestCase):
         self.assertEqual([(p["price"], p["price_original"], p["cost"], p["margin_pct"]) for p in products],
                          [("16.00", "20.00", "12.00", 25.0), ("10.00", None, "12.50", -25.0),
                           ("0.00", "5.00", "1.00", None)])
+
+
+def money(amount):
+    return {"shopMoney": {"amount": amount}}
+
+
+def allocation(index, amount):
+    return {"discountApplication": {"index": index}, "allocatedAmountSet": money(amount)}
+
+
+DISCOUNTED_ORDER = {
+    "currentTotalDiscountsSet": money("17.40"),
+    "discountCodes": ["SAVE10"],
+    "discountApplications": {"nodes": [
+        {"__typename": "DiscountCodeApplication", "index": 0, "code": "SAVE10", "allocationMethod": "ACROSS",
+         "targetSelection": "ALL", "targetType": "LINE_ITEM", "value": {"percentage": 10.0}},
+        {"__typename": "AutomaticDiscountApplication", "index": 1, "title": "Free shipping",
+         "allocationMethod": "EACH", "targetSelection": "ALL", "targetType": "SHIPPING_LINE",
+         "value": {"percentage": 100.0}},
+        {"__typename": "ManualDiscountApplication", "index": 2, "title": "Loyalty", "description": "Repeat buyer",
+         "allocationMethod": "EACH", "targetSelection": "EXPLICIT", "targetType": "LINE_ITEM",
+         "value": {"amount": "5.00", "currencyCode": "USD"}},
+    ]},
+    "shippingLine": {"title": "Ground", "discountAllocations": [allocation(1, "4.00")]},
+    "lineItems": {"nodes": [
+        {"title": "Serum", "currentQuantity": 2, "unfulfilledQuantity": 2, "requiresShipping": True,
+         "originalUnitPriceSet": money("30.00"), "discountedUnitPriceAfterAllDiscountsSet": money("24.70"),
+         "discountAllocations": [allocation(0, "6.00"), allocation(2, "5.00")], "variant": {"barcode": "1"}},
+        {"title": "Mask", "currentQuantity": 1, "unfulfilledQuantity": 1, "requiresShipping": True,
+         "originalUnitPriceSet": money("24.00"), "discountedUnitPriceAfterAllDiscountsSet": money("21.60"),
+         "discountAllocations": [allocation(0, "2.40")], "variant": {"barcode": "2"}},
+    ]},
+}
+
+
+class OrderDiscountsTest(unittest.TestCase):
+    def test_each_discount_says_what_it_is_and_what_it_took_off(self):
+        self.assertEqual(picklists.order_discounts(DISCOUNTED_ORDER), {"total": "17.40", "items": [
+            {"kind": "code", "label": "SAVE10", "description": None, "value_type": "percentage", "value": 10.0,
+             "target": "items", "selection": "ALL", "amount": 8.4},
+            {"kind": "automatic", "label": "Free shipping", "description": None, "value_type": "percentage",
+             "value": 100.0, "target": "shipping", "selection": "ALL", "amount": 4.0},
+            {"kind": "manual", "label": "Loyalty", "description": "Repeat buyer", "value_type": "fixed",
+             "value": "5.00", "target": "items", "selection": "EXPLICIT", "amount": 5.0},
+        ]})
+
+    def test_order_without_discounts_has_none(self):
+        self.assertIsNone(picklists.order_discounts({"discountApplications": {"nodes": []},
+                                                     "currentTotalDiscountsSet": money("0.0")}))
+
+    def test_a_code_that_took_nothing_off_still_shows(self):
+        node = {"discountApplications": {"nodes": [DISCOUNTED_ORDER["discountApplications"]["nodes"][0]]},
+                "currentTotalDiscountsSet": money("0.0"), "lineItems": {"nodes": []}}
+        self.assertEqual(picklists.order_discounts(node)["items"][0]["amount"], 0.0)
+
+    def test_products_name_the_discounts_on_them(self):
+        products = picklists.order_products(DISCOUNTED_ORDER)
+        self.assertEqual([p["discounts"] for p in products], [
+            [{"label": "SAVE10", "amount": 6.0}, {"label": "Loyalty", "amount": 5.0}],
+            [{"label": "SAVE10", "amount": 2.4}],
+        ])
 
 
 class OrderWeightTest(unittest.TestCase):

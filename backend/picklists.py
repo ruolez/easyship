@@ -114,10 +114,64 @@ def _float(value):
         return None
 
 
+DISCOUNT_KINDS = {"DiscountCodeApplication": "code", "AutomaticDiscountApplication": "automatic",
+                  "ManualDiscountApplication": "manual", "ScriptDiscountApplication": "script"}
+DISCOUNT_TARGETS = {"LINE_ITEM": "items", "SHIPPING_LINE": "shipping"}
+
+
+def _discount_labels(node):
+    """Discount application index → its code or title."""
+    return {a.get("index"): a.get("code") or a.get("title") or "Discount"
+            for a in (node.get("discountApplications") or {}).get("nodes") or []}
+
+
+def _allocated(allocations, labels):
+    """[{label, amount}] of a line's or the shipping line's discount allocations."""
+    out = []
+    for alloc in allocations or []:
+        index = (alloc.get("discountApplication") or {}).get("index")
+        out.append({"label": labels.get(index, "Discount"),
+                    "amount": round(_float(_amount(alloc.get("allocatedAmountSet"))) or 0, 2)})
+    return out
+
+
+def order_discounts(node):
+    """The order's discounts for the order window — codes, automatic, manual
+    and script discounts — each with its value, what it applies to and how
+    much it took off the order's lines and shipping; None without any."""
+    applications = (node.get("discountApplications") or {}).get("nodes") or []
+    if not applications:
+        return None
+    taken = {}
+    allocations = [a for li in (node.get("lineItems") or {}).get("nodes") or [] for a in li.get("discountAllocations") or []]
+    allocations += (node.get("shippingLine") or {}).get("discountAllocations") or []
+    for alloc in allocations:
+        index = (alloc.get("discountApplication") or {}).get("index")
+        taken[index] = taken.get(index, 0) + (_float(_amount(alloc.get("allocatedAmountSet"))) or 0)
+    items = []
+    for a in applications:
+        value = a.get("value") or {}
+        percentage = value.get("percentage")
+        items.append({
+            "kind": DISCOUNT_KINDS.get(a.get("__typename"), "other"),
+            "label": a.get("code") or a.get("title") or "Discount",
+            "description": a.get("description") or None,
+            "value_type": "percentage" if percentage is not None else "fixed",
+            "value": percentage if percentage is not None else value.get("amount"),
+            "target": DISCOUNT_TARGETS.get(a.get("targetType"), (a.get("targetType") or "").lower()),
+            "selection": a.get("targetSelection"),
+            "amount": round(taken.get(a.get("index"), 0), 2),
+        })
+    total = _amount(node.get("currentTotalDiscountsSet"))
+    return {"total": total if total is not None else f"{sum(i['amount'] for i in items):.2f}", "items": items}
+
+
 def order_products(node):
     """The order's products for the order window: everything still on the
     order (removed items are left out), with what is left to ship, the price
-    paid after discounts and the margin over the Shopify unit cost."""
+    paid after discounts, the discounts on the line and the margin over the
+    Shopify unit cost."""
+    labels = _discount_labels(node)
     products = []
     for li in (node.get("lineItems") or {}).get("nodes") or []:
         qty = li.get("currentQuantity") or 0
@@ -141,6 +195,7 @@ def order_products(node):
             "cost": cost,
             "margin_pct": round((paid - unit_cost) / paid * 100, 1) if paid and unit_cost is not None else None,
             "image": (li.get("image") or {}).get("url"),
+            "discounts": _allocated(li.get("discountAllocations"), labels),
         })
     return products
 

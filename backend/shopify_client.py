@@ -626,6 +626,10 @@ fragment OrderWindowLine on LineItem {
   requiresShipping
   originalUnitPriceSet { shopMoney { amount } }
   discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
+  discountAllocations {
+    allocatedAmountSet { shopMoney { amount } }
+    discountApplication { index }
+  }
   image { url(transform: { maxWidth: 96, maxHeight: 96 }) altText }
   variant {
     barcode
@@ -653,8 +657,32 @@ query orderFraud($id: ID!) {
     currentSubtotalPriceSet { shopMoney { amount } }
     currentShippingPriceSet { shopMoney { amount } }
     totalShippingPriceSet { shopMoney { amount } }
+    currentTotalDiscountsSet { shopMoney { amount } }
+    discountApplications(first: 20) {
+      nodes {
+        __typename
+        index
+        allocationMethod
+        targetSelection
+        targetType
+        value {
+          ... on MoneyV2 { amount currencyCode }
+          ... on PricingPercentageValue { percentage }
+        }
+        ... on DiscountCodeApplication { code }
+        ... on AutomaticDiscountApplication { title }
+        ... on ManualDiscountApplication { title description }
+        ... on ScriptDiscountApplication { title }
+      }
+    }
     subtotalLineItemsQuantity
-    shippingLine { title }
+    shippingLine {
+      title
+      discountAllocations {
+        allocatedAmountSet { shopMoney { amount } }
+        discountApplication { index }
+      }
+    }
     customer {
       id
       displayName

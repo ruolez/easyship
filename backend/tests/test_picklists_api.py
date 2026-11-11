@@ -115,7 +115,8 @@ class PicklistsApiTest(unittest.TestCase):
                 "cost": 7.5, "samples": 3, "tolerance_lb": 0.1, "state": state, "weight_lb": weight}),
         ]
         self.fetch = self.fake_list
-        self.stores = [{"id": STORE, "name": "Main", "prefix": "MN"}, {"id": 2, "name": "Wholesale", "prefix": "#WS"}]
+        self.stores = [{"id": STORE, "name": "Main", "prefix": "MN", "shop_domain": "main-shop.myshopify.com"},
+                       {"id": 2, "name": "Wholesale", "prefix": "#WS", "shop_domain": "ws.myshopify.com"}]
         self.resolved = {"MN1": {"id": "g1", "name": "#MN1"}, "MN2": {"id": "g2", "name": "#MN2"},
                          "MN3": {"id": "g3", "name": "#MN3"}}
         self.resolve_error = None
@@ -154,7 +155,7 @@ class PicklistsApiTest(unittest.TestCase):
         if "allowed_sections" in sql:
             return {"allowed_sections": self.sections}
         if "FROM shopify_stores" in sql:
-            return self.stores
+            return next((st for st in self.stores if st["id"] == params[0]), None) if one else self.stores
         return [] if not one else None
 
     def fake_sync(self, store_id, full=False):
@@ -746,6 +747,20 @@ class PicklistsApiTest(unittest.TestCase):
     def test_lookup_is_for_order_review_users(self):
         res = self.client.get("/api/picklists/orders/lookup?number=MN1")
         self.assertEqual((res.status_code, res.get_json()["error"]), (403, "You don't have access to Order review"))
+
+    def test_order_window_links_to_the_order_in_shopify_admin_and_lists_its_discounts(self):
+        self.fraud_node = {**FRAUD_NODE, "id": "gid://shopify/Order/5551234",
+                           "currentTotalDiscountsSet": {"shopMoney": {"amount": "4.00"}},
+                           "discountApplications": {"nodes": [{
+                               "__typename": "DiscountCodeApplication", "index": 0, "code": "WELCOME",
+                               "allocationMethod": "ACROSS", "targetSelection": "ALL", "targetType": "LINE_ITEM",
+                               "value": {"amount": "4.00", "currencyCode": "USD"}}]}}
+        data = self.client.get("/api/picklists/orders/risk?store_id=1&order_id=gid://shopify/Order/5551234").get_json()
+        self.assertEqual((data["admin_url"], data["discounts"]), (
+            "https://main-shop.myshopify.com/admin/orders/5551234",
+            {"total": "4.00", "items": [{"kind": "code", "label": "WELCOME", "description": None,
+                                         "value_type": "fixed", "value": "4.00", "target": "items",
+                                         "selection": "ALL", "amount": 0.0}]}))
 
     # ----- tags -----
 

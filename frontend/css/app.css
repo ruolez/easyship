@@ -2003,6 +2003,27 @@ body.pl-page #snackbar.show { transform: translateY(0); }
 .om-keys { display: inline-flex; align-items: center; gap: 8px; margin-left: 4px; font-size: 12px; color: var(--text-secondary); cursor: help; }
 .om-keys > span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
 .om-keys > span kbd:last-of-type { margin-right: 3px; }
+/* Discounts in the order window */
+.om-discounts { border: 1px solid var(--outline); border-left: 4px solid var(--warning); border-radius: 8px; padding: 12px 16px; font-size: 13px; }
+.om-discounts-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.om-discount-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.om-discount { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.om-dlabel {
+  flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 1px 8px; border-radius: 6px; border: 1px dashed var(--warning); background: var(--warning-light);
+  color: var(--warning); font-weight: 650; font-size: 12.5px;
+}
+.om-dlabel.code { font-family: var(--mono); letter-spacing: 0.3px; }
+.om-dmeta { flex: 1; min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+.om-discount .num { flex: none; font-weight: 650; font-variant-numeric: tabular-nums; }
+.om-product-disc { margin-top: 2px; font-size: 11.5px; font-weight: 600; color: var(--warning); overflow-wrap: anywhere; }
+.om-head-actions a.btn { text-decoration: none; }
+@media (max-width: 600px) {
+  .om-head { flex-wrap: wrap; }
+  .om-head-actions { flex-wrap: wrap; }
+  .om-head-actions .btn kbd { display: none; }
+}
+
 /* Profitability panel */
 .om-profit {
   border: 1px solid var(--outline); border-left: 4px solid var(--outline-strong); border-radius: 8px;
