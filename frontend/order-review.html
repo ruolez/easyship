@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyShip — Order review</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header id="appbar"></header>
+  <div class="container or-page">
+    <div class="page-head or-headrow">
+      <h1>Order review</h1>
+      <span class="sub">The store is found from the order number's prefix</span>
+    </div>
+
+    <form class="scan-input-group or-search" id="or-form" autocomplete="off">
+      <span class="scan-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      </span>
+      <input id="or-number" placeholder="Scan or type an order number" aria-label="Order number" spellcheck="false" autofocus>
+      <button class="btn btn-primary" type="submit" id="or-go">Look up</button>
+    </form>
+    <div class="or-recent" id="or-recent" hidden>
+      <span class="or-recent-label">Recent</span>
+      <div class="or-recent-list" id="or-recent-list"></div>
+    </div>
+
+    <div class="or-result" id="or-result" aria-live="polite"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/order-view.js"></script>
+  <script src="/js/order-review.js"></script>
+</body>
+</html>

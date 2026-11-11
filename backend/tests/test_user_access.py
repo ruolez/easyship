@@ -23,11 +23,12 @@ class HomePageTest(unittest.TestCase):
     def test_shippers_land_on_scan_and_others_on_their_first_section(self):
         cases = [
             (True, []), (True, ["verify"]), (False, ["verify", "verify_override"]),
-            (False, ["picklists", "verify"]), (False, ["verify_override"]), (False, []),
+            (False, ["picklists", "verify"]), (False, ["verify_override"]), (False, []), (False, ["order_review"]),
         ]
         self.assertEqual(
             [auth.home_page(ships, sections) for ships, sections in cases],
-            ["/index.html", "/index.html", "/verify.html", "/picklists.html", "/settings.html", "/settings.html"])
+            ["/index.html", "/index.html", "/verify.html", "/picklists.html", "/settings.html", "/settings.html",
+             "/order-review.html"])
 
 
 class UserShipsTest(unittest.TestCase):

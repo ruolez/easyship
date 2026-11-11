@@ -15,14 +15,18 @@ import picklist_rules
 import picklists
 import profit
 import shipping_estimate
+import verify
 from auth import admin_required, section_required
 from shopify_client import (HOLD_REASONS, PICKLIST_DAYS, ShopifyError, change_tags, economics_from_order,
-                            get_order_fraud, get_picklist_orders, hold_order, list_shop_tags, release_holds)
+                            get_order_fraud, get_picklist_orders, hold_order, list_shop_tags, release_holds,
+                            resolve_order)
 from util import CENTRAL, api_error, audit, central_time
 
 bp = Blueprint("picklists", __name__, url_prefix="/api/picklists")
 
 SECTION = "picklists"
+# Order review opens the same order window for one order looked up by number.
+ORDER_REVIEW = "order_review"
 # A pick list still `creating` this long after it started never finished.
 STALE_CREATING = timedelta(minutes=5)
 STORE_WORKERS = 8
@@ -113,6 +117,22 @@ def _per_store(store_ids, fetch):
 SYNC_MODES = ("auto", "full", "none")
 
 
+def _mark_issues(orders):
+    """Give each order its `issues` (products that would leave it off a pick
+    list) and `adds` (products Generate copies from Inventory first) →
+    (why BackOffice could not say, why Inventory could not say)."""
+    known, from_inventory, backoffice_error, inventory_error = (
+        _known_upcs(orders) if any(o["lines"] for o in orders) else (None, None, None, None))
+    for order in orders:
+        if from_inventory is None:
+            order["issues"] = picklists.pick_issues(order, known)
+            order["adds"] = []
+        else:
+            order["issues"] = picklists.pick_issues(order, known | from_inventory, inventory_checked=True)
+            order["adds"] = picklists.inventory_adds(order, from_inventory)
+    return backoffice_error, inventory_error
+
+
 def _eligible(store_ids, sync, rules):
     """(eligible orders with the rules they match, store errors, store_id →
     last read) — after bringing the stores' saved orders up to date unless
@@ -197,15 +217,7 @@ def eligible_orders():
         return api_error("sync must be auto, full or none")
     rules = picklist_rules.load_rules()
     orders, errors, synced = _eligible(store_ids, sync, rules)
-    known, from_inventory, backoffice_error, inventory_error = (
-        _known_upcs(orders) if orders else (None, None, None, None))
-    for order in orders:
-        if from_inventory is None:
-            order["issues"] = picklists.pick_issues(order, known)
-            order["adds"] = []
-        else:
-            order["issues"] = picklists.pick_issues(order, known | from_inventory, inventory_checked=True)
-            order["adds"] = picklists.inventory_adds(order, from_inventory)
+    backoffice_error, inventory_error = _mark_issues(orders)
     return jsonify({
         "orders": orders,
         "errors": errors,
@@ -234,7 +246,7 @@ def _address(addr):
 
 
 @bp.get("/orders/risk")
-@section_required(SECTION)
+@section_required(SECTION, ORDER_REVIEW)
 def order_fraud():
     store_id = request.args.get("store_id", type=int)
     order_gid = (request.args.get("order_id") or "").strip()
@@ -244,6 +256,11 @@ def order_fraud():
         node = get_order_fraud(store_id, order_gid)
     except ShopifyError as e:
         return api_error(str(e), 502)
+    return jsonify(_order_detail(store_id, node))
+
+
+def _order_detail(store_id, node):
+    """What the order window shows, from get_order_fraud's order node."""
     risk = order_risk.order_risk(node)
     if risk and risk["ip"]:
         risk["ip_location"] = order_risk.ip_location(risk["ip"])
@@ -252,7 +269,7 @@ def order_fraud():
     customer = node.get("customer") or {}
     total = (node.get("totalPriceSet") or {}).get("shopMoney") or {}
     spent = customer.get("amountSpent") or {}
-    return jsonify({
+    return {
         "name": node.get("name"),
         "created_at": (node.get("createdAt") or "")[:10],
         "email": node.get("email"),
@@ -277,6 +294,64 @@ def order_fraud():
         "billing_address": _address(node.get("billingAddress")),
         "risk": risk,
         "profit": picklists.order_profitability(economics_from_order(node), estimate, profit.load_thresholds()),
+    }
+
+
+def _in_parallel(*calls):
+    """Run the calls at once, each in its own app context (its own DB
+    connection) → their results in order; the first error is raised."""
+    app = current_app._get_current_object()
+
+    def run(call):
+        with app.app_context():
+            return call()
+
+    with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+        futures = [pool.submit(run, call) for call in calls]
+        return [f.result() for f in futures]
+
+
+@bp.get("/orders/lookup")
+@section_required(ORDER_REVIEW)
+def lookup_order():
+    """Order review: one order by its number, from the store whose order
+    prefix it starts with, with everything the order window shows and, when
+    it can't go on a pick list, why (any order opens, picked or not)."""
+    number = (request.args.get("number") or "").strip()
+    if not number.lstrip("#").strip():
+        return api_error("Enter an order number")
+    stores = db.query("SELECT id, name, prefix FROM shopify_stores WHERE is_active ORDER BY id") or []
+    try:
+        store = verify.detect_store(number, stores)
+    except ValueError as e:
+        return api_error(str(e), 409)
+    if not store:
+        return api_error(f"No Shopify store uses the prefix of {number}. "
+                         "Store prefixes are set in Settings › Integrations.", 404)
+    store_id = store["id"]
+    not_found = api_error(f"Order {number} was not found in {store['name']}", 404)
+    try:
+        resolved = resolve_order(store_id, number)
+        if not resolved:
+            return not_found
+        nodes, fraud_node = _in_parallel(lambda: get_picklist_orders(store_id, [resolved["id"]]),
+                                         lambda: get_order_fraud(store_id, resolved["id"]))
+    except ShopifyError as e:
+        return api_error(f"Shopify ({store['name']}): {e}", 502)
+    if not nodes:
+        return not_found
+    order = _listed_order(nodes[0], store_id, picklist_rules.load_rules())
+    picklist = picklists.active_picklist(store_id, order["id"])
+    reserved = {(store_id, order["id"])} if picklist else set()
+    backoffice_error, inventory_error = _mark_issues([order])
+    return jsonify({
+        "store": {"id": store_id, "name": store["name"]},
+        "order": order,
+        "not_pickable": picklists.ineligible_reason(order, reserved),
+        "picklist": {"id": picklist["id"], "quotation_number": picklist["quotation_number"]} if picklist else None,
+        "detail": _order_detail(store_id, fraud_node),
+        "backoffice_error": backoffice_error,
+        "inventory_error": inventory_error,
     })
 
 
@@ -308,7 +383,7 @@ def _clean_tags(raw):
 
 
 @bp.get("/tags")
-@section_required(SECTION)
+@section_required(SECTION, ORDER_REVIEW)
 def shop_tags():
     """The store's order or customer tags for the tag fields' suggestions,
     kept for a few minutes per store."""
@@ -339,7 +414,7 @@ def _remember_shop_tags(store_id, kind, tags):
 
 
 @bp.post("/orders/tags")
-@section_required(SECTION)
+@section_required(SECTION, ORDER_REVIEW)
 def change_order_tags():
     """Add and remove tags on the order or its customer in Shopify, then send
     the order back as the list shows it, with the rules it now matches."""
@@ -375,7 +450,9 @@ def change_order_tags():
     picklist_cache.put_orders(store_id, [node])
     audit("picklist.tags", {"store_id": store_id, "order": node.get("name"), "kind": kind,
                             "added": add, "removed": remove})
-    return jsonify({"order": _listed_order(node, store_id, picklist_rules.load_rules())})
+    order = _listed_order(node, store_id, picklist_rules.load_rules())
+    order["ineligible_reason"] = picklists.ineligible_reason(order, set())
+    return jsonify({"order": order})
 
 
 BULK_TAG_LIMIT = 250
@@ -556,7 +633,7 @@ def _hold_target(data):
 
 
 @bp.post("/orders/hold")
-@section_required(SECTION)
+@section_required(SECTION, ORDER_REVIEW)
 def hold():
     """Put the order on hold in Shopify, as its "Hold fulfillment" does. The
     holds placed come back so the page can offer Undo."""
@@ -576,7 +653,7 @@ def hold():
 
 
 @bp.post("/orders/hold/release")
-@section_required(SECTION)
+@section_required(SECTION, ORDER_REVIEW)
 def release_hold():
     """Undo a hold placed from the page: only the holds it placed are released."""
     data = request.get_json(silent=True) or {}

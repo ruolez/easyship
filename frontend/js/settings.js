@@ -2687,7 +2687,7 @@ function providerNamesToLabels(names) {
 }
 
 /* Sections an admin grants per user; admins always have every one. */
-const SECTIONS = [['picklists', 'Pick lists'], ['verify', 'Verify'], ['verify_override', 'Verify override']];
+const SECTIONS = [['picklists', 'Pick lists'], ['verify', 'Verify'], ['verify_override', 'Verify override'], ['order_review', 'Order review']];
 
 function sectionsCell(u) {
   if (u.role === 'admin') return '<span class="us-chip all">All sections</span>';

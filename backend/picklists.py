@@ -325,6 +325,15 @@ def active_order_keys(store_ids):
     return {(r["store_id"], r["order_gid"]) for r in rows or []}
 
 
+def active_picklist(store_id, order_gid):
+    """The live pick list the order is on ({id, quotation_number}), or None."""
+    return db.query(
+        """SELECT p.id, p.quotation_number FROM picklist_orders po JOIN picklists p ON p.id = po.picklist_id
+           WHERE po.active AND po.store_id = %s AND po.order_gid = %s""",
+        (store_id, order_gid), one=True,
+    )
+
+
 def reserve(user_id, db_id, customer, rep, orders, lines):
     """Record a pick list in `creating` state with its orders and lines, all in
     one transaction. The partial unique index refuses an order that is on a

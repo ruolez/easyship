@@ -100,6 +100,8 @@ class PicklistsApiTest(unittest.TestCase):
             (dbadmin, "get_config", lambda: self.dbadmin_config),
             (dbadmin, "delete_quotation_status", self.fake_delete_quotation_status),
             (picklists_api, "get_order_fraud", lambda sid, gid: self.fraud_node),
+            (picklists_api, "resolve_order", self.fake_resolve),
+            (picklists, "active_picklist", lambda sid, gid: self.on_picklist.get((sid, gid))),
             (picklists_api, "list_shop_tags", self.fake_shop_tags),
             (picklists_api, "change_tags", self.fake_change_tags),
             (picklists_api, "hold_order", self.fake_hold_order),
@@ -113,6 +115,11 @@ class PicklistsApiTest(unittest.TestCase):
                 "cost": 7.5, "samples": 3, "tolerance_lb": 0.1, "state": state, "weight_lb": weight}),
         ]
         self.fetch = self.fake_list
+        self.stores = [{"id": STORE, "name": "Main", "prefix": "MN"}, {"id": 2, "name": "Wholesale", "prefix": "#WS"}]
+        self.resolved = {"MN1": {"id": "g1", "name": "#MN1"}, "MN2": {"id": "g2", "name": "#MN2"},
+                         "MN3": {"id": "g3", "name": "#MN3"}}
+        self.resolve_error = None
+        self.on_picklist = {}  # (store_id, order gid) -> the live pick list it is on
         self.cache, self.synced, self.syncs = {}, {}, []
         self.products = {DB_ID: {"111": ITEM}, INVENTORY_DB_ID: {"222": INVENTORY_ITEM}}
         self.inventory_error = None
@@ -147,7 +154,7 @@ class PicklistsApiTest(unittest.TestCase):
         if "allowed_sections" in sql:
             return {"allowed_sections": self.sections}
         if "FROM shopify_stores" in sql:
-            return [{"id": STORE, "name": "Main"}, {"id": 2, "name": "Wholesale"}]
+            return self.stores
         return [] if not one else None
 
     def fake_sync(self, store_id, full=False):
@@ -220,6 +227,12 @@ class PicklistsApiTest(unittest.TestCase):
             raise dbadmin.DbAdminError(self.status_error)
         self.calls.append(("delete_quotation_status", number, qid))
         return self.status_rows
+
+    def fake_resolve(self, store_id, number):
+        if self.resolve_error:
+            raise ShopifyError(self.resolve_error)
+        self.calls.append(("resolve", store_id, number))
+        return self.resolved.get(number.strip().lstrip("#").upper())
 
     def fake_shop_tags(self, store_id, kind):
         self.calls.append(("shop_tags", store_id, kind))
@@ -655,6 +668,85 @@ class PicklistsApiTest(unittest.TestCase):
              {"revenue": 45.0, "items_cost": 24.0, "includes_shipping": True, "profit": 13.5, "margin_pct": 30.0},
              {"cost": 7.5, "samples": 3, "tolerance_lb": 0.1, "state": "CT", "weight_lb": 1.0}))
 
+    # ----- order review -----
+
+    def lookup(self, number):
+        self.sections = ["order_review"]
+        res = self.client.get("/api/picklists/orders/lookup", query_string={"number": number})
+        return res.status_code, res.get_json()
+
+    def test_lookup_finds_the_order_in_the_store_its_prefix_names_with_the_window_details(self):
+        status, data = self.lookup(" #mn1 ")
+        self.assertEqual(
+            (status, data["store"], data["order"]["name"], data["order"]["issues"], data["not_pickable"],
+             data["picklist"], data["detail"]["customer"]["id"], self.calls[0]),
+            (200, {"id": STORE, "name": "Main"}, "#1", [], None,
+             None, "gid://shopify/Customer/5", ("resolve", STORE, "#mn1")))
+
+    def test_lookup_takes_the_longest_matching_prefix(self):
+        self.stores = [{"id": STORE, "name": "Main", "prefix": "M"}, {"id": 2, "name": "Wholesale", "prefix": "MN"}]
+        self.shopify[2] = self.shopify[STORE]
+        self.assertEqual(self.lookup("MN1")[1]["store"], {"id": 2, "name": "Wholesale"})
+
+    def test_lookup_says_why_an_order_cannot_go_on_a_pick_list(self):
+        self.on_picklist[(STORE, "g1")] = {"id": 42, "quotation_number": "10222026191"}
+        reasons = [(data["not_pickable"], data["picklist"])
+                   for data in (self.lookup(n)[1] for n in ("MN1", "MN3"))]
+        self.assertEqual(reasons, [("Already on a pick list", {"id": 42, "quotation_number": "10222026191"}),
+                                   ("Not fully paid", None)])
+
+    def test_lookup_flags_products_backoffice_does_not_know(self):
+        _, data = self.lookup("MN2")
+        self.assertEqual((data["order"]["issues"], data["backoffice_error"]),
+                         ([{"kind": "unknown_barcode", "text": "Apple — barcode 999 is not in BackOffice"}], None))
+
+    def test_lookup_still_shows_the_order_when_backoffice_is_down(self):
+        picklists_api.backoffice.known_upcs = lambda db_id, upcs: (_ for _ in ()).throw(
+            backoffice.BackofficeError("BackOffice offline"))
+        status, data = self.lookup("MN2")
+        self.assertEqual((status, data["order"]["issues"], data["backoffice_error"]), (200, [], "BackOffice offline"))
+
+    def test_lookup_refusals(self):
+        def with_(attr, value, number):
+            setattr(self, attr, value)
+            try:
+                return self.lookup(number)
+            finally:
+                setattr(self, attr, None)
+        cases = [
+            self.lookup(" "),
+            self.lookup("ZZ100"),
+            self.lookup("MN404"),
+            with_("resolve_error", "Shopify down", "MN1"),
+        ]
+        self.stores = self.stores + [{"id": 3, "name": "Copy", "prefix": "mn"}]
+        cases.append(self.lookup("MN1"))
+        self.assertEqual([(status, data["error"]) for status, data in cases], [
+            (400, "Enter an order number"),
+            (404, "No Shopify store uses the prefix of ZZ100. Store prefixes are set in Settings › Integrations."),
+            (404, "Order MN404 was not found in Main"),
+            (502, "Shopify (Main): Shopify down"),
+            (409, "More than one Shopify store uses this order-number prefix"),
+        ])
+
+    def test_order_review_users_reach_the_order_window_actions_but_not_pick_lists(self):
+        self.sections = ["order_review"]
+        statuses = [
+            self.client.get("/api/picklists/orders/risk?store_id=1&order_id=g1").status_code,
+            self.client.get("/api/picklists/tags?store_id=1&kind=order").status_code,
+            self.tag_change(add=["rush"])[0],
+            self.hold(reason="OTHER")[0],
+            self.hold("/api/picklists/orders/hold/release",
+                      holds=[{"fulfillment_order_id": "fo1", "hold_id": "h1"}])[0],
+            self.client.get("/api/picklists/orders?store_ids=1").status_code,
+            self.client.get("/api/picklists").status_code,
+        ]
+        self.assertEqual(statuses, [200, 200, 200, 200, 200, 403, 403])
+
+    def test_lookup_is_for_order_review_users(self):
+        res = self.client.get("/api/picklists/orders/lookup?number=MN1")
+        self.assertEqual((res.status_code, res.get_json()["error"]), (403, "You don't have access to Order review"))
+
     # ----- tags -----
 
     def test_tag_suggestions_are_read_once_per_store_and_kind(self):
@@ -678,6 +770,11 @@ class PicklistsApiTest(unittest.TestCase):
         self.assertEqual(
             (status, data["order"]["tags"], data["order"]["rule_ids"], self.calls[-2]),
             (200, ["Keep", "rush", "Gift"], [], ("change_tags", STORE, "g1", ["rush", "Gift"], ["old"])))
+
+    def test_a_tag_change_says_when_the_order_can_no_longer_go_on_a_pick_list(self):
+        reasons = [self.tag_change(add=["rush"])[1]["order"]["ineligible_reason"],
+                   self.tag_change(add=["Checked"])[1]["order"]["ineligible_reason"]]
+        self.assertEqual(reasons, [None, "Tagged “Checked” — already being worked on"])
 
     def test_customer_tags_go_to_the_orders_customer(self):
         self.shopify[STORE][0]["customer"] = {"id": "gid://shopify/Customer/5", "displayName": "Ann", "tags": ["vip"]}

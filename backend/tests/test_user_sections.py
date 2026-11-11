@@ -28,7 +28,7 @@ class UserSectionsTest(unittest.TestCase):
         self.assertEqual(
             [self.run_case("admin", None), self.run_case("user", None), self.run_case("user", []),
              self.run_case("user", ["verify_override", "picklists", "bogus"])],
-            [["picklists", "verify", "verify_override"], [], [], ["picklists", "verify_override"]])
+            [["picklists", "verify", "verify_override", "order_review"], [], [], ["picklists", "verify_override"]])
 
 
 class PicklistSettingsValidationTest(unittest.TestCase):

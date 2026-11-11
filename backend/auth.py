@@ -48,7 +48,8 @@ def admin_required(f):
 
 
 # Sections an admin grants per user (users.allowed_sections); admins have all.
-SECTIONS = {"picklists": "Pick lists", "verify": "Verify", "verify_override": "Verify override"}
+SECTIONS = {"picklists": "Pick lists", "verify": "Verify", "verify_override": "Verify override",
+            "order_review": "Order review"}
 
 
 def sanitize_sections(values):
@@ -76,7 +77,7 @@ def user_ships(user_id, role):
     return bool(row and row["can_ship"])
 
 
-SECTION_PAGES = {"picklists": "/picklists.html", "verify": "/verify.html"}
+SECTION_PAGES = {"picklists": "/picklists.html", "verify": "/verify.html", "order_review": "/order-review.html"}
 
 
 def home_page(ships, sections):
@@ -99,14 +100,16 @@ def ship_required(f):
     return wrapper
 
 
-def section_required(section):
+def section_required(*sections):
+    """Any one of the sections lets the user in."""
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
             if not _signed_in():
                 return api_error("Not authenticated", 401)
-            if section not in user_sections(session["user_id"], session.get("role")):
-                return api_error(f"You don't have access to {SECTIONS[section]}", 403)
+            if not set(sections) & set(user_sections(session["user_id"], session.get("role"))):
+                names = " or ".join(SECTIONS[s] for s in sections)
+                return api_error(f"You don't have access to {names}", 403)
             return f(*args, **kwargs)
 
         return wrapper
