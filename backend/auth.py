@@ -49,7 +49,7 @@ def admin_required(f):
 
 # Sections an admin grants per user (users.allowed_sections); admins have all.
 SECTIONS = {"picklists": "Pick lists", "verify": "Verify", "verify_override": "Verify override",
-            "order_review": "Order review"}
+            "order_review": "Order review", "reports": "Reports"}
 
 
 def sanitize_sections(values):
@@ -77,7 +77,8 @@ def user_ships(user_id, role):
     return bool(row and row["can_ship"])
 
 
-SECTION_PAGES = {"picklists": "/picklists.html", "verify": "/verify.html", "order_review": "/order-review.html"}
+SECTION_PAGES = {"picklists": "/picklists.html", "verify": "/verify.html", "order_review": "/order-review.html",
+                 "reports": "/reports.html"}
 
 
 def home_page(ships, sections):

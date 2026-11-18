@@ -1,4 +1,5 @@
-from datetime import timedelta
+import re
+from datetime import datetime, timedelta
 
 import pymssql
 
@@ -89,6 +90,75 @@ def list_open_invoices(db_id, days=14, q=""):
             "no_boxes": r["NoBoxes"],
             "total_weight": _to_float(r["TotalWeight"]),
             "invoice_total": float(r["InvoiceTotal"]) if r["InvoiceTotal"] is not None else None,
+        }
+        for r in rows
+    ]
+
+
+SHIPPER_NAME_COLUMNS = ("shipper", "shippername", "name", "description", "companyname", "shipperdesc")
+_CHAR_TYPES = {"char", "nchar", "varchar", "nvarchar", "text", "ntext"}
+_shipper_columns = {}
+
+
+def pick_shipper_name_column(columns):
+    """The column of Shippers_tbl that holds the carrier's name, from its
+    (name, data_type) pairs: a known name first, else the first text column.
+    None when there is nothing usable (or ShipperID is missing)."""
+    names = {name.lower(): name for name, _ in columns}
+    if "shipperid" not in names:
+        return None
+    for preferred in SHIPPER_NAME_COLUMNS:
+        if preferred in names:
+            return names[preferred]
+    return next((name for name, kind in columns
+                 if kind.lower() in _CHAR_TYPES and not name.lower().endswith("id")), None)
+
+
+def _shipper_name_column(db_id, cur):
+    """Shippers_tbl isn't documented, so its name column is looked up once
+    per database and remembered for the life of the process."""
+    if db_id not in _shipper_columns:
+        cur.execute(
+            """SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+               WHERE TABLE_NAME = 'Shippers_tbl' ORDER BY ORDINAL_POSITION"""
+        )
+        column = pick_shipper_name_column([(r["COLUMN_NAME"], r["DATA_TYPE"]) for r in cur.fetchall()])
+        _shipper_columns[db_id] = column if column and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_ ]*", column) else None
+    return _shipper_columns[db_id]
+
+
+def shipping_spend_invoices(db_id, date_from, date_to):
+    """Invoices with a shipping cost shipped between the two dates (inclusive;
+    ShipDate, else InvoiceDate), with the carrier name from Shippers_tbl."""
+    conn = _connect(db_id)
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            column = _shipper_name_column(db_id, cur)
+            shipper = f"sh.[{column}]" if column else "NULL"
+            join = "LEFT JOIN Shippers_tbl sh ON sh.ShipperID = i.ShipperID" if column else ""
+            cur.execute(
+                f"""SELECT i.InvoiceID, i.InvoiceNumber, i.BusinessName, i.TrackingNo,
+                           i.ShippingCost, COALESCE(i.ShipDate, i.InvoiceDate) AS ShippedOn,
+                           {shipper} AS ShipperName
+                    FROM Invoices_tbl i {join}
+                    WHERE (i.Void IS NULL OR i.Void = 0) AND i.ShippingCost > 0
+                      AND COALESCE(i.ShipDate, i.InvoiceDate) >= %s
+                      AND COALESCE(i.ShipDate, i.InvoiceDate) < %s""",
+                (datetime.combine(date_from, datetime.min.time()),
+                 datetime.combine(date_to + timedelta(days=1), datetime.min.time())),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "invoice_id": r["InvoiceID"],
+            "invoice_number": (r["InvoiceNumber"] or "").strip(),
+            "business_name": (r["BusinessName"] or "").strip(),
+            "tracking": _clean_tracking(r["TrackingNo"]),
+            "cost": float(r["ShippingCost"]),
+            "date": r["ShippedOn"].date(),
+            "carrier": str(r["ShipperName"] or "").strip(),
         }
         for r in rows
     ]

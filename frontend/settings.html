@@ -24,6 +24,7 @@
       <button class="tab" data-tab="integrations">Integrations</button>
       <button class="tab" data-tab="picklists">Pick lists</button>
       <button class="tab" data-tab="verify">Verify</button>
+      <button class="tab" data-tab="reports">Reports</button>
       <button class="tab" data-tab="users">Users</button>
       <button class="tab" data-tab="audit">Audit</button>
       <button class="tab" data-tab="account">My account</button>
@@ -417,6 +418,17 @@
         <p class="hint mb-16">Which presets each eligible order falls in, with the rules and presets above as they are now, saved or not. Orders in more than one preset, or in none, are listed first. Exclusions and filters on the Pick lists page don’t count here.</p>
         <div class="pl-chip-row mb-16" id="plc-stores"></div>
         <div id="plc-body"></div>
+      </div>
+    </section>
+
+    <!-- ================= Reports ================= -->
+    <section class="tab-panel" data-panel="reports">
+      <div class="card" id="card-reports">
+        <h2>Shipping spend</h2>
+        <p class="hint mb-16">Reports add up the parcel log and the shipping costs of this BackOffice database (Invoices_tbl.ShippingCost, carrier from Shippers_tbl). Invoices already shipped through EasyShip are counted once, from the parcel log.</p>
+        <div class="row">
+          <div class="field"><label>BackOffice database</label><select id="reports_backoffice_db_id"></select><span class="hint">Not set = the parcel log only</span></div>
+        </div>
       </div>
     </section>
 

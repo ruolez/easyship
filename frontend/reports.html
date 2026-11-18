@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyShip — Reports</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header id="appbar"></header>
+  <div class="container rp-page">
+    <div class="page-head">
+      <h1>Reports</h1>
+      <span class="sub">Shipping spend from the parcel log and BackOffice</span>
+    </div>
+
+    <div class="card dense rp-filters">
+      <div class="rp-filter-row">
+        <div class="rp-field"><label for="rp-from">From</label><input type="date" id="rp-from"></div>
+        <div class="rp-field"><label for="rp-to">To</label><input type="date" id="rp-to"></div>
+        <div class="rp-quick" id="rp-quick">
+          <button type="button" class="rp-chip" data-range="month">This month</button>
+          <button type="button" class="rp-chip" data-range="last-month">Last month</button>
+          <button type="button" class="rp-chip" data-range="30">Last 30 days</button>
+          <button type="button" class="rp-chip" data-range="year">This year</button>
+        </div>
+      </div>
+      <div class="rp-filter-row">
+        <div class="rp-field"><span class="rp-label">Group by</span>
+          <div class="rp-seg" id="rp-bucket" role="group" aria-label="Group by">
+            <button type="button" data-v="day">Day</button><button type="button" data-v="week">Week</button><button type="button" data-v="month">Month</button>
+          </div>
+        </div>
+        <div class="rp-field"><span class="rp-label">Carrier</span><button type="button" class="filter-multi" id="rp-carrier"></button></div>
+        <div class="rp-field"><span class="rp-label">Store</span><button type="button" class="filter-multi" id="rp-store"></button></div>
+        <div class="rp-field"><span class="rp-label">Source</span><button type="button" class="filter-multi" id="rp-source"></button></div>
+        <button type="button" class="btn btn-outlined btn-small rp-refresh" id="rp-refresh" title="Read both sources again">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>Refresh</button>
+      </div>
+    </div>
+
+    <div id="rp-notices"></div>
+
+    <div class="rp-tiles" id="rp-tiles">
+      <div class="rp-tile"><span class="rp-tile-label">Shipping spend</span><span class="rp-tile-value" id="rp-total">—</span></div>
+      <div class="rp-tile"><span class="rp-tile-label">Shipments</span><span class="rp-tile-value" id="rp-count">—</span></div>
+      <div class="rp-tile"><span class="rp-tile-label">Average per shipment</span><span class="rp-tile-value" id="rp-avg">—</span></div>
+    </div>
+
+    <div class="card rp-chart-card">
+      <div class="rp-card-head">
+        <h2>Spend over time</h2>
+        <div class="rp-seg small" id="rp-stack" role="group" aria-label="Stack by">
+          <button type="button" data-v="carrier">By carrier</button><button type="button" data-v="store">By store</button>
+        </div>
+        <a class="btn btn-text btn-small rp-csv" data-kind="period">CSV</a>
+      </div>
+      <div class="rp-legend" id="rp-legend"></div>
+      <div class="rp-chart" id="rp-chart"></div>
+    </div>
+
+    <div class="rp-grid">
+      <div class="card">
+        <div class="rp-card-head"><h2>By carrier</h2><a class="btn btn-text btn-small rp-csv" data-kind="carrier">CSV</a></div>
+        <div class="table-wrap"><table class="rp-table" id="rp-carriers"></table></div>
+      </div>
+      <div class="card">
+        <div class="rp-card-head"><h2>By store</h2><a class="btn btn-text btn-small rp-csv" data-kind="store">CSV</a></div>
+        <div class="table-wrap"><table class="rp-table" id="rp-stores"></table></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="rp-card-head"><h2>Shipments</h2><a class="btn btn-text btn-small rp-csv" data-kind="rows">CSV</a></div>
+      <div class="table-wrap">
+        <table class="rp-table">
+          <thead>
+            <tr>
+              <th class="sortable desc" data-sort="date">Date</th>
+              <th>Source</th>
+              <th class="sortable" data-sort="store">Store</th>
+              <th class="sortable" data-sort="carrier">Carrier</th>
+              <th>Service</th>
+              <th>Reference</th>
+              <th>Tracking</th>
+              <th class="num sortable" data-sort="cost">Cost</th>
+            </tr>
+          </thead>
+          <tbody id="rp-rows"></tbody>
+        </table>
+      </div>
+      <div class="table-pager" id="rp-pager" style="display:none">
+        <span class="pager-range" id="rp-range"></span>
+        <button type="button" class="btn btn-outlined btn-small pager-btn" id="rp-prev" aria-label="Previous page">‹</button>
+        <button type="button" class="btn btn-outlined btn-small pager-btn" id="rp-next" aria-label="Next page">›</button>
+      </div>
+      <div class="empty" id="rp-empty" style="display:none">Nothing shipped in this range</div>
+    </div>
+  </div>
+
+  <div class="rp-tip" id="rp-tip" role="tooltip" hidden></div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/multi-filter.js"></script>
+  <script src="/js/reports.js"></script>
+</body>
+</html>

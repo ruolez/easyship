@@ -12,6 +12,7 @@ const BASE_SETTING_IDS = [
   'verify_skip_prefixes_shopify', 'verify_skip_prefixes_backoffice',
   'picklist_backoffice_db_id', 'picklist_inventory_db_id', 'picklist_quote_status', 'picklist_title_prefix',
   'picklist_number_tag', 'picklist_hidden_tags', 'picklist_rules', 'picklist_presets',
+  'reports_backoffice_db_id',
 ];
 let SETTING_IDS = [...BASE_SETTING_IDS];
 
@@ -40,7 +41,7 @@ initNav('settings').then(async () => {
 });
 
 /* ---------- Tabs ---------- */
-const ADMIN_TABS = ['providers', 'shipping', 'boxes', 'integrations', 'picklists', 'verify', 'users', 'audit'];
+const ADMIN_TABS = ['providers', 'shipping', 'boxes', 'integrations', 'picklists', 'verify', 'reports', 'users', 'audit'];
 // Printing is set up per computer, so everyone who ships can open it.
 const SHIP_TABS = ['printing'];
 
@@ -221,6 +222,7 @@ async function loadPicklistOptions() {
   const options = dbs.map((d) => `<option value="${d.id}">${esc(d.name)}${d.is_active ? '' : ' (inactive)'}</option>`).join('');
   document.getElementById('picklist_backoffice_db_id').innerHTML = `<option value="">— Not set —</option>${options}`;
   document.getElementById('picklist_inventory_db_id').innerHTML = `<option value="">— Not set —</option>${options}`;
+  document.getElementById('reports_backoffice_db_id').innerHTML = `<option value="">— Not set —</option>${options}`;
 }
 
 function readPlRules() {
@@ -2687,7 +2689,7 @@ function providerNamesToLabels(names) {
 }
 
 /* Sections an admin grants per user; admins always have every one. */
-const SECTIONS = [['picklists', 'Pick lists'], ['verify', 'Verify'], ['verify_override', 'Verify override'], ['order_review', 'Order review']];
+const SECTIONS = [['picklists', 'Pick lists'], ['verify', 'Verify'], ['verify_override', 'Verify override'], ['order_review', 'Order review'], ['reports', 'Reports']];
 
 function sectionsCell(u) {
   if (u.role === 'admin') return '<span class="us-chip all">All sections</span>';

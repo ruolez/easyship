@@ -59,6 +59,7 @@ BASE_SETTING_KEYS = [
     "verify_skip_prefixes_backoffice",
     "picklist_backoffice_db_id",
     "picklist_inventory_db_id",
+    "reports_backoffice_db_id",
     "picklist_quote_status",
     "picklist_title_prefix",
     "picklist_number_tag",
@@ -179,13 +180,24 @@ def _picklist_settings_error(data):
     return None
 
 
+def _reports_settings_error(data):
+    if "reports_backoffice_db_id" not in data:
+        return None
+    value = str(data.get("reports_backoffice_db_id") or "").strip()
+    if value and not (value.isdigit() and db.query(
+            "SELECT 1 FROM backoffice_dbs WHERE id = %s", (int(value),), one=True)):
+        return "Choose the Reports BackOffice database from the list"
+    return None
+
+
 @bp.put("/settings")
 @admin_required
 def put_settings():
     data = request.get_json(silent=True) or {}
     keys = set(_setting_keys())
     secret_keys = _secret_keys()
-    error = _profit_settings_error(data) or _picklist_settings_error(data)
+    error = (_profit_settings_error(data) or _picklist_settings_error(data)
+             or _reports_settings_error(data))
     if error:
         return api_error(error)
     changed = []

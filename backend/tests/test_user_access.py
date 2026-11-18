@@ -24,11 +24,15 @@ class HomePageTest(unittest.TestCase):
         cases = [
             (True, []), (True, ["verify"]), (False, ["verify", "verify_override"]),
             (False, ["picklists", "verify"]), (False, ["verify_override"]), (False, []), (False, ["order_review"]),
+            (False, ["reports"]),
         ]
         self.assertEqual(
             [auth.home_page(ships, sections) for ships, sections in cases],
             ["/index.html", "/index.html", "/verify.html", "/picklists.html", "/settings.html", "/settings.html",
-             "/order-review.html"])
+             "/order-review.html", "/reports.html"])
+
+    def test_sanitize_keeps_known_sections_in_order(self):
+        self.assertEqual(auth.sanitize_sections(["reports", "bogus", "verify"]), ["verify", "reports"])
 
 
 class UserShipsTest(unittest.TestCase):

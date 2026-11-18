@@ -28,7 +28,7 @@ class UserSectionsTest(unittest.TestCase):
         self.assertEqual(
             [self.run_case("admin", None), self.run_case("user", None), self.run_case("user", []),
              self.run_case("user", ["verify_override", "picklists", "bogus"])],
-            [["picklists", "verify", "verify_override", "order_review"], [], [], ["picklists", "verify_override"]])
+            [["picklists", "verify", "verify_override", "order_review", "reports"], [], [], ["picklists", "verify_override"]])
 
 
 class PicklistSettingsValidationTest(unittest.TestCase):
@@ -42,6 +42,21 @@ class PicklistSettingsValidationTest(unittest.TestCase):
         ]
         self.assertEqual([settings_api._picklist_settings_error(d) for d, _ in cases],
                          [expected for _, expected in cases])
+
+
+class ReportsSettingsValidationTest(unittest.TestCase):
+    def test_the_database_must_exist(self):
+        orig = settings_api.db.query
+        settings_api.db.query = lambda sql, params=None, one=False: {"?": 1} if params == (3,) else None
+        try:
+            cases = [({}, None), ({"reports_backoffice_db_id": ""}, None),
+                     ({"reports_backoffice_db_id": "3"}, None),
+                     ({"reports_backoffice_db_id": "9"}, "Choose the Reports BackOffice database from the list"),
+                     ({"reports_backoffice_db_id": "x"}, "Choose the Reports BackOffice database from the list")]
+            self.assertEqual([settings_api._reports_settings_error(d) for d, _ in cases],
+                             [expected for _, expected in cases])
+        finally:
+            settings_api.db.query = orig
 
 
 class QuotationDetailRowTest(unittest.TestCase):
