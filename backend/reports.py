@@ -13,6 +13,11 @@ SOURCES = {"parcels": "Parcel log", "backoffice": "BackOffice"}
 UNKNOWN = "Unknown"
 COUNTED_STATUSES = ("label_created", "fulfilled")
 
+# Postage providers and ShipStation's own carrier accounts are not carriers:
+# a label bought through Endicia or Stamps.com is a USPS label.
+USPS_RESELLERS = {"endicia", "stamps.com", "stamps_com", "stamps", "usps"}
+ACCOUNT_SUFFIXES = (" by shipstation", " one balance")
+
 
 def period_start(day, bucket):
     if bucket == "week":
@@ -28,6 +33,19 @@ def next_period(start, bucket):
     if bucket == "month":
         return (start.replace(day=28) + timedelta(days=4)).replace(day=1)
     return start + timedelta(days=1)
+
+
+def carrier_name(raw):
+    """The carrier a label was shipped with, from the name the provider gave
+    it: "Endicia" / "Stamps.com" are USPS, "UPS by ShipStation" is UPS, and a
+    ShipStation account nickname ("UPS · East") is dropped."""
+    name = (raw or "").split(" · ")[0].strip()
+    lowered = name.lower()
+    for suffix in ACCOUNT_SUFFIXES:
+        if lowered.endswith(suffix):
+            name = name[:-len(suffix)].strip()
+            lowered = name.lower()
+    return "USPS" if lowered in USPS_RESELLERS else name
 
 
 def merge_names(rows, field):
@@ -137,7 +155,7 @@ def parcel_spend_rows(date_from, date_to):
         "source": "parcels",
         "date": r["day"],
         "store": r["store"] or "",
-        "carrier": r["carrier"] or "",
+        "carrier": carrier_name(r["carrier"]),
         "service": r["service"] or "",
         "ref": r["ref"] or f"#{r['id']}",
         "tracking": r["tracking_number"] or "",
@@ -170,7 +188,7 @@ def backoffice_spend_rows(db_id, store_name, date_from, date_to):
         "source": "backoffice",
         "date": i["date"],
         "store": store_name,
-        "carrier": i["carrier"],
+        "carrier": carrier_name(i["carrier"]),
         "service": "",
         "ref": i["invoice_number"] or f"#{i['invoice_id']}",
         "tracking": i["tracking"],

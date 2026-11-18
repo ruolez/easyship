@@ -40,6 +40,15 @@ class PeriodStartTest(unittest.TestCase):
                          ["2026-02-01", "2026-03-01", "2027-01-01"])
 
 
+class CarrierNameTest(unittest.TestCase):
+    def test_postage_providers_and_accounts_become_the_carrier(self):
+        cases = [("Endicia", "USPS"), ("Stamps.com", "USPS"), ("stamps_com", "USPS"),
+                 ("USPS by ShipStation", "USPS"), ("UPS by ShipStation", "UPS"), ("FedEx One Balance", "FedEx"),
+                 ("UPS · East", "UPS"), ("Endicia · Warehouse 2", "USPS"),
+                 ("Spee-Dee", "Spee-Dee"), ("ESTES", "ESTES"), ("", ""), (None, "")]
+        self.assertEqual([reports.carrier_name(raw) for raw, _ in cases], [want for _, want in cases])
+
+
 class MergeNamesTest(unittest.TestCase):
     def test_case_and_spaces_merge_and_the_parcel_spelling_wins(self):
         rows = [row("backoffice", carrier=" ups "), row(carrier="UPS"), row("backoffice", carrier=""),
