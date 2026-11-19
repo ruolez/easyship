@@ -412,8 +412,19 @@ def parcel_order_matches(tracking, order_keys):
             {r["order_key"] for r in rows if r["order_key"] in order_keys})
 
 
+def sheet_note(in_range, dropped):
+    """What became of the sheet's rows in the range, when it isn't plain."""
+    if not in_range:
+        return "The Google Sheet has no rows with a cost and a date in this range."
+    if not dropped:
+        return None
+    count = f"All {in_range}" if dropped == in_range else f"{dropped} of {in_range}"
+    return (f"{count} Google Sheet rows in this range are shipments the parcel log or BackOffice "
+            "already has: they are counted there, not under Google Sheet.")
+
+
 def sheet_spend_rows(setting, date_from, date_to, other_rows, fresh=False):
-    """(rows, problems): the rows in the range of every tab in the setting
+    """(rows, problems, in range, dropped): the rows in the range of every tab in the setting
     that neither an earlier tab, the parcel log nor BackOffice already has
     (same tracking, or no tracking and the order was shipped through
     EasyShip). A tab that can't be read is a problem, the others still count."""
@@ -432,7 +443,8 @@ def sheet_spend_rows(setting, date_from, date_to, other_rows, fresh=False):
         {_tracking_key(r["tracking"]) for r in rows if r["tracking"]},
         {r["order_key"] for r in rows if not r["tracking"]})
     tracking |= {r["tracking"] for r in other_rows if r["source"] == "backoffice" and r["tracking"]}
-    return drop_duplicates(rows, tracking, orders, key="order_key"), problems
+    kept = drop_duplicates(rows, tracking, orders, key="order_key")
+    return kept, problems, len(rows), len(rows) - len(kept)
 
 
 def sources_key():
@@ -463,9 +475,12 @@ def spend_rows(date_from, date_to, fresh=False):
             notices.append(f"BackOffice could not be read ({e}): its invoices are left out.")
     setting = sheet_link()
     if setting:
-        sheet_rows, problems = sheet_spend_rows(setting, date_from, date_to, rows, fresh)
+        sheet_rows, problems, in_range, dropped = sheet_spend_rows(setting, date_from, date_to, rows, fresh)
         rows += sheet_rows
         notices += [f"The Google Sheet could not be read ({p}): its rows are left out." for p in problems]
+        note = sheet_note(in_range, dropped)
+        if note and not (problems and not in_range):
+            notices.append(note)
     merge_names(rows, "carrier")
     merge_names(rows, "store")
     merge_names(rows, "sales_rep", empty=NO_REP)

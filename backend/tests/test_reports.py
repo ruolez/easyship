@@ -191,6 +191,19 @@ class SheetDuplicatesTest(unittest.TestCase):
         self.assertEqual([r["order_key"] for r in kept], ["TS2", "TS4"])
 
 
+class SheetNoteTest(unittest.TestCase):
+    def test_says_what_happened_to_the_rows_in_the_range(self):
+        cases = [(0, 0), (5, 0), (5, 2), (5, 5)]
+        self.assertEqual([reports.sheet_note(n, dropped) for n, dropped in cases], [
+            "The Google Sheet has no rows with a cost and a date in this range.",
+            None,
+            "2 of 5 Google Sheet rows in this range are shipments the parcel log or BackOffice already has: "
+            "they are counted there, not under Google Sheet.",
+            "All 5 Google Sheet rows in this range are shipments the parcel log or BackOffice already has: "
+            "they are counted there, not under Google Sheet.",
+        ])
+
+
 class ShipperNameColumnTest(unittest.TestCase):
     def test_known_names_first_then_first_text_column(self):
         cases = [

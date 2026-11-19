@@ -211,7 +211,9 @@ class ReportsApiTest(unittest.TestCase):
         reports.fetch_sheet = lambda url: tabs[url.rsplit("&", 1)[1]]
         _, res = self.get("/api/reports/spend?from=2026-10-01&to=2026-11-07&source=sheet")
         self.assertEqual((res.get_json()["totals"], res.get_json()["notices"]),
-                         ({"cost": 34.0, "shipments": 4, "avg": 8.5}, []))
+                         ({"cost": 34.0, "shipments": 4, "avg": 8.5},
+                          ["2 of 7 Google Sheet rows in this range are shipments the parcel log or BackOffice "
+                           "already has: they are counted there, not under Google Sheet."]))
 
     def test_an_unreadable_tab_leaves_the_others(self):
         reports.sheet_link = lambda: f"{SHEET_LINK}\n{SHEET_LINK.replace('gid=5', 'gid=6')}"
@@ -224,7 +226,9 @@ class ReportsApiTest(unittest.TestCase):
         _, res = self.get(f"/api/reports/spend?{RANGE}&source=sheet")
         self.assertEqual((res.get_json()["totals"]["cost"], res.get_json()["notices"]),
                          (24.0, ["The Google Sheet could not be read (tab 2: the sheet or tab was not found): "
-                                 "its rows are left out."]))
+                                 "its rows are left out.",
+                                 "2 of 5 Google Sheet rows in this range are shipments the parcel log or BackOffice "
+                                 "already has: they are counted there, not under Google Sheet."]))
 
     def test_check_says_what_each_tab_holds(self):
         with self.client.session_transaction() as sess:
@@ -246,6 +250,14 @@ class ReportsApiTest(unittest.TestCase):
     def test_only_admins_check_sheets(self):
         res = self.client.post("/api/reports/sheet-check", json={"links": SHEET_LINK})
         self.assertEqual(res.status_code, 403)
+
+    def test_a_range_whose_sheet_rows_were_all_shipped_here_says_so(self):
+        reports.sheet_link = lambda: SHEET_LINK
+        reports.parcel_order_matches = lambda tracking, orders: (set(tracking), set(orders))
+        _, res = self.get(f"/api/reports/spend?{RANGE}&source=sheet")
+        self.assertEqual((res.get_json()["totals"]["cost"], res.get_json()["notices"]),
+                         (0, ["All 5 Google Sheet rows in this range are shipments the parcel log or BackOffice "
+                              "already has: they are counted there, not under Google Sheet."]))
 
     def test_the_sheet_download_is_shared_by_ranges_until_refresh(self):
         reports.sheet_link = lambda: SHEET_LINK
