@@ -425,12 +425,16 @@
     <section class="tab-panel" data-panel="reports">
       <div class="card" id="card-reports">
         <h2>Shipping spend</h2>
-        <p class="hint mb-16">Reports add up the parcel log, the shipping costs of this BackOffice database (Invoices_tbl.ShippingCost, carrier from Shippers_tbl) and a Google Sheet tab. A shipment the parcel log already has is counted once, from the parcel log; a sheet row BackOffice already has is skipped.</p>
+        <p class="hint mb-16">Reports add up the parcel log, the shipping costs of this BackOffice database (Invoices_tbl.ShippingCost, carrier from Shippers_tbl) and Google Sheet tabs. A shipment the parcel log already has is counted once, from the parcel log; a sheet row BackOffice already has is skipped.</p>
         <div class="row">
           <div class="field"><label>BackOffice database</label><select id="reports_backoffice_db_id"></select><span class="hint">Not set = no BackOffice invoices</span></div>
         </div>
         <div class="row">
-          <div class="field" style="flex:1"><label>Google Sheet tab</label><input type="url" id="reports_sheet_url" placeholder="https://docs.google.com/spreadsheets/d/…/edit?gid=…"><span class="hint">Open the tab and copy its link. The sheet must be shared with &ldquo;Anyone with the link&rdquo; (viewer). Columns used: Order ID, TRACKING_COMPANY, TRACK NUM, Shipping Cost, DATE; rows without a cost or date are skipped.</span></div>
+          <div class="field" style="flex:1"><label>Google Sheet tabs</label><textarea id="reports_sheet_url" rows="3" spellcheck="false" placeholder="https://docs.google.com/spreadsheets/d/…/edit?gid=…"></textarea><span class="hint">One tab per line: open each tab and copy the link from the address bar (it ends in gid=…). The sheet must be shared with &ldquo;Anyone with the link&rdquo; (viewer). Columns used: Order ID, TRACKING_COMPANY, TRACK NUM, Shipping Cost, DATE; rows without a cost or date are skipped, and a row found in two tabs counts once.</span></div>
+        </div>
+        <div class="row">
+          <div class="fixed"><button class="btn btn-outlined" id="check-sheet">Check tabs</button></div>
+          <div class="field" id="sheet-check-result"></div>
         </div>
       </div>
     </section>

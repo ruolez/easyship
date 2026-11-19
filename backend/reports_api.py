@@ -7,7 +7,7 @@ from datetime import date
 from flask import Blueprint, Response, jsonify, request
 
 import reports
-from auth import section_required
+from auth import admin_required, section_required
 from util import api_error
 
 bp = Blueprint("reports", __name__, url_prefix="/api/reports")
@@ -164,3 +164,18 @@ def spend_csv():
     name = f"shipping-spend-{kind}-{date_from.isoformat()}-to-{date_to.isoformat()}.csv"
     return Response("﻿" + out.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@bp.post("/sheet-check")
+@admin_required
+def sheet_check():
+    """What each tab link in Settings › Reports reads: rows with a cost and a
+    date, their total and date span (downloaded fresh)."""
+    links = reports.sheet_links(str((request.get_json(silent=True) or {}).get("links") or ""))
+    tabs = []
+    for line, link in enumerate(links, 1):
+        try:
+            tabs.append({"line": line, **reports.tab_summary(reports.read_tab(link, fresh=True))})
+        except reports.SheetError as e:
+            tabs.append({"line": line, "error": str(e)})
+    return jsonify({"tabs": tabs})

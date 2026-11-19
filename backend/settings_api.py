@@ -187,9 +187,11 @@ def _reports_settings_error(data):
     if value and not (value.isdigit() and db.query(
             "SELECT 1 FROM backoffice_dbs WHERE id = %s", (int(value),), one=True)):
         return "Choose the Reports BackOffice database from the list"
-    link = str(data.get("reports_sheet_url") or "").strip()
-    if link and not reports.sheet_csv_url(link):
-        return "Paste the link of a Google Sheets tab (https://docs.google.com/spreadsheets/d/…)"
+    links = reports.sheet_links(str(data.get("reports_sheet_url") or ""))
+    for line, link in enumerate(links, 1):
+        error = reports.sheet_link_error(link)
+        if error:
+            return f"Line {line}: {error}" if len(links) > 1 else error
     return None
 
 

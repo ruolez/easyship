@@ -238,15 +238,30 @@ SHEET_COLUMNS = {"order": "order id", "carrier": "tracking_company", "tracking":
 SHEET_REQUIRED = {"order": "Order ID", "cost": "Shipping Cost", "date": "DATE"}
 
 
+NOT_A_SHEET = "Paste the link of a Google Sheets tab (https://docs.google.com/spreadsheets/d/…)"
+NO_TAB = ("This link doesn't say which tab to read: open the tab and copy the link from the "
+          "address bar (it ends in gid=…)")
+
+
+def sheet_links(value):
+    """The tab links of the setting, one per line."""
+    return [line.strip() for line in (value or "").splitlines() if line.strip()]
+
+
+def sheet_link_error(link):
+    if not SHEET_ID.match((link or "").strip()):
+        return NOT_A_SHEET
+    return None if SHEET_GID.search(link) else NO_TAB
+
+
 def sheet_csv_url(link):
-    """The CSV export of the tab a Google Sheets link points at (gid 0 = the
-    first tab), or None when it isn't one. Only this URL is ever fetched."""
-    match = SHEET_ID.match((link or "").strip())
-    if not match:
+    """The CSV export of the tab a Google Sheets link points at, or None when
+    it isn't a tab link (without a gid Google sends the first tab, which is
+    how the wrong tab got read). Only this URL is ever fetched."""
+    if sheet_link_error(link):
         return None
-    gid = SHEET_GID.search(link)
-    return (f"https://docs.google.com/spreadsheets/d/{match.group(1)}"
-            f"/export?format=csv&gid={gid.group(1) if gid else 0}")
+    sheet_id = SHEET_ID.match(link.strip()).group(1)
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={SHEET_GID.search(link).group(1)}"
 
 
 def _sheet_date(value):
@@ -352,9 +367,34 @@ def sheet_text(url, fresh=False):
             return hit[1]
     text = fetch_sheet(url)
     with _sheet_lock:
-        _sheet_cache.clear()
+        for key in [k for k, (at, _) in _sheet_cache.items() if now - at >= SHEET_CACHE_SECONDS]:
+            del _sheet_cache[key]
         _sheet_cache[url] = (now, text)
     return text
+
+
+def read_tab(link, fresh=False):
+    """Every spend row of one tab (no range, no duplicates removed)."""
+    error = sheet_link_error(link)
+    if error:
+        raise SheetError(error)
+    try:
+        return parse_sheet(sheet_text(sheet_csv_url(link), fresh), sheet_stores())
+    except ValueError as e:
+        raise SheetError(str(e))
+
+
+def tab_summary(rows):
+    return {"rows": len(rows), "cost": round(sum(r["cost"] for r in rows), 2),
+            "first": min(r["date"] for r in rows).isoformat() if rows else None,
+            "last": max(r["date"] for r in rows).isoformat() if rows else None}
+
+
+def _sheet_row_key(row):
+    """Same shipment row in two tabs (a month moved to an archive tab)."""
+    if row["tracking"]:
+        return _tracking_key(row["tracking"])
+    return (row["order_key"], row["date"], row["cost"])
 
 
 def parcel_order_matches(tracking, order_keys):
@@ -372,23 +412,27 @@ def parcel_order_matches(tracking, order_keys):
             {r["order_key"] for r in rows if r["order_key"] in order_keys})
 
 
-def sheet_spend_rows(link, date_from, date_to, other_rows, fresh=False):
-    """The sheet's rows in the range that neither the parcel log nor
-    BackOffice already has (same tracking, or no tracking and the order was
-    shipped through EasyShip)."""
-    url = sheet_csv_url(link)
-    if not url:
-        raise SheetError("the link in Settings › Reports is not a Google Sheets link")
-    try:
-        rows = parse_sheet(sheet_text(url, fresh), sheet_stores())
-    except ValueError as e:
-        raise SheetError(str(e))
-    rows = [r for r in rows if date_from <= r["date"] <= date_to]
+def sheet_spend_rows(setting, date_from, date_to, other_rows, fresh=False):
+    """(rows, problems): the rows in the range of every tab in the setting
+    that neither an earlier tab, the parcel log nor BackOffice already has
+    (same tracking, or no tracking and the order was shipped through
+    EasyShip). A tab that can't be read is a problem, the others still count."""
+    links = sheet_links(setting)
+    rows, problems, seen = [], [], set()
+    for line, link in enumerate(links, 1):
+        try:
+            tab = [r for r in read_tab(link, fresh) if date_from <= r["date"] <= date_to]
+        except SheetError as e:
+            problems.append(f"tab {line}: {e}" if len(links) > 1 else str(e))
+            continue
+        keys = {_sheet_row_key(r) for r in tab}
+        rows += [r for r in tab if _sheet_row_key(r) not in seen]
+        seen |= keys
     tracking, orders = parcel_order_matches(
         {_tracking_key(r["tracking"]) for r in rows if r["tracking"]},
         {r["order_key"] for r in rows if not r["tracking"]})
     tracking |= {r["tracking"] for r in other_rows if r["source"] == "backoffice" and r["tracking"]}
-    return drop_duplicates(rows, tracking, orders, key="order_key")
+    return drop_duplicates(rows, tracking, orders, key="order_key"), problems
 
 
 def sources_key():
@@ -417,12 +461,11 @@ def spend_rows(date_from, date_to, fresh=False):
             add_parcel_sales_reps(rows, db_id)
         except Exception as e:  # noqa: BLE001 — any BackOffice failure leaves the parcel log
             notices.append(f"BackOffice could not be read ({e}): its invoices are left out.")
-    link = sheet_link()
-    if link:
-        try:
-            rows += sheet_spend_rows(link, date_from, date_to, rows, fresh)
-        except SheetError as e:
-            notices.append(f"The Google Sheet could not be read ({e}): its rows are left out.")
+    setting = sheet_link()
+    if setting:
+        sheet_rows, problems = sheet_spend_rows(setting, date_from, date_to, rows, fresh)
+        rows += sheet_rows
+        notices += [f"The Google Sheet could not be read ({p}): its rows are left out." for p in problems]
     merge_names(rows, "carrier")
     merge_names(rows, "store")
     merge_names(rows, "sales_rep", empty=NO_REP)

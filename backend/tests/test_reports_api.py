@@ -197,6 +197,56 @@ class ReportsApiTest(unittest.TestCase):
                          (32.5, ["The Google Sheet could not be read (it isn't shared with "
                                  "“Anyone with the link”): its rows are left out."]))
 
+    def test_several_tabs_are_read_and_a_row_in_two_tabs_counts_once(self):
+        archive = SHEET_LINK.replace("gid=5", "gid=6")
+        reports.sheet_link = lambda: f"{SHEET_LINK}\n{archive}"
+        tabs = {
+            "gid=5": SHEET,
+            "gid=6": ("Order ID,TRACKING_COMPANY,Track Your Package,TRACK NUM,TRACKING_URL,Shipping Cost,DATE\n"
+                      "TS2,SpeeDee,Track Your Package,SP1,x,9.00,11/4/2026\n"       # also in the first tab
+                      "TS4,UPS,Track Your Package,,x,7.00,11/5/2026\n"            # also there, untracked
+                      "TS6,UPS,Track Your Package,1Z6,x,4.00,10/30/2026\n"
+                      "TS7,UPS,Track Your Package,1Z7,x,6.00,11/6/2026\n"),
+        }
+        reports.fetch_sheet = lambda url: tabs[url.rsplit("&", 1)[1]]
+        _, res = self.get("/api/reports/spend?from=2026-10-01&to=2026-11-07&source=sheet")
+        self.assertEqual((res.get_json()["totals"], res.get_json()["notices"]),
+                         ({"cost": 34.0, "shipments": 4, "avg": 8.5}, []))
+
+    def test_an_unreadable_tab_leaves_the_others(self):
+        reports.sheet_link = lambda: f"{SHEET_LINK}\n{SHEET_LINK.replace('gid=5', 'gid=6')}"
+
+        def fetch(url):
+            if url.endswith("gid=6"):
+                raise reports.SheetError("the sheet or tab was not found")
+            return SHEET
+        reports.fetch_sheet = fetch
+        _, res = self.get(f"/api/reports/spend?{RANGE}&source=sheet")
+        self.assertEqual((res.get_json()["totals"]["cost"], res.get_json()["notices"]),
+                         (24.0, ["The Google Sheet could not be read (tab 2: the sheet or tab was not found): "
+                                 "its rows are left out."]))
+
+    def test_check_says_what_each_tab_holds(self):
+        with self.client.session_transaction() as sess:
+            sess["role"] = "admin"
+
+        def fetch(url):
+            if url.endswith("gid=6"):
+                raise reports.SheetError("it isn't shared with \u201cAnyone with the link\u201d")
+            return SHEET
+        reports.fetch_sheet = fetch
+        links = f"{SHEET_LINK}\n{SHEET_LINK.replace('gid=5', 'gid=6')}\nhttps://example.com/x"
+        res = self.client.post("/api/reports/sheet-check", json={"links": links})
+        self.assertEqual((res.status_code, res.get_json()), (200, {"tabs": [
+            {"line": 1, "rows": 6, "cost": 71.5, "first": "2026-11-02", "last": "2026-12-01"},
+            {"line": 2, "error": "it isn't shared with \u201cAnyone with the link\u201d"},
+            {"line": 3, "error": "Paste the link of a Google Sheets tab (https://docs.google.com/spreadsheets/d/…)"},
+        ]}))
+
+    def test_only_admins_check_sheets(self):
+        res = self.client.post("/api/reports/sheet-check", json={"links": SHEET_LINK})
+        self.assertEqual(res.status_code, 403)
+
     def test_the_sheet_download_is_shared_by_ranges_until_refresh(self):
         reports.sheet_link = lambda: SHEET_LINK
         fetched = []

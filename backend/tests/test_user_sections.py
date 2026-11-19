@@ -60,9 +60,14 @@ class ReportsSettingsValidationTest(unittest.TestCase):
 
     def test_the_sheet_link_must_be_a_google_sheet(self):
         sheet = "https://docs.google.com/spreadsheets/d/12iZSxRc0fBBfhNFu8QQxwWgR78YrywUAeXAnz-kRKb8/edit?gid=1"
+        no_tab = sheet.replace("edit?gid=1", "edit?usp=sharing")
         cases = [({"reports_sheet_url": ""}, None), ({"reports_sheet_url": sheet}, None),
+                 ({"reports_sheet_url": f"{sheet}\n{sheet.replace('gid=1', 'gid=2')}"}, None),
                  ({"reports_sheet_url": "https://example.com/sheet.csv"},
-                  "Paste the link of a Google Sheets tab (https://docs.google.com/spreadsheets/d/…)")]
+                  "Paste the link of a Google Sheets tab (https://docs.google.com/spreadsheets/d/…)"),
+                 ({"reports_sheet_url": f"{sheet}\n{no_tab}"},
+                  "Line 2: This link doesn't say which tab to read: open the tab and copy the link from "
+                  "the address bar (it ends in gid=…)")]
         self.assertEqual([settings_api._reports_settings_error(d) for d, _ in cases],
                          [expected for _, expected in cases])
 

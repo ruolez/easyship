@@ -2075,6 +2075,23 @@ document.getElementById('test-shipper').addEventListener('click', () => {
   }));
 });
 
+document.getElementById('check-sheet').addEventListener('click', async () => {
+  const el = document.getElementById('sheet-check-result');
+  el.innerHTML = '<span class="spinner"></span>';
+  const day = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-US');
+  try {
+    const { tabs } = await api('/api/reports/sheet-check', {
+      method: 'POST', body: { links: document.getElementById('reports_sheet_url').value },
+    });
+    el.innerHTML = tabs.length ? tabs.map((t) => (t.error
+      ? `<div><span class="chip static err">✕ Line ${t.line}: ${esc(t.error)}</span></div>`
+      : `<div><span class="chip static ok">✓ Line ${t.line}: ${t.rows.toLocaleString('en-US')} rows with a cost, ${money(t.cost)}${t.rows ? `, ${day(t.first)} – ${day(t.last)}` : ''}</span></div>`)).join('')
+      : '<span class="hint">Paste a tab link first</span>';
+  } catch (err) {
+    el.innerHTML = `<span class="chip static err">✕ ${esc(err.message)}</span>`;
+  }
+});
+
 document.getElementById('test-dbadmin').addEventListener('click', () => {
   testResult('dbadmin-test-result', api('/api/settings/test/dbadmin', {
     method: 'POST',

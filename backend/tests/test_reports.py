@@ -124,15 +124,30 @@ class SummarizeTest(unittest.TestCase):
                          {"cost": 0, "shipments": 0, "avg": 0.0})
 
 
+SHEET_ID = "12iZSxRc0fBBfhNFu8QQxwWgR78YrywUAeXAnz-kRKb8"
+NOT_A_SHEET = "Paste the link of a Google Sheets tab (https://docs.google.com/spreadsheets/d/…)"
+NO_TAB = ("This link doesn't say which tab to read: open the tab and copy the link from the "
+          "address bar (it ends in gid=…)")
+
+
 class SheetCsvUrlTest(unittest.TestCase):
     def test_the_tab_link_becomes_its_csv_export(self):
-        sheet = "12iZSxRc0fBBfhNFu8QQxwWgR78YrywUAeXAnz-kRKb8"
-        cases = [f"https://docs.google.com/spreadsheets/d/{sheet}/edit?gid=156688159#gid=156688159",
-                 f"https://docs.google.com/spreadsheets/d/{sheet}/edit",
+        cases = [f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit?gid=156688159#gid=156688159",
+                 f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid=2073979776",
+                 f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit?usp=sharing",   # Share › Copy link
                  "https://example.com/spreadsheets/d/abc", "", None]
-        export = f"https://docs.google.com/spreadsheets/d/{sheet}/export?format=csv&gid="
+        export = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid="
         self.assertEqual([reports.sheet_csv_url(c) for c in cases],
-                         [export + "156688159", export + "0", None, None, None])
+                         [export + "156688159", export + "2073979776", None, None, None, None])
+
+    def test_a_link_that_names_no_tab_is_explained(self):
+        cases = [f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit?gid=1",
+                 f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit?usp=sharing",
+                 "https://example.com/sheet.csv"]
+        self.assertEqual([reports.sheet_link_error(c) for c in cases], [None, NO_TAB, NOT_A_SHEET])
+
+    def test_one_link_per_line(self):
+        self.assertEqual(reports.sheet_links(" a \n\n  b\r\n"), ["a", "b"])
 
 
 STORES = [{"name": "TStock", "prefix": "TS"}, {"name": "TStock Wholesale", "prefix": "TSW"},
