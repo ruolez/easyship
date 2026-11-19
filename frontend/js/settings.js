@@ -12,7 +12,7 @@ const BASE_SETTING_IDS = [
   'verify_skip_prefixes_shopify', 'verify_skip_prefixes_backoffice',
   'picklist_backoffice_db_id', 'picklist_inventory_db_id', 'picklist_quote_status', 'picklist_title_prefix',
   'picklist_number_tag', 'picklist_hidden_tags', 'picklist_rules', 'picklist_presets',
-  'reports_backoffice_db_id',
+  'reports_backoffice_db_id', 'reports_sheet_url',
 ];
 let SETTING_IDS = [...BASE_SETTING_IDS];
 

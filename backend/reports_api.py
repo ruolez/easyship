@@ -23,8 +23,8 @@ _cache_lock = threading.Lock()
 
 
 def _cached_rows(date_from, date_to, fresh):
-    # The chosen database is part of the key so a Settings change shows at once.
-    key = (date_from, date_to, reports.reports_db_id())
+    # The chosen database and sheet are part of the key so a Settings change shows at once.
+    key = (date_from, date_to, reports.sources_key())
     now = time.monotonic()
     with _cache_lock:
         hit = _cache.get(key)

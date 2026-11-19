@@ -31,6 +31,17 @@ INVOICES = [
 ]
 
 
+SHEET_LINK = "https://docs.google.com/spreadsheets/d/12iZSxRc0fBBfhNFu8QQxwWgR78YrywUAeXAnz-kRKb8/edit?gid=5"
+SHEET = """Order ID,TRACKING_COMPANY,Track Your Package,TRACK NUM,TRACKING_URL,Shipping Cost,DATE
+TS1,UPS,Track Your Package,1z1,x,12.50,11/2/2026
+TS2,SpeeDee,Track Your Package,SP1,x,9.00,11/4/2026
+TS2,SpeeDee,Track Your Package,SP2,x,8.00,11/4/2026
+TS3,,Track Your Package,,N/A,30.00,11/5/2026
+TS4,UPS,Track Your Package,,x,7.00,11/5/2026
+TS5,UPS,Track Your Package,1Z9,x,5.00,12/1/2026
+"""
+
+
 class ReportsApiTest(unittest.TestCase):
     """The Reports page reads both sources through /api/reports; a BackOffice
     problem never fails it, and only users with the Reports section get in."""
@@ -38,7 +49,9 @@ class ReportsApiTest(unittest.TestCase):
     def setUp(self):
         saved = [(auth, "user_sections"), (reports, "parcel_spend_rows"), (reports, "parcel_matches"),
                  (reports, "reports_db_id"), (backoffice, "get_db_config"),
-                 (backoffice, "shipping_spend_invoices"), (backoffice, "invoice_sales_reps")]
+                 (backoffice, "shipping_spend_invoices"), (backoffice, "invoice_sales_reps"),
+                 (reports, "sheet_link"), (reports, "fetch_sheet"), (reports, "sheet_stores"),
+                 (reports, "parcel_order_matches")]
         for mod, name in saved:
             self.addCleanup(setattr, mod, name, getattr(mod, name))
         reports_api._cache.clear()
@@ -50,6 +63,10 @@ class ReportsApiTest(unittest.TestCase):
         backoffice.get_db_config = lambda db_id: {"name": "BackOffice Main"}
         backoffice.shipping_spend_invoices = lambda db_id, f, t: [dict(i) for i in INVOICES]
         backoffice.invoice_sales_reps = lambda db_id, ids: {}
+        reports.sheet_link = lambda: ""
+        reports.fetch_sheet = lambda url: SHEET
+        reports.sheet_stores = lambda: [{"name": "Shop A", "prefix": "TS"}]
+        reports.parcel_order_matches = lambda tracking, orders: ({"1Z1"} & set(tracking), {"TS3"} & set(orders))
         app = Flask(__name__)
         app.secret_key = "test"
         app.register_blueprint(reports_api.bp)
@@ -95,14 +112,14 @@ class ReportsApiTest(unittest.TestCase):
         _, res = self.get(f"/api/reports/spend?{RANGE}")
         body = res.get_json()
         self.assertEqual((body["totals"]["cost"], body["notices"]),
-                         (12.5, ["BackOffice could not be read (connection refused): showing the parcel log only."]))
+                         (12.5, ["BackOffice could not be read (connection refused): its invoices are left out."]))
 
     def test_no_backoffice_chosen(self):
         reports.reports_db_id = lambda: None
         _, res = self.get(f"/api/reports/spend?{RANGE}")
         self.assertEqual(res.get_json()["notices"],
                          ["No BackOffice database is chosen for Reports (Settings › Reports): "
-                          "showing the parcel log only."])
+                          "its invoices are left out."])
 
     def test_rows_are_paged_and_sorted(self):
         _, res = self.get(f"/api/reports/spend/rows?{RANGE}&sort=cost&dir=desc&limit=1")
@@ -139,6 +156,45 @@ class ReportsApiTest(unittest.TestCase):
             (asked, all_reps.get_json()["options"]["reps"],
              [(r["ref"], r["sales_rep"]) for r in anna.get_json()["rows"]]),
             ([(3, [9])], ["anna", "Bob", "No sales rep"], [("INV9", "anna")]))
+
+    def test_the_google_sheet_adds_what_the_other_sources_do_not_have(self):
+        reports.sheet_link = lambda: SHEET_LINK
+        fetched = []
+        reports.fetch_sheet = lambda url: fetched.append(url) or SHEET
+        _, res = self.get(f"/api/reports/spend?{RANGE}&source=sheet")
+        _, rows = self.get(f"/api/reports/spend/rows?{RANGE}&source=sheet&sort=date&dir=asc")
+        body = res.get_json()
+        self.assertEqual(
+            (fetched, body["totals"], body["by_carrier"], body["options"]["sources"][-1],
+             [(r["ref"], r["store"], r["tracking"], r["sales_rep"]) for r in rows.get_json()["rows"]]),
+            (["https://docs.google.com/spreadsheets/d/12iZSxRc0fBBfhNFu8QQxwWgR78YrywUAeXAnz-kRKb8"
+              "/export?format=csv&gid=5"],
+             {"cost": 24.0, "shipments": 2, "avg": 12.0},
+             [{"name": "SpeeDee", "cost": 17.0, "shipments": 1, "avg": 17.0, "share": 70.8},
+              {"name": "UPS", "cost": 7.0, "shipments": 1, "avg": 7.0, "share": 29.2}],
+             {"value": "sheet", "label": "Google Sheet"},
+             [("TS2", "Shop A", "SP1", "No sales rep"), ("TS2", "Shop A", "SP2", "No sales rep"),
+              ("TS4", "Shop A", "", "No sales rep")]))
+
+    def test_a_sheet_tracking_number_backoffice_already_has_is_skipped(self):
+        reports.sheet_link = lambda: SHEET_LINK
+        reports.fetch_sheet = lambda url: SHEET.replace("SP2", "INV8-TRACK")
+        backoffice.shipping_spend_invoices = lambda db_id, f, t: [
+            {**INVOICES[1], "tracking": "inv8-track"}]
+        _, res = self.get(f"/api/reports/spend/rows?{RANGE}&source=sheet")
+        self.assertEqual(sorted(r["tracking"] for r in res.get_json()["rows"]), ["", "SP1"])
+
+    def test_an_unreadable_sheet_leaves_the_other_sources(self):
+        reports.sheet_link = lambda: SHEET_LINK
+
+        def private(url):
+            raise reports.SheetError("it isn't shared with “Anyone with the link”")
+        reports.fetch_sheet = private
+        _, res = self.get(f"/api/reports/spend?{RANGE}")
+        body = res.get_json()
+        self.assertEqual((body["totals"]["cost"], body["notices"]),
+                         (32.5, ["The Google Sheet could not be read (it isn't shared with "
+                                 "“Anyone with the link”): its rows are left out."]))
 
     def test_the_backoffice_read_is_reused_for_a_minute(self):
         calls = []

@@ -13,6 +13,7 @@ import dbadmin
 import picklist_rules
 import profit
 import providers
+import reports
 import shopify_auth
 import shopify_client
 import tag_rules
@@ -60,6 +61,7 @@ BASE_SETTING_KEYS = [
     "picklist_backoffice_db_id",
     "picklist_inventory_db_id",
     "reports_backoffice_db_id",
+    "reports_sheet_url",
     "picklist_quote_status",
     "picklist_title_prefix",
     "picklist_number_tag",
@@ -181,12 +183,13 @@ def _picklist_settings_error(data):
 
 
 def _reports_settings_error(data):
-    if "reports_backoffice_db_id" not in data:
-        return None
     value = str(data.get("reports_backoffice_db_id") or "").strip()
     if value and not (value.isdigit() and db.query(
             "SELECT 1 FROM backoffice_dbs WHERE id = %s", (int(value),), one=True)):
         return "Choose the Reports BackOffice database from the list"
+    link = str(data.get("reports_sheet_url") or "").strip()
+    if link and not reports.sheet_csv_url(link):
+        return "Paste the link of a Google Sheets tab (https://docs.google.com/spreadsheets/d/…)"
     return None
 
 

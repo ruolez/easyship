@@ -58,6 +58,14 @@ class ReportsSettingsValidationTest(unittest.TestCase):
         finally:
             settings_api.db.query = orig
 
+    def test_the_sheet_link_must_be_a_google_sheet(self):
+        sheet = "https://docs.google.com/spreadsheets/d/12iZSxRc0fBBfhNFu8QQxwWgR78YrywUAeXAnz-kRKb8/edit?gid=1"
+        cases = [({"reports_sheet_url": ""}, None), ({"reports_sheet_url": sheet}, None),
+                 ({"reports_sheet_url": "https://example.com/sheet.csv"},
+                  "Paste the link of a Google Sheets tab (https://docs.google.com/spreadsheets/d/…)")]
+        self.assertEqual([settings_api._reports_settings_error(d) for d, _ in cases],
+                         [expected for _, expected in cases])
+
 
 class QuotationDetailRowTest(unittest.TestCase):
     def test_values_follow_the_column_list(self):

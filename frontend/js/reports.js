@@ -4,7 +4,7 @@
    names that stay. Past eight, names fold into Other. */
 const RP_PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
 const RP_OTHER = '#9aa3b2';
-const RP_SOURCES = { parcels: 'Parcel log', backoffice: 'BackOffice' };
+const RP_SOURCES = { parcels: 'Parcel log', backoffice: 'BackOffice', sheet: 'Google Sheet' };
 const RP_PAGE = 100;
 const RP_KEY = 'reports.filters';
 

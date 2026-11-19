@@ -124,6 +124,58 @@ class SummarizeTest(unittest.TestCase):
                          {"cost": 0, "shipments": 0, "avg": 0.0})
 
 
+class SheetCsvUrlTest(unittest.TestCase):
+    def test_the_tab_link_becomes_its_csv_export(self):
+        sheet = "12iZSxRc0fBBfhNFu8QQxwWgR78YrywUAeXAnz-kRKb8"
+        cases = [f"https://docs.google.com/spreadsheets/d/{sheet}/edit?gid=156688159#gid=156688159",
+                 f"https://docs.google.com/spreadsheets/d/{sheet}/edit",
+                 "https://example.com/spreadsheets/d/abc", "", None]
+        export = f"https://docs.google.com/spreadsheets/d/{sheet}/export?format=csv&gid="
+        self.assertEqual([reports.sheet_csv_url(c) for c in cases],
+                         [export + "156688159", export + "0", None, None, None])
+
+
+STORES = [{"name": "TStock", "prefix": "TS"}, {"name": "TStock Wholesale", "prefix": "TSW"},
+          {"name": "Pipe World", "prefix": "#PW"}]
+SHEET = """Order ID,TRACKING_COMPANY,Track Your Package,TRACK NUM,TRACKING_URL,Shipping Cost,DATE,ORDER TOTAL
+TSW7546,SpeeDee,Track Your Package,SP034,https://x,16.65,11/2/2026,
+"TSW7570
+",,Track Your Package,5924.110626,N/A,$47.13,11/6/2026,
+TS8390997,Stamps.com,1Z999,,https://x,"1,015.92",11/09/2026,
+pw116447,UPS,Track Your Package,1Z1,https://x,17.89,11/9/2026,
+A2Z100011001,UPS,Track Your Package,1Z2,https://x,13.53,11/9/2026,
+TSW7571,UPS,Track Your Package,1Z3,https://x,,11/9/2026,
+TSW7572,UPS,Track Your Package,1Z4,https://x,0,11/9/2026,
+TSW7573,UPS,Track Your Package,1Z5,https://x,12.00,,
+,,,,N/A,,,
+"""
+
+
+class ParseSheetTest(unittest.TestCase):
+    def test_rows_with_a_cost_and_a_date_become_spend_rows(self):
+        rows = reports.parse_sheet(SHEET, STORES)
+        self.assertEqual(
+            [(r["date"].isoformat(), r["store"], r["carrier"], r["ref"], r["tracking"], r["cost"], r["shipment"])
+             for r in rows],
+            [("2026-11-02", "TStock Wholesale", "SpeeDee", "TSW7546", "SP034", 16.65, "sheet:TSW7546"),
+             ("2026-11-06", "TStock Wholesale", "", "TSW7570", "5924.110626", 47.13, "sheet:TSW7570"),
+             ("2026-11-09", "TStock", "USPS", "TS8390997", "1Z999", 1015.92, "sheet:TS8390997"),
+             ("2026-11-09", "Pipe World", "UPS", "pw116447", "1Z1", 17.89, "sheet:PW116447"),
+             ("2026-11-09", "", "UPS", "A2Z100011001", "1Z2", 13.53, "sheet:A2Z100011001")])
+
+    def test_a_sheet_without_the_needed_columns_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "Shipping Cost, DATE"):
+            reports.parse_sheet("Order ID,TRACK NUM\nTS1,1Z\n", STORES)
+
+
+class SheetDuplicatesTest(unittest.TestCase):
+    def test_tracking_matches_go_and_untracked_orders_go_when_shipped_here(self):
+        rows = [{"tracking": "1z1", "order_key": "TS1"}, {"tracking": "1Z2", "order_key": "TS2"},
+                {"tracking": "", "order_key": "TS3"}, {"tracking": "", "order_key": "TS4"}]
+        kept = reports.drop_duplicates(rows, {"1Z1"}, {"TS3", "TS2"}, key="order_key")
+        self.assertEqual([r["order_key"] for r in kept], ["TS2", "TS4"])
+
+
 class ShipperNameColumnTest(unittest.TestCase):
     def test_known_names_first_then_first_text_column(self):
         cases = [
