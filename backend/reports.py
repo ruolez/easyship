@@ -5,6 +5,8 @@ carrier and store."""
 import csv
 import io
 import re
+import threading
+import time
 from datetime import date, datetime, timedelta
 
 import requests
@@ -335,6 +337,26 @@ def fetch_sheet(url):
     return res.text
 
 
+# The sheet is one download for every range (the Archive tab is ~7 MB), kept
+# a few minutes; Refresh on the page downloads it again.
+SHEET_CACHE_SECONDS = 300
+_sheet_cache = {}
+_sheet_lock = threading.Lock()
+
+
+def sheet_text(url, fresh=False):
+    now = time.monotonic()
+    with _sheet_lock:
+        hit = _sheet_cache.get(url)
+        if hit and not fresh and now - hit[0] < SHEET_CACHE_SECONDS:
+            return hit[1]
+    text = fetch_sheet(url)
+    with _sheet_lock:
+        _sheet_cache.clear()
+        _sheet_cache[url] = (now, text)
+    return text
+
+
 def parcel_order_matches(tracking, order_keys):
     """(tracking numbers, upper-case Shopify order names) of live parcels
     among the ones given."""
@@ -350,7 +372,7 @@ def parcel_order_matches(tracking, order_keys):
             {r["order_key"] for r in rows if r["order_key"] in order_keys})
 
 
-def sheet_spend_rows(link, date_from, date_to, other_rows):
+def sheet_spend_rows(link, date_from, date_to, other_rows, fresh=False):
     """The sheet's rows in the range that neither the parcel log nor
     BackOffice already has (same tracking, or no tracking and the order was
     shipped through EasyShip)."""
@@ -358,7 +380,7 @@ def sheet_spend_rows(link, date_from, date_to, other_rows):
     if not url:
         raise SheetError("the link in Settings › Reports is not a Google Sheets link")
     try:
-        rows = parse_sheet(fetch_sheet(url), sheet_stores())
+        rows = parse_sheet(sheet_text(url, fresh), sheet_stores())
     except ValueError as e:
         raise SheetError(str(e))
     rows = [r for r in rows if date_from <= r["date"] <= date_to]
@@ -379,7 +401,7 @@ def reports_db_id():
     return int(raw) if raw.isdigit() else None
 
 
-def spend_rows(date_from, date_to):
+def spend_rows(date_from, date_to, fresh=False):
     """Both sources, names merged. The parcel log always answers; a missing or
     unreachable BackOffice becomes a notice instead of an error."""
     rows = parcel_spend_rows(date_from, date_to)
@@ -398,7 +420,7 @@ def spend_rows(date_from, date_to):
     link = sheet_link()
     if link:
         try:
-            rows += sheet_spend_rows(link, date_from, date_to, rows)
+            rows += sheet_spend_rows(link, date_from, date_to, rows, fresh)
         except SheetError as e:
             notices.append(f"The Google Sheet could not be read ({e}): its rows are left out.")
     merge_names(rows, "carrier")

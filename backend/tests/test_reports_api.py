@@ -55,6 +55,7 @@ class ReportsApiTest(unittest.TestCase):
         for mod, name in saved:
             self.addCleanup(setattr, mod, name, getattr(mod, name))
         reports_api._cache.clear()
+        reports._sheet_cache.clear()
         self.sections = ["reports"]
         auth.user_sections = lambda user_id, role: self.sections
         reports.parcel_spend_rows = lambda f, t: [dict(r) for r in PARCELS]
@@ -195,6 +196,15 @@ class ReportsApiTest(unittest.TestCase):
         self.assertEqual((body["totals"]["cost"], body["notices"]),
                          (32.5, ["The Google Sheet could not be read (it isn't shared with "
                                  "“Anyone with the link”): its rows are left out."]))
+
+    def test_the_sheet_download_is_shared_by_ranges_until_refresh(self):
+        reports.sheet_link = lambda: SHEET_LINK
+        fetched = []
+        reports.fetch_sheet = lambda url: fetched.append(url) or SHEET
+        self.get(f"/api/reports/spend?{RANGE}")
+        self.get("/api/reports/spend?from=2026-11-01&to=2026-11-30")
+        self.get(f"/api/reports/spend?{RANGE}&fresh=1")
+        self.assertEqual(len(fetched), 2)
 
     def test_the_backoffice_read_is_reused_for_a_minute(self):
         calls = []

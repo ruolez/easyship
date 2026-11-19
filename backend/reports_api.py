@@ -30,7 +30,7 @@ def _cached_rows(date_from, date_to, fresh):
         hit = _cache.get(key)
         if hit and not fresh and now - hit[0] < CACHE_SECONDS:
             return hit[1]
-    result = reports.spend_rows(date_from, date_to)
+    result = reports.spend_rows(date_from, date_to, fresh)
     with _cache_lock:
         for k in [k for k, (at, _) in _cache.items() if now - at >= CACHE_SECONDS]:
             del _cache[k]
