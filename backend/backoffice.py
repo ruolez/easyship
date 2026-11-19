@@ -129,7 +129,8 @@ def _shipper_name_column(db_id, cur):
 
 def shipping_spend_invoices(db_id, date_from, date_to):
     """Invoices with a shipping cost shipped between the two dates (inclusive;
-    ShipDate, else InvoiceDate), with the carrier name from Shippers_tbl."""
+    ShipDate, else InvoiceDate), with the carrier name from Shippers_tbl and
+    the sales rep's first name from Employees_tbl."""
     conn = _connect(db_id)
     try:
         with conn.cursor(as_dict=True) as cur:
@@ -139,8 +140,9 @@ def shipping_spend_invoices(db_id, date_from, date_to):
             cur.execute(
                 f"""SELECT i.InvoiceID, i.InvoiceNumber, i.BusinessName, i.TrackingNo,
                            i.ShippingCost, COALESCE(i.ShipDate, i.InvoiceDate) AS ShippedOn,
-                           {shipper} AS ShipperName
+                           {shipper} AS ShipperName, e.FirstName AS SalesRep
                     FROM Invoices_tbl i {join}
+                    LEFT JOIN Employees_tbl e ON e.EmployeeID = i.SalesRepID
                     WHERE (i.Void IS NULL OR i.Void = 0) AND i.ShippingCost > 0
                       AND COALESCE(i.ShipDate, i.InvoiceDate) >= %s
                       AND COALESCE(i.ShipDate, i.InvoiceDate) < %s""",
@@ -159,9 +161,35 @@ def shipping_spend_invoices(db_id, date_from, date_to):
             "cost": float(r["ShippingCost"]),
             "date": r["ShippedOn"].date(),
             "carrier": str(r["ShipperName"] or "").strip(),
+            "sales_rep": (r["SalesRep"] or "").strip(),
         }
         for r in rows
     ]
+
+
+def invoice_sales_reps(db_id, invoice_ids):
+    """InvoiceID → the sales rep's first name, for the invoices that have one."""
+    ids = sorted({int(i) for i in invoice_ids if i is not None})
+    reps = {}
+    if not ids:
+        return reps
+    conn = _connect(db_id)
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            for start in range(0, len(ids), UPC_CHUNK):
+                chunk = ids[start:start + UPC_CHUNK]
+                cur.execute(
+                    f"""SELECT i.InvoiceID, e.FirstName FROM Invoices_tbl i
+                        JOIN Employees_tbl e ON e.EmployeeID = i.SalesRepID
+                        WHERE i.InvoiceID IN ({",".join(["%s"] * len(chunk))})""",
+                    tuple(chunk),
+                )
+                for r in cur.fetchall():
+                    if (r["FirstName"] or "").strip():
+                        reps[r["InvoiceID"]] = r["FirstName"].strip()
+    finally:
+        conn.close()
+    return reps
 
 
 def find_invoice_id_by_number(db_id, number):

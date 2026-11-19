@@ -50,6 +50,11 @@ class CarrierNameTest(unittest.TestCase):
 
 
 class MergeNamesTest(unittest.TestCase):
+    def test_an_empty_name_can_have_its_own_label(self):
+        rows = [row(sales_rep=""), row(sales_rep=" anna "), row("backoffice", sales_rep="Anna")]
+        self.assertEqual([r["sales_rep"] for r in reports.merge_names(rows, "sales_rep", empty=reports.NO_REP)],
+                         ["No sales rep", "anna", "anna"])
+
     def test_case_and_spaces_merge_and_the_parcel_spelling_wins(self):
         rows = [row("backoffice", carrier=" ups "), row(carrier="UPS"), row("backoffice", carrier=""),
                 row("backoffice", carrier="Fed Ex"), row(carrier=None)]
@@ -72,13 +77,16 @@ class DropDuplicatesTest(unittest.TestCase):
 
 class FilterRowsTest(unittest.TestCase):
     def test_each_filter_narrows_and_empty_means_all(self):
-        rows = [row(carrier="UPS", store="A"), row("backoffice", carrier="USPS", store="B"),
-                row(carrier="USPS", store="A")]
+        rows = [row(carrier="UPS", store="A", sales_rep="Anna"),
+                row("backoffice", carrier="USPS", store="B", sales_rep="Bob"),
+                row(carrier="USPS", store="A", sales_rep="No sales rep")]
         self.assertEqual(
             [len(reports.filter_rows(rows)), len(reports.filter_rows(rows, carriers=["usps"])),
              len(reports.filter_rows(rows, carriers=["USPS"], stores=["A"])),
-             len(reports.filter_rows(rows, sources=["backoffice"]))],
-            [3, 2, 1, 1])
+             len(reports.filter_rows(rows, sources=["backoffice"])),
+             len(reports.filter_rows(rows, reps=["anna", "No sales rep"])),
+             len(reports.filter_rows(rows, carriers=["USPS"], reps=["Bob"]))],
+            [3, 2, 1, 1, 2, 1])
 
 
 class SummarizeTest(unittest.TestCase):

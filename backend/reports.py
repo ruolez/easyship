@@ -1,6 +1,6 @@
 """Shipping spend from the parcel log and one BackOffice database, merged
-into one list of rows {source, date, store, carrier, service, ref, tracking,
-cost, shipment} and summarised by period, carrier and store."""
+into one list of rows {source, date, store, carrier, sales_rep, service, ref,
+tracking, cost, shipment} and summarised by period, carrier and store."""
 from datetime import timedelta
 
 import backoffice
@@ -11,6 +11,7 @@ SETTING_DB = "reports_backoffice_db_id"
 BUCKETS = ("day", "week", "month")
 SOURCES = {"parcels": "Parcel log", "backoffice": "BackOffice"}
 UNKNOWN = "Unknown"
+NO_REP = "No sales rep"
 COUNTED_STATUSES = ("label_created", "fulfilled")
 
 # Postage providers and ShipStation's own carrier accounts are not carriers:
@@ -48,15 +49,15 @@ def carrier_name(raw):
     return "USPS" if lowered in USPS_RESELLERS else name
 
 
-def merge_names(rows, field):
+def merge_names(rows, field, empty=UNKNOWN):
     """One spelling per name, ignoring case and outer spaces; the parcel log's
-    spelling wins, empty becomes Unknown. Rewrites the rows in place."""
+    spelling wins, empty becomes `empty`. Rewrites the rows in place."""
     spelling = {}
     for row in sorted(rows, key=lambda r: r["source"] != "parcels"):
-        name = (row[field] or "").strip() or UNKNOWN
+        name = (row[field] or "").strip() or empty
         spelling.setdefault(name.lower(), name)
     for row in rows:
-        row[field] = spelling[((row[field] or "").strip() or UNKNOWN).lower()]
+        row[field] = spelling[((row[field] or "").strip() or empty).lower()]
     return rows
 
 
@@ -80,14 +81,16 @@ def drop_duplicates(bo_rows, parcel_tracking, parcel_invoice_ids):
     return kept
 
 
-def filter_rows(rows, carriers=(), stores=(), sources=()):
+def filter_rows(rows, carriers=(), stores=(), sources=(), reps=()):
     """Empty selection = everything; names compare ignoring case."""
     carriers = {c.lower() for c in carriers}
     stores = {s.lower() for s in stores}
+    reps = {r.lower() for r in reps}
     sources = set(sources)
     return [r for r in rows
             if (not carriers or r["carrier"].lower() in carriers)
             and (not stores or r["store"].lower() in stores)
+            and (not reps or r["sales_rep"].lower() in reps)
             and (not sources or r["source"] in sources)]
 
 
@@ -143,7 +146,7 @@ def parcel_spend_rows(date_from, date_to):
         f"""SELECT s.id, s.group_id, (s.created_at AT TIME ZONE 'America/Chicago')::date AS day,
                    {SERVICE_NAME_SQL} AS store, {CARRIER_SQL} AS carrier, s.courier_name AS service,
                    COALESCE(s.shopify_order_name, s.backoffice_invoice_number) AS ref,
-                   s.tracking_number, s.shipping_cost
+                   s.tracking_number, s.shipping_cost, s.backoffice_db_id, s.backoffice_invoice_id
             FROM shipments s
             LEFT JOIN shopify_stores ss ON ss.id = s.shopify_store_id
             LEFT JOIN backoffice_dbs bd ON bd.id = s.backoffice_db_id
@@ -161,6 +164,9 @@ def parcel_spend_rows(date_from, date_to):
         "tracking": r["tracking_number"] or "",
         "cost": float(r["shipping_cost"]),
         "shipment": r["group_id"] or f"#{r['id']}",
+        "sales_rep": "",
+        "bo_db_id": r["backoffice_db_id"],
+        "invoice_id": r["backoffice_invoice_id"],
     } for r in rows]
 
 
@@ -195,7 +201,19 @@ def backoffice_spend_rows(db_id, store_name, date_from, date_to):
         "cost": i["cost"],
         "shipment": f"bo:{i['invoice_id']}",
         "invoice_id": i["invoice_id"],
+        "sales_rep": i["sales_rep"],
     } for i in drop_duplicates(invoices, tracking, invoice_ids)]
+
+
+def add_parcel_sales_reps(rows, db_id):
+    """Parcels shipped for an invoice of the Reports database take that
+    invoice's sales rep; Shopify orders and other databases have none."""
+    linked = [r for r in rows if r["source"] == "parcels" and r.get("bo_db_id") == db_id and r.get("invoice_id")]
+    if not linked:
+        return
+    reps = backoffice.invoice_sales_reps(db_id, {r["invoice_id"] for r in linked})
+    for r in linked:
+        r["sales_rep"] = reps.get(r["invoice_id"], "")
 
 
 def reports_db_id():
@@ -216,8 +234,10 @@ def spend_rows(date_from, date_to):
         try:
             cfg = backoffice.get_db_config(db_id)
             rows += backoffice_spend_rows(db_id, cfg["name"], date_from, date_to)
+            add_parcel_sales_reps(rows, db_id)
         except Exception as e:  # noqa: BLE001 — any BackOffice failure leaves the parcel log
             notices.append(f"BackOffice could not be read ({e}): showing the parcel log only.")
     merge_names(rows, "carrier")
     merge_names(rows, "store")
+    merge_names(rows, "sales_rep", empty=NO_REP)
     return rows, notices

@@ -20,13 +20,14 @@ import reports_api  # noqa: E402
 RANGE = "from=2026-11-01&to=2026-11-07"
 PARCELS = [
     {"source": "parcels", "date": date(2026, 11, 2), "store": "Shop A", "carrier": "UPS", "service": "Ground",
-     "ref": "#1001", "tracking": "1Z1", "cost": 12.5, "shipment": "g1"},
+     "ref": "#1001", "tracking": "1Z1", "cost": 12.5, "shipment": "g1", "sales_rep": "",
+     "bo_db_id": None, "invoice_id": None},
 ]
 INVOICES = [
     {"invoice_id": 7, "invoice_number": "INV7", "business_name": "Acme", "tracking": "1Z1",
-     "cost": 12.5, "date": date(2026, 11, 2), "carrier": "ups"},     # EasyShip shipped it
+     "cost": 12.5, "date": date(2026, 11, 2), "carrier": "ups", "sales_rep": "Anna"},  # EasyShip shipped it
     {"invoice_id": 8, "invoice_number": "INV8", "business_name": "Beta", "tracking": "",
-     "cost": 20.0, "date": date(2026, 11, 3), "carrier": "ups"},     # shipped elsewhere
+     "cost": 20.0, "date": date(2026, 11, 3), "carrier": "ups", "sales_rep": "Bob"},   # shipped elsewhere
 ]
 
 
@@ -37,7 +38,7 @@ class ReportsApiTest(unittest.TestCase):
     def setUp(self):
         saved = [(auth, "user_sections"), (reports, "parcel_spend_rows"), (reports, "parcel_matches"),
                  (reports, "reports_db_id"), (backoffice, "get_db_config"),
-                 (backoffice, "shipping_spend_invoices")]
+                 (backoffice, "shipping_spend_invoices"), (backoffice, "invoice_sales_reps")]
         for mod, name in saved:
             self.addCleanup(setattr, mod, name, getattr(mod, name))
         reports_api._cache.clear()
@@ -48,6 +49,7 @@ class ReportsApiTest(unittest.TestCase):
         reports.reports_db_id = lambda: 3
         backoffice.get_db_config = lambda db_id: {"name": "BackOffice Main"}
         backoffice.shipping_spend_invoices = lambda db_id, f, t: [dict(i) for i in INVOICES]
+        backoffice.invoice_sales_reps = lambda db_id, ids: {}
         app = Flask(__name__)
         app.secret_key = "test"
         app.register_blueprint(reports_api.bp)
@@ -106,7 +108,7 @@ class ReportsApiTest(unittest.TestCase):
         _, res = self.get(f"/api/reports/spend/rows?{RANGE}&sort=cost&dir=desc&limit=1")
         self.assertEqual(res.get_json(), {
             "rows": [{"date": "2026-11-03", "source": "backoffice", "store": "BackOffice Main", "carrier": "UPS",
-                      "service": "", "ref": "INV8", "tracking": "", "cost": 20.0}],
+                      "service": "", "ref": "INV8", "tracking": "", "cost": 20.0, "sales_rep": "Bob"}],
             "total": 2, "offset": 0, "limit": 1})
 
     def test_csv_exports(self):
@@ -116,10 +118,27 @@ class ReportsApiTest(unittest.TestCase):
             (rows.headers["Content-Disposition"], rows.get_data(as_text=True).splitlines(),
              carriers.get_data(as_text=True).splitlines()),
             ('attachment; filename="shipping-spend-rows-2026-11-01-to-2026-11-07.csv"',
-             ["﻿Date,Source,Store,Carrier,Service,Reference,Tracking,Cost",
-              "2026-11-02,Parcel log,Shop A,UPS,Ground,#1001,1Z1,12.50",
-              "2026-11-03,BackOffice,BackOffice Main,UPS,,INV8,,20.00"],
+             ["﻿Date,Source,Store,Sales rep,Carrier,Service,Reference,Tracking,Cost",
+              "2026-11-02,Parcel log,Shop A,No sales rep,UPS,Ground,#1001,1Z1,12.50",
+              "2026-11-03,BackOffice,BackOffice Main,Bob,UPS,,INV8,,20.00"],
              ["﻿Carrier,Shipments,Spend,Average,Share %", "UPS,2,32.50,16.25,100.0"]))
+
+    def test_parcels_for_invoices_of_the_reports_database_carry_the_invoice_sales_rep(self):
+        parcels = PARCELS + [
+            {**PARCELS[0], "store": "BackOffice Main", "ref": "INV9", "tracking": "9400", "cost": 7.0,
+             "shipment": "g2", "bo_db_id": 3, "invoice_id": 9},       # the Reports database's invoice
+            {**PARCELS[0], "store": "Other BO", "ref": "INV9", "tracking": "9401", "cost": 3.0,
+             "shipment": "g3", "bo_db_id": 4, "invoice_id": 9},       # same id, another database
+        ]
+        asked = []
+        reports.parcel_spend_rows = lambda f, t: [dict(r) for r in parcels]
+        backoffice.invoice_sales_reps = lambda db_id, ids: asked.append((db_id, sorted(ids))) or {9: "anna"}
+        _, all_reps = self.get(f"/api/reports/spend?{RANGE}")
+        _, anna = self.get(f"/api/reports/spend/rows?{RANGE}&rep=Anna")
+        self.assertEqual(
+            (asked, all_reps.get_json()["options"]["reps"],
+             [(r["ref"], r["sales_rep"]) for r in anna.get_json()["rows"]]),
+            ([(3, [9])], ["anna", "Bob", "No sales rep"], [("INV9", "anna")]))
 
     def test_the_backoffice_read_is_reused_for_a_minute(self):
         calls = []

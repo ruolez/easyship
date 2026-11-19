@@ -62,7 +62,8 @@ def _params():
 def _report():
     date_from, date_to, bucket = _params()
     rows, notices = _cached_rows(date_from, date_to, request.args.get("fresh") == "1")
-    selected = reports.filter_rows(rows, _list_arg("carrier"), _list_arg("store"), _list_arg("source"))
+    selected = reports.filter_rows(rows, _list_arg("carrier"), _list_arg("store"), _list_arg("source"),
+                                   _list_arg("rep"))
     return date_from, date_to, bucket, rows, selected, notices
 
 
@@ -82,6 +83,7 @@ def spend():
         "options": {
             "carriers": _names(rows, "carrier"),
             "stores": _names(rows, "store"),
+            "reps": _names(rows, "sales_rep"),
             "sources": [{"value": k, "label": v} for k, v in reports.SOURCES.items()],
         },
         "notices": notices,
@@ -93,13 +95,14 @@ ROW_SORTS = {
     "cost": lambda r: (r["cost"], r["date"]),
     "carrier": lambda r: (r["carrier"].lower(), r["date"]),
     "store": lambda r: (r["store"].lower(), r["date"]),
+    "rep": lambda r: (r["sales_rep"].lower(), r["date"]),
 }
 
 
 def _row_json(r):
     return {"date": r["date"].isoformat(), "source": r["source"], "store": r["store"],
             "carrier": r["carrier"], "service": r["service"], "ref": r["ref"],
-            "tracking": r["tracking"], "cost": r["cost"]}
+            "tracking": r["tracking"], "cost": r["cost"], "sales_rep": r["sales_rep"]}
 
 
 def _sorted(rows):
@@ -126,8 +129,8 @@ def spend_rows():
 
 def _csv_table(kind, date_from, date_to, bucket, selected):
     if kind == "rows":
-        header = ["Date", "Source", "Store", "Carrier", "Service", "Reference", "Tracking", "Cost"]
-        body = [[r["date"].isoformat(), reports.SOURCES[r["source"]], r["store"], r["carrier"],
+        header = ["Date", "Source", "Store", "Sales rep", "Carrier", "Service", "Reference", "Tracking", "Cost"]
+        body = [[r["date"].isoformat(), reports.SOURCES[r["source"]], r["store"], r["sales_rep"], r["carrier"],
                  r["service"], r["ref"], r["tracking"], f"{r['cost']:.2f}"] for r in _sorted(selected)]
         return header, body
     summary = reports.summarize(selected, bucket, date_from, date_to)

@@ -44,7 +44,8 @@ function save() {
   try {
     localStorage.setItem(RP_KEY, JSON.stringify({
       from: state.from, to: state.to, bucket: state.bucket, stack: state.stack,
-      carrier: [...carrierFilter.values], store: [...storeFilter.values], source: [...sourceFilter.values],
+      carrier: [...carrierFilter.values], store: [...storeFilter.values], rep: [...repFilter.values],
+      source: [...sourceFilter.values],
     }));
   } catch { /* private mode: filters just aren't remembered */ }
 }
@@ -52,16 +53,18 @@ function save() {
 const onFilter = () => { state.offset = 0; save(); load(); };
 const carrierFilter = multiFilter('rp-carrier', { onChange: onFilter });
 const storeFilter = multiFilter('rp-store', { onChange: onFilter });
+const repFilter = multiFilter('rp-rep', { onChange: onFilter });
 const sourceFilter = multiFilter('rp-source', {
   options: Object.entries(RP_SOURCES).map(([value, label]) => ({ value, label })), onChange: onFilter,
 });
 carrierFilter.setValues(saved.carrier);
 storeFilter.setValues(saved.store);
+repFilter.setValues(saved.rep);
 sourceFilter.setValues(saved.source);
 
 function query(extra = {}) {
   const p = new URLSearchParams({ from: state.from, to: state.to, bucket: state.bucket });
-  [['carrier', carrierFilter], ['store', storeFilter], ['source', sourceFilter]].forEach(([k, f]) => {
+  [['carrier', carrierFilter], ['store', storeFilter], ['rep', repFilter], ['source', sourceFilter]].forEach(([k, f]) => {
     if (f.values.size) p.set(k, [...f.values].join(','));
   });
   Object.entries(extra).forEach(([k, v]) => p.set(k, v));
@@ -147,6 +150,7 @@ async function load(fresh = false) {
     report = data;
     carrierFilter.setOptions(data.options.carriers);
     storeFilter.setOptions(data.options.stores);
+    repFilter.setOptions(data.options.reps);
     showNotices(data.notices);
     renderTiles();
     renderChart();
@@ -217,6 +221,7 @@ function renderRows(data) {
       <td>${esc(parseDay(r.date).toLocaleDateString('en-US'))}</td>
       <td><span class="rp-src ${r.source}">${RP_SOURCES[r.source]}</span></td>
       <td>${esc(r.store)}</td>
+      <td>${esc(r.sales_rep)}</td>
       <td>${esc(r.carrier)}</td>
       <td>${esc(r.service)}</td>
       <td class="mono">${esc(r.ref)}</td>
